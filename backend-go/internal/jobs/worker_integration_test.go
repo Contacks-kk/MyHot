@@ -1,0 +1,685 @@
+package jobs
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/url"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"aihot/backend-go/internal/config"
+	"aihot/backend-go/internal/interests"
+	"aihot/backend-go/internal/modelconfig"
+	"aihot/backend-go/internal/personal"
+	"aihot/backend-go/internal/provider"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	"sync/atomic"
+)
+
+func localTestPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	raw := os.Getenv("MYHOT_TEST_DATABASE_URL")
+	if raw == "" {
+		t.Skip("MYHOT_TEST_DATABASE_URL is not configured")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Hostname() != "localhost" && parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "::1") || !strings.HasSuffix(parsed.Path, "_test") {
+		t.Fatal("integration database must be localhost and end with _test")
+	}
+	pool, err := pgxpool.New(context.Background(), raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+func localTestORM(t *testing.T) *gorm.DB {
+	t.Helper()
+	raw := os.Getenv("MYHOT_TEST_DATABASE_URL")
+	orm, err := gorm.Open(postgres.Open(raw), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := orm.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(4)
+	sqlDB.SetMaxIdleConns(1)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	return orm
+}
+
+type workerFixture struct {
+	pool           *pgxpool.Pool
+	orm            *gorm.DB
+	source, prefix string
+	users          [2]int64
+	cfg            config.Config
+	ciphertext     [2]string
+}
+
+func fixture(t *testing.T) workerFixture {
+	t.Helper()
+	pool := localTestPool(t)
+	orm := localTestORM(t)
+	prefix := fmt.Sprintf("worker_%d", time.Now().UnixNano())
+	f := workerFixture{pool: pool, orm: orm, source: prefix + "_source", prefix: prefix, cfg: config.Config{PersonalizationEnabled: true, ModelCallsEnabled: true, UserJobMaxWorkers: 4, UserAPIKeyEncryptionKey: []byte(strings.Repeat("s", 32))}}
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `INSERT INTO sources(id,name,kind,config) VALUES($1,'Worker test','rss','{"feedUrl":"https://worker.example.invalid/feed"}')`, f.source); err != nil {
+		t.Fatal(err)
+	}
+	for i, keyword := range []string{"OpenAI", "Anthropic"} {
+		if err := pool.QueryRow(ctx, `INSERT INTO user_accounts(email,password_hash,verified_at,created_at) VALUES($1,'unused',now()-interval '3 days',now()-interval '3 days') RETURNING id`, fmt.Sprintf("%s_%d@example.invalid", prefix, i)).Scan(&f.users[i]); err != nil {
+			t.Fatal(err)
+		}
+		encrypted, err := modelconfig.Encrypt(f.cfg.UserAPIKeyEncryptionKey, []byte(fmt.Sprintf("private-test-key-%d", i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.ciphertext[i] = encrypted
+		if _, err := pool.Exec(ctx, `INSERT INTO user_model_configs(user_id,base_url,api_key_ciphertext,model,updated_at) VALUES($1,'https://model.example.invalid/v1',$2,$3,now()-interval '2 days')`, f.users[i], encrypted, fmt.Sprintf("model-%d", i)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO user_interests(user_id,keywords,updated_at) VALUES($1,$2,now()-interval '2 days')`, f.users[i], []string{keyword}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO user_source_subscriptions(user_id,source_id,name,activated_at) VALUES($1,$2,'Worker test',now()-interval '2 days')`, f.users[i], f.source); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM user_accounts WHERE id=ANY($1)`, f.users[:])
+		_, _ = pool.Exec(ctx, `DELETE FROM articles WHERE source_id=$1`, f.source)
+		_, _ = pool.Exec(ctx, `DELETE FROM sources WHERE id=$1`, f.source)
+	})
+	return f
+}
+
+func (f workerFixture) article(t *testing.T, suffix, title string, created time.Time) string {
+	t.Helper()
+	id := f.prefix + "_" + suffix
+	_, err := f.pool.Exec(context.Background(), `INSERT INTO articles(id,source_id,identity_key,url,title,excerpt,discovered_at,timeline_at,created_at) VALUES($1,$2,$1,$3,$4,$4,$5,$5,$5)`, id, f.source, "https://articles.example.invalid/"+id, title, created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(context.Background(), `INSERT INTO article_discoveries(article_id,source_id,via,discovered_at) VALUES($1,$2,'fetch',$3)`, id, f.source, created); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func articleJob(userID int64, id string, modelVersion, preferenceVersion int) *river.Job[ArticleArgs] {
+	return &river.Job[ArticleArgs]{JobRow: &rivertype.JobRow{ID: time.Now().UnixNano(), Attempt: 1}, Args: ArticleArgs{UserID: userID, ArticleID: id, Revision: 1, ModelVersion: modelVersion, PreferenceVersion: preferenceVersion}}
+}
+
+/** TestColdStartSubscriptionSlicesTenArticlesOnce verifies late subscribers receive a single <=10 cold-start slice. */
+func TestColdStartSubscriptionSlicesTenArticlesOnce(t *testing.T) {
+	f := fixture(t)
+	ctx := context.Background()
+	repo := NewRepository(f.orm, f.pool)
+	if err := repo.EnsureRollout(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE sources SET last_ok_at=now()-interval '2 hours' WHERE id=$1`, f.source); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE user_source_subscriptions SET cold_start_pending=true, activated_at=now() WHERE user_id=$1 AND source_id=$2`, f.users[0], f.source); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 12; i++ {
+		f.article(t, fmt.Sprintf("cs_%02d", i), fmt.Sprintf("OpenAI cold start item %d", i), time.Now().Add(-time.Duration(30+i)*time.Minute))
+	}
+
+	var queuedArticles []ArticleArgs
+	var queuedTriages []TriageBatchArgs
+	service := NewService(repo, f.cfg, nil)
+	if err := service.ScanWithTriage(
+		ctx,
+		func(_ context.Context, _ pgx.Tx, args ArticleArgs) error {
+			queuedArticles = append(queuedArticles, args)
+			return nil
+		},
+		func(_ context.Context, _ pgx.Tx, args TriageBatchArgs) error {
+			queuedTriages = append(queuedTriages, args)
+			return nil
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(queuedArticles) != 0 || len(queuedTriages) != 1 || len(queuedTriages[0].Items) != 10 {
+		t.Fatalf("cold-start dispatches = %d articles / %d triages, want 0/1(10)", len(queuedArticles), len(queuedTriages))
+	}
+	for _, item := range queuedTriages[0].Items {
+		if !item.ColdStart {
+			t.Fatalf("expected ColdStart flag on sliced item: %+v", item)
+		}
+	}
+
+	var pending bool
+	if err := f.pool.QueryRow(ctx, `SELECT cold_start_pending FROM user_source_subscriptions WHERE user_id=$1 AND source_id=$2`, f.users[0], f.source).Scan(&pending); err != nil || pending {
+		t.Fatalf("cold_start_pending = %t, err=%v", pending, err)
+	}
+	queuedArticles = nil
+	queuedTriages = nil
+	if err := service.ScanWithTriage(
+		ctx,
+		func(_ context.Context, _ pgx.Tx, args ArticleArgs) error {
+			queuedArticles = append(queuedArticles, args)
+			return nil
+		},
+		func(_ context.Context, _ pgx.Tx, args TriageBatchArgs) error {
+			queuedTriages = append(queuedTriages, args)
+			return nil
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(queuedArticles) != 0 || len(queuedTriages) != 0 {
+		t.Fatalf("second scan re-dispatched cold-start slice: articles=%d triages=%d", len(queuedArticles), len(queuedTriages))
+	}
+}
+
+/** TestBatchTriageFunnelSelectsTopFive verifies Stage 2 batch triage and Stage 3 handoff. */
+func TestBatchTriageFunnelSelectsTopFive(t *testing.T) {
+	f := fixture(t)
+	ctx := context.Background()
+	candidates := make([]TriageCandidate, 0, 8)
+	for i := 0; i < 8; i++ {
+		id := f.article(t, fmt.Sprintf("tr_%d", i), fmt.Sprintf("OpenAI article %d", i), time.Now().Add(-time.Hour))
+		candidates = append(candidates, TriageCandidate{
+			ArticleID: id,
+			Revision:  1,
+			SourceID:  f.source,
+			Title:     fmt.Sprintf("OpenAI article %d", i),
+			Snippet:   "Brief summary",
+		})
+	}
+	var calls int
+	service := NewService(NewRepository(f.orm, f.pool), f.cfg, func(_ context.Context, _ provider.Config, _ string) (provider.Completion, error) {
+		calls++
+		return provider.Completion{Text: `{"selected":[2,5,7]}`, Usage: provider.Usage{TotalTokens: 45}}, nil
+	})
+	var enqueued []ArticleArgs
+	err := service.ProcessTriageBatch(ctx, TriageBatchArgs{
+		UserID:            f.users[0],
+		ModelVersion:      1,
+		PreferenceVersion: 1,
+		BatchKey:          "batch-test-1",
+		Items:             candidates,
+	}, 9001, 1, func(_ context.Context, args ArticleArgs) error {
+		enqueued = append(enqueued, args)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || len(enqueued) != 3 {
+		t.Fatalf("triage calls=%d enqueued=%d, want 1/3", calls, len(enqueued))
+	}
+	if enqueued[0].ArticleID != candidates[1].ArticleID || enqueued[1].ArticleID != candidates[4].ArticleID || enqueued[2].ArticleID != candidates[6].ArticleID {
+		t.Fatalf("selected articles mismatch: %+v", enqueued)
+	}
+	var receiptCount int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM user_model_call_receipts WHERE user_id=$1 AND purpose='article' AND article_id IS NULL AND status='completed'`, f.users[0]).Scan(&receiptCount); err != nil || receiptCount != 1 {
+		t.Fatalf("triage receipt count = %d, %v", receiptCount, err)
+	}
+}
+
+/** TestUserDailyModelCallLimitStopsExtraCalls enforces USER_DAILY_MODEL_CALL_LIMIT per user day. */
+func TestUserDailyModelCallLimitStopsExtraCalls(t *testing.T) {
+	f := fixture(t)
+	ctx := context.Background()
+	f.cfg.UserDailyModelCallLimit = 2
+	var calls int
+	service := NewService(NewRepository(f.orm, f.pool), f.cfg, func(_ context.Context, _ provider.Config, _ string) (provider.Completion, error) {
+		calls++
+		return provider.Completion{Text: `{"relevanceScore":88,"title":"热点","summary":"摘要内容","reason":"命中"}`, Usage: provider.Usage{TotalTokens: 10}}, nil
+	})
+	worker := ArticleWorker{Service: service, Enabled: true}
+	for i := 0; i < 3; i++ {
+		id := f.article(t, fmt.Sprintf("quota_%d", i), fmt.Sprintf("OpenAI quota test %d", i), time.Now().Add(-time.Hour))
+		if err := worker.Work(ctx, articleJob(f.users[0], id, 1, 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("daily quota calls = %d, want 2", calls)
+	}
+}
+
+func TestPersonalArticleWorkerIsolationDedupAndSettingsBoundary(t *testing.T) {
+	f := fixture(t)
+	ctx := context.Background()
+	a := f.article(t, "openai", "OpenAI announces a model", time.Now().Add(-time.Hour))
+	b := f.article(t, "anthropic", "Anthropic announces a model", time.Now().Add(-time.Hour))
+	unrelated := f.article(t, "unrelated", "Weather forecast", time.Now().Add(-time.Hour))
+	stale := f.article(t, "stale", "OpenAI imported old release", time.Now().Add(-time.Hour))
+	if _, err := f.pool.Exec(ctx, `UPDATE articles SET published_at=discovered_at-interval '49 hours' WHERE id=$1`, stale); err != nil {
+		t.Fatal(err)
+	}
+	calls := []string{}
+	service := NewService(NewRepository(f.orm, f.pool), f.cfg, func(_ context.Context, cfg provider.Config, _ string) (provider.Completion, error) {
+		calls = append(calls, cfg.Model)
+		if cfg.APIKey != "private-test-key-0" && cfg.APIKey != "private-test-key-1" {
+			t.Fatal("wrong private model credential")
+		}
+		return provider.Completion{Text: `{"relevanceScore":91,"title":"个人热点","summary":"模型发布信息摘要","reason":"命中关注项"}`, Usage: provider.Usage{TotalTokens: 17}}, nil
+	})
+	worker := ArticleWorker{Service: service, Enabled: true}
+	for _, job := range []*river.Job[ArticleArgs]{articleJob(f.users[0], a, 1, 1), articleJob(f.users[0], a, 1, 1), articleJob(f.users[1], a, 1, 1), articleJob(f.users[1], b, 1, 1), articleJob(f.users[0], unrelated, 1, 1), articleJob(f.users[0], stale, 1, 1)} {
+		if err := worker.Work(ctx, job); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if strings.Join(calls, ",") != "model-0,model-1" {
+		t.Fatalf("model calls = %v", calls)
+	}
+	var count int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM user_article_results WHERE user_id=ANY($1)`, f.users[:]).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("private result count = %d: %v", count, err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM user_article_results WHERE user_id=$1 AND article_id=$2`, f.users[1], a).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("cross-user result = %d: %v", count, err)
+	}
+	newer := f.article(t, "changed", "OpenAI next release", time.Now().Add(-30*time.Minute))
+	if _, err := f.pool.Exec(ctx, `UPDATE user_model_configs SET config_version=2,model='changed-model',updated_at=now() WHERE user_id=$1`, f.users[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.Work(ctx, articleJob(f.users[0], newer, 1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.Work(ctx, articleJob(f.users[0], newer, 2, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 {
+		t.Fatal("changing the model reprocessed an older queued article")
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM user_model_call_receipts WHERE user_id=ANY($1) AND status='completed' AND usage->>'total_tokens'='17'`, f.users[:]).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("usage receipt count = %d: %v", count, err)
+	}
+}
+
+func TestPersonalArticleWorkerReadsSavedInterests(t *testing.T) {
+	f := fixture(t)
+	ctx := context.Background()
+	keywords := []string{"具身智能", `引号"`, `反\斜杠`}
+	if err := personal.NewRepository(f.orm).SaveInterests(ctx, f.users[0], keywords, []string{"openai"}); err != nil {
+		t.Fatal(err)
+	}
+	var created time.Time
+	if err := f.pool.QueryRow(ctx, `SELECT now()`).Scan(&created); err != nil {
+		t.Fatal(err)
+	}
+	id := f.article(t, "saved_interests", "OpenAI 具身智能发布", created)
+	calls := 0
+	service := NewService(NewRepository(f.orm, f.pool), f.cfg, func(_ context.Context, _ provider.Config, prompt string) (provider.Completion, error) {
+		calls++
+		if !strings.Contains(prompt, "具身智能") || !strings.Contains(prompt, "OpenAI") {
+			t.Fatal("saved interests were not used in the model prompt")
+		}
+		return provider.Completion{Text: `{"relevanceScore":91,"title":"个人热点","summary":"具身智能发布信息摘要","reason":"命中关注项"}`}, nil
+	})
+	worker := ArticleWorker{Service: service, Enabled: true}
+	if err := worker.Work(ctx, articleJob(f.users[0], id, 1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatal("an old preference version invoked the model")
+	}
+	if err := worker.Work(ctx, articleJob(f.users[0], id, 1, 2)); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM user_article_results WHERE user_id=$1 AND article_id=$2`, f.users[0], id).Scan(&count); err != nil || count != 1 || calls != 1 {
+		t.Fatalf("saved-interest result count=%d calls=%d err=%v", count, calls, err)
+	}
+}
+
+func TestDailyWorkerUsesJobDateAndKeepsUsersSeparate(t *testing.T) {
+	f := fixture(t)
+	ctx := context.Background()
+	a := f.article(t, "dailyin", "OpenAI inside the fixed window", time.Now().Add(-time.Hour))
+	b := f.article(t, "dailyout", "OpenAI after the fixed window", time.Now().Add(-time.Hour))
+	c := f.article(t, "dailyother", "Anthropic user two result", time.Now().Add(-time.Hour))
+	for _, item := range []struct {
+		user            int64
+		id, title, date string
+	}{{f.users[0], a, "window-entry", "2026-10-03T12:00:00Z"}, {f.users[0], b, "after-window", "2026-10-04T01:00:00Z"}, {f.users[1], c, "other-user", "2026-10-03T12:00:00Z"}} {
+		_, err := f.pool.Exec(ctx, `INSERT INTO user_article_results(user_id,article_id,input_revision,model,relevance_score,title,summary,created_at) VALUES($1,$2,1,'test',91,$3,'摘要',$4::timestamptz)`, item.user, item.id, item.title, item.date)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls := 0
+	service := NewService(NewRepository(f.orm, f.pool), f.cfg, func(_ context.Context, cfg provider.Config, prompt string) (provider.Completion, error) {
+		calls++
+		if cfg.Model != "model-0" || !strings.Contains(prompt, "window-entry") || strings.Contains(prompt, "after-window") || strings.Contains(prompt, "other-user") {
+			t.Fatalf("wrong daily input: %s", prompt)
+		}
+		return provider.Completion{Text: `{"title":"测试日报","summary":"只汇总固定窗口的本人热点"}`, Usage: provider.Usage{TotalTokens: 23}}, nil
+	})
+	worker := DailyWorker{Service: service, Enabled: true}
+	job := &river.Job[DailyArgs]{JobRow: &rivertype.JobRow{ID: time.Now().UnixNano(), Attempt: 1}, Args: DailyArgs{UserID: f.users[0], Date: "2026-10-04"}}
+	if err := worker.Work(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.Work(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("daily paid calls = %d", calls)
+	}
+	var body []byte
+	if err := f.pool.QueryRow(ctx, `SELECT entries FROM user_daily_reports WHERE user_id=$1 AND report_date='2026-10-04'`, f.users[0]).Scan(&body); err != nil {
+		t.Fatal(err)
+	}
+	var entries []dailyEntry
+	if err := json.Unmarshal(body, &entries); err != nil || len(entries) != 1 || entries[0].ArticleID != a {
+		t.Fatalf("daily entries = %s: %v", body, err)
+	}
+}
+
+func TestConnectionWorkerUsesEncryptedTaskAndReceiptOwner(t *testing.T) {
+	f := fixture(t)
+	ctx := context.Background()
+	var receipt int64
+	if err := f.pool.QueryRow(ctx, `INSERT INTO user_model_call_receipts(user_id,logical_key,purpose,model,status,request_hash) VALUES($1,$2,'connection_test','model-0','pending','testhash') RETURNING id`, f.users[0], f.prefix+"_connection").Scan(&receipt); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	service := NewService(NewRepository(f.orm, f.pool), f.cfg, func(_ context.Context, cfg provider.Config, _ string) (provider.Completion, error) {
+		calls++
+		if cfg.APIKey != "private-test-key-0" {
+			t.Fatal("wrong decrypted credential")
+		}
+		return provider.Completion{Text: `{"ok":true}`, Usage: provider.Usage{TotalTokens: 5}}, nil
+	})
+	worker := ConnectionTestWorker{Service: service}
+	args := ConnectionTestArgs{UserID: f.users[1], ReceiptID: receipt, BaseURL: "https://model.example.invalid/v1", Model: "model-0", APIKeyCiphertext: f.ciphertext[0]}
+	job := &river.Job[ConnectionTestArgs]{JobRow: &rivertype.JobRow{ID: time.Now().UnixNano(), Attempt: 1}, Args: args}
+	if err := worker.Work(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatal("cross-user receipt invoked a model")
+	}
+	job.Args.UserID = f.users[0]
+	encoded, _ := json.Marshal(job.Args)
+	if strings.Contains(string(encoded), "private-test-key") {
+		t.Fatal("task contains plaintext model key")
+	}
+	if err := worker.Work(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.Work(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("connection calls = %d", calls)
+	}
+	var status string
+	if err := f.pool.QueryRow(ctx, `SELECT status FROM user_model_call_receipts WHERE id=$1`, receipt).Scan(&status); err != nil || status != "completed" {
+		t.Fatalf("receipt status = %q: %v", status, err)
+	}
+}
+
+func TestPersonalScanEnqueuesOnlyNewMatchingArticlesOnce(t *testing.T) {
+	f := fixture(t)
+	ctx := context.Background()
+	client, err := NewClient(ctx, f.pool, f.orm, f.cfg, nil, interests.PublicationSettings{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var activation time.Time
+	if err := f.pool.QueryRow(ctx, `SELECT activated_at FROM personalization_rollout WHERE id=true`).Scan(&activation); err != nil {
+		t.Fatal(err)
+	}
+	fresh := f.article(t, "scan_new", "OpenAI scanned news", activation.Add(time.Second))
+	f.article(t, "scan_old", "OpenAI historical archive", activation.Add(-time.Second))
+	stale := f.article(t, "scan_stale", "OpenAI stale first import", activation.Add(time.Second))
+	if _, err := f.pool.Exec(ctx, `UPDATE articles SET published_at=discovered_at-interval '49 hours' WHERE id=$1`, stale); err != nil {
+		t.Fatal(err)
+	}
+	f.article(t, "scan_unrelated", "Weather scanned news", activation.Add(time.Second))
+	worker := ScanWorker{Service: NewService(NewRepository(f.orm, f.pool), f.cfg, nil), Client: client, Enabled: true}
+	if err := worker.Work(ctx, &river.Job[ScanArgs]{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.Work(ctx, &river.Job[ScanArgs]{}); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM river_job WHERE kind='myhot_personal_article' AND args->>'articleId' LIKE $1`, f.prefix+"_%").Scan(&count); err != nil || count != 1 {
+		t.Fatalf("queued personal jobs = %d: %v", count, err)
+	}
+	var encoded []byte
+	if err := f.pool.QueryRow(ctx, `SELECT args FROM river_job WHERE kind='myhot_personal_article' AND args->>'articleId'=$1`, fresh).Scan(&encoded); err != nil {
+		t.Fatal(err)
+	}
+	var args ArticleArgs
+	if err := json.Unmarshal(encoded, &args); err != nil {
+		t.Fatal(err)
+	}
+	if args.UserID != f.users[0] || args.ModelVersion != 1 || args.PreferenceVersion != 1 {
+		t.Fatalf("queued args = %+v", args)
+	}
+	t.Cleanup(func() {
+		_, _ = f.pool.Exec(ctx, `DELETE FROM river_job WHERE args->>'articleId' LIKE $1`, f.prefix+"_%")
+	})
+}
+
+func TestPersonalScanRevisitsArticleWhenAnotherSubscribedSourceDiscoversItLater(t *testing.T) {
+	f := fixture(t)
+	ctx := context.Background()
+	secondSource := f.prefix + "_source_second"
+	if _, err := f.pool.Exec(ctx, `INSERT INTO sources(id,name,kind,config) VALUES($1,'Second worker source','rss','{"feedUrl":"https://worker.example.invalid/second"}')`, secondSource); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = f.pool.Exec(ctx, `DELETE FROM user_source_subscriptions WHERE source_id=$1`, secondSource)
+		_, _ = f.pool.Exec(ctx, `DELETE FROM sources WHERE id=$1`, secondSource)
+	})
+	if _, err := f.pool.Exec(ctx, `UPDATE user_source_subscriptions SET enabled=false WHERE user_id=$1 AND source_id=$2`, f.users[0], f.source); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `INSERT INTO user_source_subscriptions(user_id,source_id,name,activated_at) VALUES($1,$2,'Second source',now()-interval '1 minute')`, f.users[0], secondSource); err != nil {
+		t.Fatal(err)
+	}
+	articleID := f.article(t, "late_second_source", "OpenAI publishes an update", time.Now())
+	service := NewService(NewRepository(f.orm, f.pool), f.cfg, nil)
+	var queued []ArticleArgs
+	enqueue := func(_ context.Context, _ pgx.Tx, args ArticleArgs) error {
+		queued = append(queued, args)
+		return nil
+	}
+	if err := service.Scan(ctx, enqueue); err != nil {
+		t.Fatal(err)
+	}
+	if len(queued) != 0 {
+		t.Fatalf("first discovery unexpectedly reached a user without an active subscription: %#v", queued)
+	}
+	if _, err := f.pool.Exec(ctx, `INSERT INTO article_discoveries(article_id,source_id,via,discovered_at) VALUES($1,$2,'fetch',now())`, articleID, secondSource); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Scan(ctx, enqueue); err != nil {
+		t.Fatal(err)
+	}
+	if len(queued) != 1 || queued[0].UserID != f.users[0] || queued[0].ArticleID != articleID {
+		t.Fatalf("late second-source discovery was not dispatched to its subscriber: %#v", queued)
+	}
+}
+
+func TestRiverConsumesPersonalArticleWithFakeModel(t *testing.T) {
+	f := fixture(t)
+	ctx := context.Background()
+	articleID := f.article(t, "queued", "OpenAI queued release", time.Now().Add(-time.Hour))
+	var calls atomic.Int32
+	workers := river.NewWorkers()
+	service := NewService(NewRepository(f.orm, f.pool), f.cfg, func(_ context.Context, cfg provider.Config, _ string) (provider.Completion, error) {
+		calls.Add(1)
+		return provider.Completion{Text: `{"relevanceScore":92,"title":"队列个人热点","summary":"真实River队列消费，模型仅使用fake"}`, Usage: provider.Usage{TotalTokens: 31}}, nil
+	})
+	river.AddWorker(workers, &ArticleWorker{Service: service, Enabled: true})
+	queue := f.prefix + "_queue"
+	client, err := river.NewClient(riverpgxv5.New(f.pool), &river.Config{Workers: workers, Queues: map[string]river.QueueConfig{queue: {MaxWorkers: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := client.Stop(stopCtx); err != nil {
+			t.Error(err)
+		}
+	}()
+	job, err := client.Insert(ctx, ArticleArgs{UserID: f.users[0], ArticleID: articleID, Revision: 1, ModelVersion: 1, PreferenceVersion: 1}, &river.InsertOpts{Queue: queue, MaxAttempts: 2, UniqueOpts: river.UniqueOpts{ByArgs: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		var state string
+		if err := f.pool.QueryRow(ctx, `SELECT state FROM river_job WHERE id=$1`, job.Job.ID).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		if state == "completed" {
+			break
+		}
+		if state == "discarded" || time.Now().After(deadline) {
+			t.Fatalf("queue state = %s", state)
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	var count int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM user_article_results WHERE user_id=$1 AND article_id=$2`, f.users[0], articleID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("consumed result count = %d: %v", count, err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM user_model_call_receipts WHERE user_id=$1 AND article_id=$2 AND status='completed' AND usage->>'total_tokens'='31'`, f.users[0], articleID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("consumed receipt count = %d: %v", count, err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("queued paid calls = %d", calls.Load())
+	}
+	t.Cleanup(func() { _, _ = f.pool.Exec(ctx, `DELETE FROM river_job WHERE queue=$1`, queue) })
+}
+
+func TestSourceJobsAllowNextRunAfterCompletion(t *testing.T) {
+	f := fixture(t)
+	ctx := context.Background()
+	client, err := NewClient(ctx, f.pool, f.orm, f.cfg, nil, interests.PublicationSettings{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := SourceArgs{SourceID: f.source}
+	first, err := client.Insert(ctx, args, sourceInsertOpts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := client.Insert(ctx, args, sourceInsertOpts())
+	if err != nil || second.Job.ID != first.Job.ID {
+		t.Fatalf("active source jobs are not unique: %v", err)
+	}
+	manual, err := client.Insert(ctx, SourceArgs{SourceID: f.source, Force: true}, sourceInsertOpts())
+	if err != nil || manual.Job.ID != first.Job.ID {
+		t.Fatalf("manual and automatic source jobs were not coalesced: %v", err)
+	}
+	manualAgain, err := client.Insert(ctx, SourceArgs{SourceID: f.source, Force: true}, sourceInsertOpts())
+	if err != nil || manualAgain.Job.ID != first.Job.ID {
+		t.Fatalf("duplicate manual fetch was not deduplicated: %v", err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE river_job SET state='completed',finalized_at=now() WHERE id=$1`, first.Job.ID); err != nil {
+		t.Fatal(err)
+	}
+	next, err := client.Insert(ctx, args, sourceInsertOpts())
+	if err != nil || next.Job.ID == first.Job.ID {
+		t.Fatalf("completed job prevents next collection: %v", err)
+	}
+	t.Cleanup(func() { _, _ = f.pool.Exec(ctx, `DELETE FROM river_job WHERE args->>'sourceId'=$1`, f.source) })
+}
+
+func TestRiverSchemaStartupSerializesConcurrentAPIAndWorkerMigrations(t *testing.T) {
+	pool := localTestPool(t)
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-start
+			results <- MigrateRiver(context.Background(), pool)
+		}()
+	}
+	close(start)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestPublicationEffectsInsertRiverJobsInPublicationTransaction(t *testing.T) {
+	f := fixture(t)
+	ctx := context.Background()
+	cfg := f.cfg
+	cfg.ModelCallsEnabled, cfg.SharedPipelineEnabled = false, false
+	cfg.GoContentDeliveryEnabled, cfg.GoMediaPrepareEnabled = false, false
+	cfg.WebOGPrewarmURL, cfg.WebOGPrewarmSecret = "http://web.invalid/prewarm", strings.Repeat("x", 32)
+	client, err := NewClient(ctx, f.pool, f.orm, cfg, nil, interests.PublicationSettings{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	articleID := f.prefix + "_effects"
+	effects := &publicationRiverEffects{client: client}
+	count := func() int {
+		var value int
+		if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM river_job WHERE args->>'articleId'=$1 AND kind IN ('notify.selected','media.prepare')`, articleID).Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	tx, err := f.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := effects.EnqueueSelectedTx(ctx, tx, articleID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := effects.EnqueueMediaTx(ctx, tx, articleID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := count(); got != 0 {
+		t.Fatalf("River side effects escaped a rolled-back publication: %d", got)
+	}
+	tx, err = f.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := effects.EnqueueSelectedTx(ctx, tx, articleID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := effects.EnqueueMediaTx(ctx, tx, articleID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := count(); got != 2 {
+		t.Fatalf("committed publication effects = %d, want 2", got)
+	}
+	t.Cleanup(func() { _, _ = f.pool.Exec(ctx, `DELETE FROM river_job WHERE args->>'articleId'=$1`, articleID) })
+}

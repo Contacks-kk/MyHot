@@ -1,0 +1,109 @@
+import { useState } from "react";
+import { Link, useLoaderData } from "react-router";
+import type { Route } from "./+types/home";
+import type { Screen } from "../components/shell/screens";
+import type { MediaView } from "@aihot/contracts/site";
+import { SITE } from "@aihot/site";
+import { IconArrowUpRight, IconBolt, IconClock, IconPlug } from "../components/icons";
+import { MediaThumbs } from "../features/feed/parts";
+import { userApiGet, userApiMe } from "../lib/user-api.server";
+import { postJSON } from "../features/account/common";
+import { RippleLanding } from "../features/home/RippleLanding";
+
+export const handle: Screen = { tab: "featured", name: "我的热点" };
+
+interface Card { articleId: string; score: number; title: string; summary: string; reason?: string | null; url: string; source: string; publishedAt?: string | null; createdAt: string; media?: MediaView[] }
+interface Report { date: string; model: string; title: string; summary: string; createdAt: string }
+
+export async function loader({ request }: Route.LoaderArgs) {
+  const user = await userApiMe(request);
+  if (!user) {
+    const response = await fetch(`${process.env.GO_API_BASE_URL || "http://127.0.0.1:3002"}/api/auth/registration-status`, { signal: request.signal }).catch(() => null);
+    const status = response?.ok ? await response.json() as { enabled: boolean } : { enabled: false };
+    return { user: null, registrationEnabled: status.enabled, csrfToken: "", feed: [] as Card[], hot: [] as Card[], reports: [] as Report[], modelConfigured: false, interestsConfigured: false };
+  }
+  const [feed, hot, daily, model, interests] = await Promise.all([
+    userApiGet<{ items: Card[] }>(request, "/api/me/feed"),
+    userApiGet<{ items: Card[] }>(request, "/api/me/hot"),
+    userApiGet<{ reports: Report[] }>(request, "/api/me/daily"),
+    userApiGet<{ configured: boolean }>(request, "/api/me/model"),
+    userApiGet<{ keywords: string[]; entityIds: string[] }>(request, "/api/me/interests"),
+  ]);
+  return { user, registrationEnabled: false, csrfToken: user.csrfToken, feed: feed.items, hot: hot.items, reports: daily.reports, modelConfigured: model.configured, interestsConfigured: interests.keywords.length + interests.entityIds.length > 0 };
+}
+
+export const meta: Route.MetaFunction = () => [{ title: `我的热点 · ${SITE.name}` }, { name: "robots", content: "noindex, nofollow" }];
+export const headers: Route.HeadersFunction = () => ({ "Cache-Control": "private, no-store", "X-Robots-Tag": "noindex, nofollow" });
+
+/** Render a list of personal article results. */
+function ResultList({ items }: { items: Card[] }) {
+  if (!items.length) {
+    return <div className="rounded-card border border-dashed border-line-strong px-5 py-8 text-center text-[13px] text-ink-4">暂时还没有个人结果。新增文章命中你的关注项后会显示在这里。</div>;
+  }
+
+  return (
+    <div className="editorial-list divide-y divide-line border-y border-line bg-surface px-4 sm:px-6">
+      {items.map((item) => (
+        <article key={item.articleId} className="group relative py-5">
+          <div className="flex items-start gap-3">
+            <span className="mono mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-[11px] font-semibold text-accent">
+              {item.score}
+            </span>
+            <div className="min-w-0 flex-1">
+              <h2 className="editorial-title text-[17px] font-semibold leading-snug text-ink">
+                <Link
+                  to={`/my/articles/${encodeURIComponent(item.articleId)}`}
+                  className="transition-colors group-hover:text-accent after:absolute after:inset-0 after:content-['']"
+                >
+                  {item.title}
+                </Link>
+              </h2>
+              <p className="mt-2 whitespace-pre-line text-[13px] leading-relaxed text-ink-3">{item.summary}</p>
+              {item.media && item.media.length > 0 && <MediaThumbs media={item.media} className="mt-3" />}
+              <div className="mt-2 flex items-center gap-2 text-[11px] text-ink-4">
+                <span>{item.source}</span>
+                <span>·</span>
+                <time>
+                  {new Date(item.publishedAt ?? item.createdAt).toLocaleString("zh-CN", {
+                    dateStyle: "short",
+                    timeStyle: "short",
+                    timeZone: "Asia/Shanghai",
+                  })}
+                </time>
+              </div>
+              {item.reason && <p className="mt-2 text-[11px] text-ink-4">匹配：{item.reason}</p>}
+              <a
+                className="relative z-10 mt-2 inline-flex items-center gap-1 text-[11.5px] text-accent hover:underline"
+                href={item.url}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                查看原文
+                <IconArrowUpRight size={13} />
+              </a>
+            </div>
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+/** Render the personal workspace or introduction page. */
+export default function Home() {
+  const data = useLoaderData<typeof loader>();
+  const [message,setMessage]=useState("");
+  if (!data.user) {
+    return <RippleLanding registrationEnabled={data.registrationEnabled} />;
+  }
+  async function logout(){try{await postJSON("/api/auth/logout",{},data.csrfToken);window.location.assign("/");}catch(e){setMessage(e instanceof Error?e.message:"退出失败");}}
+  return <div className="pb-10">
+    <header className="mb-7 flex flex-wrap items-start justify-between gap-4"><div><p className="mono text-[10px] uppercase tracking-[.16em] text-ink-4">MY PERSONAL BRIEFING</p><h1 className="editorial-title mt-1 text-[32px] font-semibold tracking-tight text-ink">我的热点</h1><p className="mt-1 text-[12px] text-ink-4">{data.user.email}</p></div><button className="rounded-full border border-line-strong px-3.5 py-2 text-[12px] text-ink-3 hover:bg-surface" onClick={logout}>退出登录</button></header>
+    <div className="mb-6 grid gap-3 sm:grid-cols-2"><Link to="/model" className="card flex items-center gap-3 p-4 transition-colors hover:border-accent/40"><span className="flex size-9 items-center justify-center rounded-full bg-accent-soft text-accent"><IconPlug size={17}/></span><span><span className="block text-[13px] font-semibold text-ink">模型配置</span><span className="mt-0.5 block text-[11px] text-ink-4">{data.modelConfigured?"已配置，点击管理":"添加自己的 OpenAI 兼容模型"}</span></span><IconArrowUpRight size={15} className="ml-auto text-ink-4"/></Link><Link to="/interests" className="card flex items-center gap-3 p-4 transition-colors hover:border-accent/40"><span className="flex size-9 items-center justify-center rounded-full bg-accent-soft text-accent"><IconBolt size={17}/></span><span><span className="block text-[13px] font-semibold text-ink">关注项</span><span className="mt-0.5 block text-[11px] text-ink-4">{data.interestsConfigured?"已设置，调整只影响新文章":"选择公司实体和关键词"}</span></span><IconArrowUpRight size={15} className="ml-auto text-ink-4"/></Link></div>
+    {(!data.modelConfigured||!data.interestsConfigured)&&<div className="mb-7 rounded-card border border-accent/20 bg-accent-soft/45 p-4 text-[12.5px] leading-relaxed text-ink-2">完成模型和关注项设置后，系统会在新文章命中时为你生成私人摘要。历史文章不会自动回填。<div className="mt-2 flex gap-3"><Link to="/model" className="font-medium text-accent">配置模型</Link><Link to="/interests" className="font-medium text-accent">设置关注项</Link></div></div>}
+    <section className="mb-8"><div className="mb-3 flex items-center justify-between"><h2 className="editorial-title text-[21px] font-semibold text-ink">48 小时个人热点</h2><Link to="/hot" className="text-[12px] text-accent">打开热点榜</Link></div><ResultList items={data.hot}/></section>
+    <section className="mb-8"><div className="mb-3 flex items-center justify-between"><h2 className="editorial-title text-[21px] font-semibold text-ink">最新整理</h2><Link to="/history" className="text-[12px] text-accent">查看旧站历史</Link></div><ResultList items={data.feed.slice(0,10)}/></section>
+    {data.reports[0]&&<section className="rounded-card border border-line bg-surface p-5"><div className="flex items-center gap-2 text-[12px] text-ink-4"><IconClock size={15}/>{data.reports[0].date} 每日简报</div><h2 className="mt-2 text-[16px] font-semibold text-ink">{data.reports[0].title}</h2><p className="mt-2 whitespace-pre-line text-[13px] leading-relaxed text-ink-3">{data.reports[0].summary}</p><Link to="/daily" className="mt-3 inline-block text-[12px] font-medium text-accent">查看日报历史</Link></section>}
+    {message&&<p role="alert" className="mt-4 text-[12px] text-hot">{message}</p>}
+  </div>;
+}

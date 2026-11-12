@@ -1,0 +1,1 @@
+ALTER TABLE user_email_tokens VALIDATE CONSTRAINT user_email_tokens_reset_only;

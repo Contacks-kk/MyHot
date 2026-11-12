@@ -1,0 +1,1 @@
+ALTER TABLE sources VALIDATE CONSTRAINT sources_reuse_window_minutes_check;
