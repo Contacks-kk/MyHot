@@ -1,0 +1,137 @@
+# docker compose --project-directory . --env-file .env -f deploy/compose.yaml up -d --build → http://localhost:3000
+# Add --profile https before up to enable HTTPS for SITE_DOMAIN through Caddy.
+name: aihot
+
+x-web: &web
+  build:
+    context: .
+    dockerfile: deploy/Dockerfile.web
+  image: myhot-web
+  restart: unless-stopped
+
+x-setup: &setup
+  build:
+    context: .
+    dockerfile: deploy/Dockerfile.setup
+  image: myhot-setup
+  restart: "no"
+  env_file: .env
+  environment:
+    NODE_ENV: production
+    DATABASE_URL: postgres://aihot:${POSTGRES_PASSWORD:-aihot}@db:5432/aihot
+    AIHOT_DATA_DIR: /data
+  volumes:
+    - data:/data
+  depends_on:
+    db:
+      condition: service_healthy
+
+x-go-backend: &go-backend
+  build:
+    context: .
+    dockerfile: backend-go/Dockerfile
+  image: myhot-go-backend
+  restart: unless-stopped
+  env_file: .env
+  volumes:
+    - data:/data
+  environment:
+    NODE_ENV: production
+    DATABASE_URL: postgres://aihot:${POSTGRES_PASSWORD:-aihot}@db:5432/aihot
+    PUBLIC_BASE_URL: ${SITE_URL:-http://localhost:3000}
+    SITE_URL: ${SITE_URL:-http://localhost:3000}
+    SITE_NAME: ${SITE_NAME:-MyHOT}
+    SITE_REPORT_ENTRY_MEASURE: ${SITE_REPORT_ENTRY_MEASURE:-件}
+    SITE_REPORT_ENTRY_NOUN: ${SITE_REPORT_ENTRY_NOUN:-大事}
+    WEB_OG_PREWARM_URL: http://web:3000/_internal/og/prewarm
+    GO_API_ADDR: 0.0.0.0:3002
+    GO_TRUST_PROXY: "true"
+    GO_MEDIA_PREPARE_ENABLED: ${GO_MEDIA_PREPARE_ENABLED:-false}
+    GO_SHARED_PIPELINE_ENABLED: ${GO_SHARED_PIPELINE_ENABLED:-false}
+  depends_on:
+    setup:
+      condition: service_completed_successfully
+
+services:
+  db:
+    # The CentOS 7 target kernel is 3.10; Alpine musl's pwritev2 flag requires Linux 6.9+.
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aihot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aihot}
+      POSTGRES_DB: aihot
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aihot -d aihot"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # Applies the database migrations, then exits.
+  setup:
+    <<: *setup
+    command: ["node", "tooling/scripts/migrate.ts"]
+
+  go-api:
+    <<: *go-backend
+    command: ["/app/myhot-api"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3002/api/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  go-worker:
+    <<: *go-backend
+    command: ["/app/myhot-worker"]
+    volumes:
+      - data:/data
+      - og-cache:/data/ogcache
+    # Match the longest single paid model call plus shutdown overhead.
+    stop_grace_period: 210s
+
+  web:
+    <<: *web
+    command: ["node", "frontend/server.ts"]
+    # SSR uses HTTP for backend data; only the share-image cache is shared with the worker.
+    environment:
+      NODE_ENV: production
+      AIHOT_DATA_DIR: /data
+      GO_API_BASE_URL: http://go-api:3002
+      WEB_OG_PREWARM_SECRET: ${WEB_OG_PREWARM_SECRET:-}
+      INDEXNOW_KEY: ${INDEXNOW_KEY:-}
+      SITE_URL: ${SITE_URL:-http://localhost:3000}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      AIHOT_RELEASE: ${AIHOT_RELEASE:-}
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: "3000"
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      - og-cache:/data/ogcache
+    depends_on:
+      go-api:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy:/data
+    depends_on:
+      - web
+
+volumes:
+  db: {}
+  data: {}
+  og-cache: {}
+  caddy: {}

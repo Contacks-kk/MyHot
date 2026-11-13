@@ -1,0 +1,33 @@
+# One-shot Node image for SQL migration tooling. Web and Go have separate runtime images.
+FROM node:24-trixie-slim AS base
+WORKDIR /app
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+FROM base AS build
+ARG NPM_REGISTRY=
+COPY package.json package-lock.json ./
+COPY frontend/package.json frontend/
+COPY frontend/packages/og-renderer/package.json frontend/packages/og-renderer/
+COPY shared/contracts/package.json shared/contracts/
+COPY shared/industry/package.json shared/industry/
+COPY shared/site/package.json shared/site/
+COPY legacy/ts-compat/api/package.json legacy/ts-compat/api/
+COPY legacy/ts-compat/backend/package.json legacy/ts-compat/backend/
+COPY tooling/package.json tooling/
+RUN npm ci --omit=dev --workspace=@aihot/tooling --include-workspace-root=false --no-audit --no-fund ${NPM_REGISTRY:+--registry=$NPM_REGISTRY}
+COPY . .
+
+FROM base
+ENV NODE_ENV=production
+COPY --from=build --chown=node:node /app/node_modules /app/node_modules
+COPY --from=build --chown=node:node /app/tooling /app/tooling
+COPY --from=build --chown=node:node /app/shared/contracts /app/shared/contracts
+COPY --from=build --chown=node:node /app/shared/industry/package.json /app/shared/industry/package.json
+COPY --from=build --chown=node:node /app/shared/site/package.json /app/shared/site/package.json
+COPY --from=build --chown=node:node /app/shared/modules /app/shared/modules
+COPY --from=build --chown=node:node /app/database /app/database
+RUN mkdir -p /data && chown -R node:node /data
+USER node
+CMD ["node", "tooling/scripts/migrate.ts"]
