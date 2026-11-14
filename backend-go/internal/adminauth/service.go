@@ -47,6 +47,7 @@ type AdminPrincipal struct {
 	Name   string `json:"name"`
 	CSRF   string `json:"csrf"`
 	Dev    bool   `json:"dev"`
+	Super  bool   `json:"super"`
 }
 
 type SessionRecord struct {
@@ -98,8 +99,12 @@ func (s *Service) SessionPrincipal(ctx context.Context, cookieHeader string) (*A
 		hash := hashToken(token)
 		record, err := s.repo.FindSession(ctx, hash)
 		if err == nil {
-			if s.sessionAuthorized(record) {
-				return &AdminPrincipal{UserID: record.UserID, Name: record.Name, CSRF: record.CSRF}, nil
+			authorized, super, authErr := s.authorizeSession(ctx, record)
+			if authErr != nil {
+				return nil, authErr
+			}
+			if authorized {
+				return &AdminPrincipal{UserID: record.UserID, Name: record.Name, CSRF: record.CSRF, Super: super}, nil
 			}
 			if err := s.repo.DeleteSession(ctx, hash); err != nil {
 				return nil, err
@@ -207,6 +212,17 @@ func (s *Service) CompleteLogin(ctx context.Context, code, state, stateCookie, u
 	}
 	if !s.allowed(claims) {
 		return "", "", fmt.Errorf("%w: not allowlisted", ErrLoginRejected)
+	}
+	accounts, ok := s.repo.(accountRepository)
+	if !ok || claims.Email == nil {
+		return "", "", fmt.Errorf("%w: not allowlisted", ErrLoginRejected)
+	}
+	account, err := accounts.FindAccount(ctx, 0, *claims.Email)
+	if errors.Is(err, ErrNotFound) || err == nil && (!account.IsAdmin || account.VerifiedAt == nil) {
+		return "", "", fmt.Errorf("%w: not allowlisted", ErrLoginRejected)
+	}
+	if err != nil {
+		return "", "", err
 	}
 	identity := struct {
 		AppID   string  `json:"appId"`
@@ -407,7 +423,7 @@ func SafeReturn(target string) string {
 			path += "?" + parsed.RawQuery
 		}
 	}
-	if strings.HasPrefix(path, "//") || !(path == "/admin" || strings.HasPrefix(path, "/admin/") || strings.HasPrefix(path, "/admin?")) {
+	if strings.HasPrefix(path, "//") || !(path == "/admin" || strings.HasPrefix(path, "/admin/") || strings.HasPrefix(path, "/admin?") || path == "/super" || strings.HasPrefix(path, "/super?")) {
 		return "/admin"
 	}
 	return path

@@ -26,11 +26,6 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 	if returnTo == "" {
 		returnTo = "/admin"
 	}
-	password, feishu := s.AdminAuth.Options()
-	if feishu && !password {
-		s.adminFeishuRedirect(w, returnTo)
-		return
-	}
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, adminLoginPage(returnTo, ""), http.StatusFound)
 }
@@ -43,6 +38,10 @@ func (s *Server) adminLoginOptions(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) adminPasswordLogin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
+	if !sameOrigin(r, s.Config.TrustProxy) {
+		writeAdminProblem(w, http.StatusForbidden, "forbidden", "Invalid request origin.")
+		return
+	}
 	returnTo, password, ok := parseAdminPasswordRequest(w, r)
 	if !ok {
 		writeAdminProblem(w, http.StatusBadRequest, "invalid_request", "The request could not be processed.")
@@ -162,7 +161,7 @@ func (s *Server) adminMe(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": admin.Name, "csrf": admin.CSRF, "dev": admin.Dev})
+	writeJSON(w, http.StatusOK, map[string]any{"name": admin.Name, "csrf": admin.CSRF, "dev": admin.Dev, "super": admin.Super})
 }
 
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (*adminauth.AdminPrincipal, bool) {
@@ -242,6 +241,9 @@ func lastFormValue(values url.Values, key string) string {
 }
 
 func adminLoginPage(returnTo, errCode string) string {
+	if adminauth.SafeReturn(returnTo) == "/super" {
+		return "/super?error=" + url.QueryEscape(errCode)
+	}
 	location := "/admin/login?return=" + url.QueryEscape(adminauth.SafeReturn(returnTo))
 	if errCode != "" {
 		location += "&error=" + url.QueryEscape(errCode)

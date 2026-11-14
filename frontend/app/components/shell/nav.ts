@@ -2,6 +2,7 @@
 // and the site's modules'.
 import type { ReactNode } from "react";
 import { webModules } from "../../site-modules";
+import { getDict, type Locale } from "../../lib/i18n";
 import {
   IconBolt, IconDoc, IconFlame, IconGrid, IconHeart, IconHistory, IconPlug, IconRss, IconUser,
 } from "../icons";
@@ -16,34 +17,38 @@ export interface NavItem {
   changelog?: boolean;
 }
 
-const SECTIONS: Array<{ title: string; items: NavItem[] }> = [
-  {
-    title: "个人工作区",
-    items: [
-      { to: "/", label: "我的热点", icon: IconBolt, end: true },
-      { to: "/hot", label: "个人热点榜", icon: IconFlame },
-      { to: "/daily", label: "我的日报", icon: IconDoc, end: true },
-      { to: "/model", label: "模型配置", icon: IconPlug },
-      { to: "/interests", label: "关注项", icon: IconGrid },
-      { to: "/sources", label: "我的信源", icon: IconRss },
-    ],
-  },
-  {
-    title: "历史与关于",
-    items: [
-      { to: "/history", label: "历史归档", icon: IconHistory },
-      { to: "/about", label: "关于 MyHOT", icon: IconHeart },
-      { to: "/more", label: "账号与外观", icon: IconUser },
-    ],
-  },
-];
+/** Get localized navigation sections for the desktop sidebar. */
+function getSections(locale: Locale): Array<{ title: string; items: NavItem[] }> {
+  const dict = getDict(locale);
+  return [
+    {
+      title: dict.nav.workspace,
+      items: [
+        { to: "/", label: dict.nav.featured, icon: IconBolt, end: true },
+        { to: "/hot", label: dict.nav.hot, icon: IconFlame },
+        { to: "/daily", label: dict.nav.daily, icon: IconDoc, end: true },
+        { to: "/model", label: dict.nav.model, icon: IconPlug },
+        { to: "/interests", label: dict.nav.interests, icon: IconGrid },
+        { to: "/sources", label: dict.nav.sources, icon: IconRss },
+      ],
+    },
+    {
+      title: dict.nav.historyAndAbout,
+      items: [
+        { to: "/history", label: dict.nav.history, icon: IconHistory },
+        { to: "/about", label: dict.nav.about, icon: IconHeart },
+        { to: "/more", label: dict.nav.account, icon: IconUser },
+      ],
+    },
+  ];
+}
 
 /**
  * The sidebar: the engine's sections with the modules' between 内容 and 更多; a module naming a section
  * that is already there adds to it.
  */
-export function sidebar(): Array<{ title: string; items: NavItem[] }> {
-  const [content, ...rest] = SECTIONS;
+export function sidebar(locale: Locale = "zh"): Array<{ title: string; items: NavItem[] }> {
+  const [content, ...rest] = getSections(locale);
   const more = rest.pop()!;
   const sections = [content!, ...rest].map((s) => ({ ...s, items: [...s.items] }));
   for (const m of webModules()) {
@@ -82,14 +87,14 @@ export interface Tab {
   changelog?: boolean;
 }
 
-const ENGINE_TABS: Tab[] = [
-  { key: "featured", to: "/", label: "我的热点", icon: IconBolt },
-  { key: "hot", to: "/hot", label: "热点", icon: IconFlame },
-  { key: "daily", to: "/daily", label: "日报", icon: IconDoc },
-  { key: "me", to: "/more", label: "我的", icon: IconUser, changelog: true },
-];
-
 /** The tab bar: the engine's, the modules' before 我的. */
-export function tabs(): Tab[] {
-  return [...ENGINE_TABS.slice(0, -1), ...webModules().flatMap((m) => m.tabs ?? []), ENGINE_TABS.at(-1)!];
+export function tabs(locale: Locale = "zh"): Tab[] {
+  const dict = getDict(locale);
+  const engineTabs: Tab[] = [
+    { key: "featured", to: "/", label: dict.nav.featured, icon: IconBolt },
+    { key: "hot", to: "/hot", label: dict.nav.hot, icon: IconFlame },
+    { key: "daily", to: "/daily", label: dict.nav.daily, icon: IconDoc },
+    { key: "me", to: "/more", label: dict.nav.account, icon: IconUser, changelog: true },
+  ];
+  return [...engineTabs.slice(0, -1), ...webModules().flatMap((m) => m.tabs ?? []), engineTabs.at(-1)!];
 }

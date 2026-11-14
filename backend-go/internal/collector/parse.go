@@ -19,8 +19,13 @@ const (
 	maxAltRunes      = 120
 )
 
-/** parseRSS parses RSS or Atom feeds into normalized items with non-downloading image metadata. */
+/** parseRSS parses RSS, Atom, or Sitemap XML feeds into normalized items with non-downloading image metadata. */
 func parseRSS(data []byte, base string) ([]item, error) {
+	// Detect and parse Sitemap XML when applicable
+	if isSitemapXML(data) {
+		return parseSitemap(data, base)
+	}
+
 	feed, err := gofeed.NewParser().Parse(bytes.NewReader(data))
 	if err != nil {
 		return nil, err

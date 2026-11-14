@@ -19,16 +19,8 @@ import {
   IconSparkles,
 } from "../../components/icons";
 import { ThemeSwitch } from "../../components/shell/ThemeSwitch";
-
-interface RipplePoint {
-  x: number;
-  y: number;
-  age: number;
-  duration: number;
-  maxRadius: number;
-  strength: number;
-  echo: boolean;
-}
+import { LocaleSwitch } from "../../components/shell/LocaleSwitch";
+import { SpiderWebCanvas } from "./SpiderWebCanvas.tsx";
 
 interface PreviewItem {
   id: string;
@@ -127,371 +119,8 @@ const FUNNEL_STAGES: readonly FunnelStage[] = [
   },
 ];
 
-/** Read RGB channels from a CSS custom property for canvas rendering. */
-function readThemeRGB(variableName: string, fallback: [number, number, number]): [number, number, number] {
-  if (typeof window === "undefined") {
-    return fallback;
-  }
-
-  // Parse rgb()/hex strings produced by computed styles across light and dark themes.
-  const raw = getComputedStyle(document.documentElement).getPropertyValue(variableName).trim();
-  const rgbMatch = raw.match(/rgba?\(\s*([\d.]+)\s*[,\s]\s*([\d.]+)\s*[,\s]\s*([\d.]+)/i);
-  if (rgbMatch) {
-    return [Number(rgbMatch[1]), Number(rgbMatch[2]), Number(rgbMatch[3])];
-  }
-  if (raw.startsWith("#")) {
-    const hex = raw.slice(1);
-    if (hex.length === 3) {
-      return [
-        parseInt(hex[0]! + hex[0]!, 16),
-        parseInt(hex[1]! + hex[1]!, 16),
-        parseInt(hex[2]! + hex[2]!, 16),
-      ];
-    }
-    if (hex.length >= 6) {
-      return [
-        parseInt(hex.slice(0, 2), 16),
-        parseInt(hex.slice(2, 4), 16),
-        parseInt(hex.slice(4, 6), 16),
-      ];
-    }
-  }
-  return fallback;
-}
-
-/** Render a full-viewport fluid ripple canvas with displaced signal dot matrix and wake interpolation. */
-function SignalRippleCanvas() {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const glowRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      return;
-    }
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      return;
-    }
-
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    let width = window.innerWidth;
-    let height = window.innerHeight;
-    let dpr = Math.min(window.devicePixelRatio || 1, 2);
-    let accentRGB = readThemeRGB("--accent", [89, 101, 47]);
-    let lineRGB = readThemeRGB("--line-strong", [201, 194, 172]);
-
-    const pointer = {
-      x: width * 0.68,
-      y: height * 0.42,
-      glowX: width * 0.68,
-      glowY: height * 0.42,
-      lastEmitX: -999,
-      lastEmitY: -999,
-      lastEmitAt: 0,
-      active: false,
-    };
-
-    const ripples: RipplePoint[] = [];
-
-    // Spawn a damped concentric wave while capping active rings for 60fps performance.
-    const emitRipple = (
-      x: number,
-      y: number,
-      strength: number,
-      maxRadius: number,
-      echo: boolean,
-      duration?: number,
-    ) => {
-      if (reducedMotion) {
-        return;
-      }
-      if (ripples.length >= 34) {
-        ripples.shift();
-      }
-      ripples.push({
-        x: x,
-        y: y,
-        age: 0,
-        duration: duration ?? (echo ? 1450 : 1100),
-        maxRadius: maxRadius,
-        strength: strength,
-        echo: echo,
-      });
-    };
-
-    // Keep canvas pixel density aligned with viewport resizes.
-    const resize = () => {
-      width = window.innerWidth;
-      height = window.innerHeight;
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
-      canvas.width = Math.max(1, Math.floor(width * dpr));
-      canvas.height = Math.max(1, Math.floor(height * dpr));
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-
-    const syncThemeColors = () => {
-      accentRGB = readThemeRGB("--accent", [89, 101, 47]);
-      lineRGB = readThemeRGB("--line-strong", [201, 194, 172]);
-    };
-
-    resize();
-    syncThemeColors();
-
-    // Seed two soft opening ripples on initial mount so the surface feels immediately responsive.
-    if (!reducedMotion) {
-      emitRipple(width * 0.72, Math.min(height * 0.44, 340), 0.45, 220, true, 1600);
-    }
-
-    const onPointerMove = (event: PointerEvent) => {
-      pointer.x = event.clientX;
-      pointer.y = event.clientY;
-      pointer.active = true;
-
-      if (pointer.lastEmitX < -500) {
-        pointer.lastEmitX = event.clientX;
-        pointer.lastEmitY = event.clientY;
-        emitRipple(event.clientX, event.clientY, 0.36, 130, false);
-        pointer.lastEmitAt = performance.now();
-        return;
-      }
-
-      const dx = event.clientX - pointer.lastEmitX;
-      const dy = event.clientY - pointer.lastEmitY;
-      const dist = Math.hypot(dx, dy);
-      const now = performance.now();
-
-      // Interpolate wake points during rapid cursor sweeps for an unbroken silky fluid trail.
-      if (dist >= 20 && now - pointer.lastEmitAt >= 18) {
-        const steps = Math.min(3, Math.floor(dist / 36));
-        if (steps > 1) {
-          for (let s = 1; s < steps; s++) {
-            const t = s / steps;
-            emitRipple(
-              pointer.lastEmitX + dx * t,
-              pointer.lastEmitY + dy * t,
-              0.28,
-              115,
-              false,
-              920,
-            );
-          }
-        }
-        const radius = Math.min(200, 110 + dist * 0.55);
-        emitRipple(event.clientX, event.clientY, 0.44, radius, false);
-        pointer.lastEmitX = event.clientX;
-        pointer.lastEmitY = event.clientY;
-        pointer.lastEmitAt = now;
-      }
-    };
-
-    const onPointerDown = (event: PointerEvent) => {
-      pointer.x = event.clientX;
-      pointer.y = event.clientY;
-      pointer.active = true;
-      emitRipple(event.clientX, event.clientY, 0.85, 270, true, 1500);
-    };
-
-    const themeObserver = new MutationObserver(() => {
-      syncThemeColors();
-    });
-    themeObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["data-theme"],
-    });
-
-    const colorQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    colorQuery.addEventListener("change", syncThemeColors);
-    window.addEventListener("resize", resize);
-    window.addEventListener("pointermove", onPointerMove, { passive: true });
-    window.addEventListener("pointerdown", onPointerDown, { passive: true });
-
-    let rafId = 0;
-    let lastTime = performance.now();
-    let ambientTimer = 1800;
-
-    // Draw the physically displaced dot matrix, fluid gradient rings, and smooth cursor glow.
-    const render = (now: number) => {
-      const dt = Math.min(48, Math.max(0, now - lastTime));
-      lastTime = now;
-
-      if (!document.hidden) {
-        // Interpolate the soft cursor glow smoothly toward pointer coordinates.
-        pointer.glowX += (pointer.x - pointer.glowX) * 0.14;
-        pointer.glowY += (pointer.y - pointer.glowY) * 0.14;
-        if (glowRef.current) {
-          glowRef.current.style.setProperty("--cursor-x", `${pointer.glowX.toFixed(1)}px`);
-          glowRef.current.style.setProperty("--cursor-y", `${pointer.glowY.toFixed(1)}px`);
-        }
-
-        // Emit a quiet ambient sonar pulse near the hero workbench when idle.
-        ambientTimer += dt;
-        if (ambientTimer >= 3600 && !reducedMotion) {
-          ambientTimer = 0;
-          emitRipple(width * 0.72, Math.min(height * 0.44, 340), 0.3, 230, true, 1650);
-        }
-
-        for (let i = ripples.length - 1; i >= 0; i--) {
-          ripples[i]!.age += dt;
-          if (ripples[i]!.age >= ripples[i]!.duration) {
-            ripples.splice(i, 1);
-          }
-        }
-
-        ctx.clearRect(0, 0, width, height);
-
-        const spacing = 30;
-        const cols = Math.ceil(width / spacing) + 1;
-        const rows = Math.ceil(height / spacing) + 1;
-
-        for (let row = 0; row < rows; row++) {
-          const baseY = row * spacing;
-          for (let col = 0; col < cols; col++) {
-            const baseX = col * spacing;
-            let energy = 0;
-            let dispX = 0;
-            let dispY = 0;
-
-            if (pointer.active) {
-              const dx = baseX - pointer.glowX;
-              const dy = baseY - pointer.glowY;
-              const pDist = Math.hypot(dx, dy);
-              if (pDist < 190 && pDist > 0.5) {
-                const influence = 1 - pDist / 190;
-                energy += influence * 0.58;
-                dispX += (dx / pDist) * influence * 2.1;
-                dispY += (dy / pDist) * influence * 2.1;
-              }
-            }
-
-            // Displace grid points radially along each passing wave front.
-            for (let k = 0; k < ripples.length; k++) {
-              const r = ripples[k]!;
-              const u = r.age / r.duration;
-              const eased = 1 - Math.pow(1 - u, 3);
-              const waveRadius = 10 + r.maxRadius * eased;
-              const dx = baseX - r.x;
-              const dy = baseY - r.y;
-              const dist = Math.hypot(dx, dy);
-              const band = Math.abs(dist - waveRadius);
-              if (band < 40 && dist > 0.5) {
-                const wave = (1 - band / 40) * (1 - u) * r.strength * 1.45;
-                energy = Math.min(1.25, energy + wave);
-                dispX += (dx / dist) * wave * 4.4;
-                dispY += (dy / dist) * wave * 4.4;
-              }
-            }
-
-            const px = baseX + dispX;
-            const py = baseY + dispY;
-            const dotRadius = 0.85 + Math.min(1.75, energy * 1.35);
-
-            if (energy > 0.06) {
-              const mix = Math.min(1, energy);
-              const rCol = Math.round(lineRGB[0] + (accentRGB[0] - lineRGB[0]) * mix);
-              const gCol = Math.round(lineRGB[1] + (accentRGB[1] - lineRGB[1]) * mix);
-              const bCol = Math.round(lineRGB[2] + (accentRGB[2] - lineRGB[2]) * mix);
-              ctx.fillStyle = `rgba(${rCol},${gCol},${bCol},${0.24 + mix * 0.42})`;
-            } else {
-              ctx.fillStyle = `rgba(${lineRGB[0]},${lineRGB[1]},${lineRGB[2]},0.22)`;
-            }
-
-            ctx.beginPath();
-            ctx.arc(px, py, dotRadius, 0, Math.PI * 2);
-            ctx.fill();
-          }
-        }
-
-        // Paint soft luminous gradient bands and crisp concentric ripple rings.
-        for (let k = 0; k < ripples.length; k++) {
-          const r = ripples[k]!;
-          const u = r.age / r.duration;
-          const eased = 1 - Math.pow(1 - u, 3);
-          const radius = 10 + r.maxRadius * eased;
-          const fade = Math.sin((1 - u) * Math.PI * 0.5);
-          const alpha = fade * 0.36 * r.strength;
-
-          if (radius > 16) {
-            const innerR = Math.max(0, radius - 22);
-            const bandGrad = ctx.createRadialGradient(r.x, r.y, innerR, r.x, r.y, radius + 6);
-            bandGrad.addColorStop(0, `rgba(${accentRGB[0]},${accentRGB[1]},${accentRGB[2]},0)`);
-            bandGrad.addColorStop(
-              0.72,
-              `rgba(${accentRGB[0]},${accentRGB[1]},${accentRGB[2]},${alpha * 0.34})`,
-            );
-            bandGrad.addColorStop(1, `rgba(${accentRGB[0]},${accentRGB[1]},${accentRGB[2]},0)`);
-            ctx.fillStyle = bandGrad;
-            ctx.beginPath();
-            ctx.arc(r.x, r.y, radius + 6, 0, Math.PI * 2);
-            ctx.fill();
-          }
-
-          ctx.strokeStyle = `rgba(${accentRGB[0]},${accentRGB[1]},${accentRGB[2]},${alpha})`;
-          ctx.lineWidth = 1.4;
-          ctx.beginPath();
-          ctx.arc(r.x, r.y, radius, 0, Math.PI * 2);
-          ctx.stroke();
-
-          if (r.echo && u > 0.1) {
-            const echoU = (u - 0.1) / 0.9;
-            const echoRadius = 10 + r.maxRadius * 0.74 * (1 - Math.pow(1 - echoU, 3));
-            const echoAlpha = Math.sin((1 - echoU) * Math.PI * 0.5) * 0.22 * r.strength;
-            ctx.strokeStyle = `rgba(${accentRGB[0]},${accentRGB[1]},${accentRGB[2]},${echoAlpha})`;
-            ctx.lineWidth = 1.05;
-            ctx.beginPath();
-            ctx.arc(r.x, r.y, echoRadius, 0, Math.PI * 2);
-            ctx.stroke();
-          }
-        }
-      }
-
-      if (!reducedMotion) {
-        rafId = window.requestAnimationFrame(render);
-      }
-    };
-
-    if (reducedMotion) {
-      render(performance.now());
-    } else {
-      rafId = window.requestAnimationFrame(render);
-    }
-
-    return () => {
-      if (rafId) {
-        window.cancelAnimationFrame(rafId);
-      }
-      themeObserver.disconnect();
-      colorQuery.removeEventListener("change", syncThemeColors);
-      window.removeEventListener("resize", resize);
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerdown", onPointerDown);
-    };
-  }, []);
-
-  return (
-    <>
-      <div
-        ref={glowRef}
-        aria-hidden="true"
-        className="pointer-events-none fixed inset-0 z-0 transition-opacity duration-500"
-        style={{
-          background:
-            "radial-gradient(660px circle at var(--cursor-x, 68%) var(--cursor-y, 38%), color-mix(in srgb, var(--accent) 11%, transparent), transparent 64%)",
-        }}
-      />
-      <canvas
-        ref={canvasRef}
-        aria-hidden="true"
-        className="pointer-events-none fixed inset-0 z-0"
-      />
-    </>
-  );
-}
-
-/** Render a primary link button with subtle magnetic cursor attraction and click ripple. */
-function MagneticRippleLink({
+/** Render a primary link with subtle magnetic cursor attraction. */
+function MagneticLink({
   to,
   children,
   className = "",
@@ -501,7 +130,6 @@ function MagneticRippleLink({
   className?: string;
 }) {
   const ref = useRef<HTMLAnchorElement | null>(null);
-  const [ripple, setRipple] = useState<{ id: number; x: number; y: number } | null>(null);
 
   // Pull the button smoothly by up to 4px toward the cursor on hover.
   const onMouseMove = (event: ReactMouseEvent<HTMLAnchorElement>) => {
@@ -524,40 +152,14 @@ function MagneticRippleLink({
     el.style.transform = "";
   };
 
-  // Emit a localized ripple burst inside the CTA button on click.
-  const onMouseDown = (event: ReactMouseEvent<HTMLAnchorElement>) => {
-    const el = ref.current;
-    if (!el) {
-      return;
-    }
-    const rect = el.getBoundingClientRect();
-    setRipple({
-      id: Date.now(),
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-    });
-  };
-
   return (
     <Link
       ref={ref}
       to={to}
       onMouseMove={onMouseMove}
       onMouseLeave={onMouseLeave}
-      onMouseDown={onMouseDown}
       className={`landing-shimmer-btn relative inline-flex items-center justify-center gap-2 transition-all duration-200 ease-[var(--ease-out-quart)] ${className}`}
     >
-      {ripple && (
-        <span
-          key={ripple.id}
-          aria-hidden="true"
-          className="landing-click-ripple size-28"
-          style={{
-            left: `${ripple.x}px`,
-            top: `${ripple.y}px`,
-          }}
-        />
-      )}
       <span className="relative z-10 inline-flex items-center gap-2">{children}</span>
     </Link>
   );
@@ -574,7 +176,6 @@ function SpotlightCard({
   tilt?: boolean;
 }) {
   const cardRef = useRef<HTMLDivElement | null>(null);
-  const [ripple, setRipple] = useState<{ id: number; x: number; y: number } | null>(null);
 
   // Update local CSS pointer coordinates and gentle 3D perspective angle.
   const handlePointerMove = (event: ReactMouseEvent<HTMLDivElement>) => {
@@ -607,39 +208,13 @@ function SpotlightCard({
     }
   };
 
-  // Trigger a soft local ink ripple where user clicks inside the card.
-  const handlePointerDown = (event: ReactMouseEvent<HTMLDivElement>) => {
-    const el = cardRef.current;
-    if (!el) {
-      return;
-    }
-    const rect = el.getBoundingClientRect();
-    setRipple({
-      id: Date.now(),
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-    });
-  };
-
   return (
     <div
       ref={cardRef}
       onMouseMove={handlePointerMove}
       onMouseLeave={handlePointerLeave}
-      onMouseDown={handlePointerDown}
       className={`landing-spotlight ${className}`}
     >
-      {ripple && (
-        <span
-          key={ripple.id}
-          aria-hidden="true"
-          className="landing-click-ripple size-44"
-          style={{
-            left: `${ripple.x}px`,
-            top: `${ripple.y}px`,
-          }}
-        />
-      )}
       <div className="relative z-10">{children}</div>
     </div>
   );
@@ -1055,8 +630,8 @@ function PreviewConsole() {
   );
 }
 
-/** Render the official silky homepage with interactive canvas ripples and modular narrative sections. */
-export function RippleLanding({ registrationEnabled }: { registrationEnabled: boolean }) {
+/** Render the homepage with a spider weaving beneath its content. */
+export function SpiderLanding({ registrationEnabled }: { registrationEnabled: boolean }) {
   const [scrolled, setScrolled] = useState(false);
   const [scrollProgress, setScrollProgress] = useState(0);
   const [activeFunnel, setActiveFunnel] = useState<number>(2);
@@ -1078,8 +653,9 @@ export function RippleLanding({ registrationEnabled }: { registrationEnabled: bo
   const currentFunnel = FUNNEL_STAGES[activeFunnel] ?? FUNNEL_STAGES[0]!;
 
   return (
-    <div className="relative min-h-dvh overflow-x-clip bg-bg text-ink">
-      <SignalRippleCanvas />
+    <>
+      <SpiderWebCanvas key="viewport-spider" />
+      <div data-spider-landing className="relative z-10 min-h-dvh overflow-x-clip text-ink">
 
       <header
         className={`sticky top-0 z-40 transition-all duration-300 ${
@@ -1114,8 +690,9 @@ export function RippleLanding({ registrationEnabled }: { registrationEnabled: bo
             </Link>
           </nav>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <ThemeSwitch className="hidden w-[108px] sm:grid" />
+            <LocaleSwitch className="hidden w-[78px] sm:grid" />
             <Link
               to="/login"
               className="inline-flex h-8.5 items-center rounded-full border border-line-strong bg-surface/85 px-4 text-[13px] font-medium text-ink-2 transition-all duration-200 hover:border-ink-4 hover:bg-surface"
@@ -1181,13 +758,13 @@ export function RippleLanding({ registrationEnabled }: { registrationEnabled: bo
             </p>
 
             <div className="mt-8 flex flex-wrap items-center gap-3">
-              <MagneticRippleLink
+              <MagneticLink
                 to={registrationEnabled ? "/register" : "/login"}
                 className="h-11 rounded-full bg-accent px-6 text-[14px] font-semibold text-accent-contrast shadow-[0_12px_28px_-14px_var(--accent)] hover:bg-accent-ink"
               >
                 {registrationEnabled ? "注册并开始使用" : "登录工作区"}
                 <IconArrowUpRight size={16} />
-              </MagneticRippleLink>
+              </MagneticLink>
               <Link
                 to="/about"
                 className="inline-flex h-11 items-center rounded-full border border-line-strong bg-surface/80 px-5 text-[13px] font-medium text-ink-2 backdrop-blur-xs transition-all duration-200 hover:-translate-y-0.5 hover:bg-surface"
@@ -1382,13 +959,13 @@ export function RippleLanding({ registrationEnabled }: { registrationEnabled: bo
               配置只需要三步：接入 OpenAI 兼容模型、添加关注的公司与关键词、订阅你想长期跟踪的信息源。
             </p>
             <div className="mt-7 flex flex-wrap justify-center gap-3">
-              <MagneticRippleLink
+              <MagneticLink
                 to={registrationEnabled ? "/register" : "/login"}
                 className="h-11 rounded-full bg-accent px-6 text-[14px] font-semibold text-accent-contrast hover:bg-accent-ink"
               >
                 {registrationEnabled ? "立即注册" : "登录工作区"}
                 <IconArrowUpRight size={16} />
-              </MagneticRippleLink>
+              </MagneticLink>
               {registrationEnabled && (
                 <Link
                   to="/login"
@@ -1419,10 +996,14 @@ export function RippleLanding({ registrationEnabled }: { registrationEnabled: bo
             <Link to="/privacy" className="transition-colors hover:text-ink">
               隐私说明
             </Link>
-            <ThemeSwitch className="w-[108px] sm:hidden" />
+            <div className="flex items-center gap-2 sm:hidden">
+              <ThemeSwitch className="w-[104px]" />
+              <LocaleSwitch className="w-[76px]" />
+            </div>
           </div>
         </div>
       </footer>
-    </div>
+      </div>
+    </>
   );
 }

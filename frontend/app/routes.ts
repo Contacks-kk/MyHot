@@ -50,6 +50,7 @@ export default [
   route("agent", "routes/agent.tsx"),
   ...modulePages,
   route("admin/login", "routes/admin-login.tsx"),
+  route("super", "routes/super.tsx"),
   layout("routes/admin/layout.tsx", { id: "admin-layout" }, [
     route("admin", "routes/admin/index.tsx"),
     route("admin/content", "routes/admin/content.tsx"),
