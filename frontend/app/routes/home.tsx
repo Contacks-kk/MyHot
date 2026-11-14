@@ -35,6 +35,22 @@ interface Report {
   createdAt: string;
 }
 
+interface FunnelItem {
+  articleId: string;
+  title: string;
+  source: string;
+  url: string;
+  publishedAt?: string | null;
+  createdAt: string;
+}
+
+interface FunnelView {
+  totalScanned: number;
+  passedCount: number;
+  filteredCount: number;
+  filteredItems: FunnelItem[];
+}
+
 export async function loader({ request }: Route.LoaderArgs) {
   const user = await userApiMe(request);
   if (!user) {
@@ -49,16 +65,23 @@ export async function loader({ request }: Route.LoaderArgs) {
       feed: [] as Card[],
       hot: [] as Card[],
       reports: [] as Report[],
+      funnel: { totalScanned: 0, passedCount: 0, filteredCount: 0, filteredItems: [] } as FunnelView,
       modelConfigured: false,
       interestsConfigured: false,
     };
   }
-  const [feed, hot, daily, model, interests] = await Promise.all([
+  const [feed, hot, daily, model, interests, funnel] = await Promise.all([
     userApiGet<{ items: Card[] }>(request, "/api/me/feed"),
     userApiGet<{ items: Card[] }>(request, "/api/me/hot"),
     userApiGet<{ reports: Report[] }>(request, "/api/me/daily"),
     userApiGet<{ configured: boolean }>(request, "/api/me/model"),
     userApiGet<{ keywords: string[]; entityIds: string[] }>(request, "/api/me/interests"),
+    userApiGet<FunnelView>(request, "/api/me/feed/funnel").catch(() => ({
+      totalScanned: 0,
+      passedCount: 0,
+      filteredCount: 0,
+      filteredItems: [] as FunnelItem[],
+    })),
   ]);
   return {
     user,
@@ -67,6 +90,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     feed: feed.items,
     hot: hot.items,
     reports: daily.reports,
+    funnel: funnel ?? { totalScanned: 0, passedCount: 0, filteredCount: 0, filteredItems: [] },
     modelConfigured: model.configured,
     interestsConfigured: interests.keywords.length + interests.entityIds.length > 0,
   };
@@ -145,6 +169,7 @@ function ResultList({ items }: { items: Card[] }) {
 export default function Home() {
   const data = useLoaderData<typeof loader>();
   const [message, setMessage] = useState("");
+  const [showFiltered, setShowFiltered] = useState(false);
   const locale = useLocalePreference();
   const dict = getDict(locale);
   const isEn = locale === "en";
@@ -225,6 +250,84 @@ export default function Home() {
             </Link>
           </div>
         </div>
+      )}
+
+      {data.funnel && data.funnel.totalScanned > 0 && (
+        <section className="mb-7 rounded-card border border-line bg-surface p-4 sm:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent">
+                <IconBolt size={14} />
+              </span>
+              <div>
+                <h2 className="text-[13.5px] font-semibold text-ink">
+                  {isEn ? "Today's Stream & Filter Funnel" : "今日信息流与过滤动态"}
+                </h2>
+                <p className="mt-0.5 text-[12px] text-ink-3">
+                  {isEn
+                    ? `Scanned ${data.funnel.totalScanned} articles · ${data.funnel.passedCount} evaluated · ${data.funnel.filteredCount} filtered by labels (saved ~${data.funnel.filteredCount} model calls)`
+                    : `已扫描 ${data.funnel.totalScanned} 篇资讯 · ${data.funnel.passedCount} 篇精读入库 · ${data.funnel.filteredCount} 篇通过标签自动过滤（为你节省约 ${data.funnel.filteredCount} 次模型调用）`}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 text-[12px]">
+              {data.funnel.filteredCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowFiltered(!showFiltered)}
+                  className="font-medium text-accent hover:underline"
+                >
+                  {showFiltered
+                    ? (isEn ? "Hide Filtered ▲" : "收起已拦截清单 ▲")
+                    : (isEn ? `View ${data.funnel.filteredCount} Filtered ▼` : `查看 ${data.funnel.filteredCount} 篇已拦截清单 ▼`)}
+                </button>
+              )}
+              <Link to="/interests" className="text-ink-4 hover:text-accent">
+                {isEn ? "Interests" : "调整关注项"}
+              </Link>
+              <Link to="/sources" className="text-ink-4 hover:text-accent">
+                {isEn ? "Sources" : "管理信源"}
+              </Link>
+            </div>
+          </div>
+
+          {showFiltered && data.funnel.filteredItems.length > 0 && (
+            <div className="mt-4 border-t border-line pt-3">
+              <p className="mb-2 text-[11px] text-ink-4">
+                {isEn
+                  ? "The following articles did not match your configured keywords/entities, so model evaluation was skipped:"
+                  : "以下文章未命中你当前设置的关键词或公司实体，系统未调用模型打分："}
+              </p>
+              <ul className="divide-y divide-line-soft">
+                {data.funnel.filteredItems.map((item) => (
+                  <li key={item.articleId} className="flex items-start justify-between gap-4 py-2">
+                    <div className="min-w-0 flex-1">
+                      <a
+                        href={item.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="line-clamp-1 text-[12.5px] font-medium text-ink hover:text-accent hover:underline"
+                      >
+                        {item.title} ↗
+                      </a>
+                      <div className="mt-0.5 text-[11px] text-ink-4">
+                        <span>{item.source}</span>
+                        <span> · </span>
+                        <time>
+                          {new Date(item.publishedAt ?? item.createdAt).toLocaleTimeString(isEn ? "en-US" : "zh-CN", {
+                            timeZone: "Asia/Shanghai",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </time>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
       )}
 
       <section className="mb-8">

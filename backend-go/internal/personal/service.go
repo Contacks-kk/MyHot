@@ -278,3 +278,8 @@ func (s *Service) ManualDailyStatus(ctx context.Context, userID, jobID int64) (s
 func (s *Service) History(ctx context.Context) ([]Card, error) {
 	return s.repository.History(ctx)
 }
+
+/** Funnel returns today's scan and filter funnel metrics for the user. */
+func (s *Service) Funnel(ctx context.Context, userID int64) (FunnelView, error) {
+	return s.repository.Funnel(ctx, userID)
+}

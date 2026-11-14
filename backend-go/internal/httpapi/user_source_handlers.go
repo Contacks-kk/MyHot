@@ -197,6 +197,96 @@ func (s *Server) userIngestArticle(w http.ResponseWriter, r *http.Request, user 
 	writeJSON(w, http.StatusOK, result)
 }
 
+/** userSourcesExplore handles fuzzy search and recommendations for public sources. */
+func (s *Server) userSourcesExplore(w http.ResponseWriter, r *http.Request, user userContext) {
+	if s.UserSources == nil {
+		writeError(w, http.StatusServiceUnavailable, "服务暂不可用")
+		return
+	}
+
+	q := r.URL.Query().Get("q")
+	limit := 20
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if val, err := strconv.Atoi(l); err == nil && val > 0 && val <= 50 {
+			limit = val
+		}
+	}
+
+	offset := 0
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if val, err := strconv.Atoi(o); err == nil && val >= 0 {
+			offset = val
+		}
+	}
+
+	// 检索公共信源列表
+	result, err := s.UserSources.Explore(r.Context(), user.ID, q, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "检索信源失败")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sources": result,
+	})
+}
+
+/** userSourcePreview handles returning metadata and recent articles of a public source. */
+func (s *Server) userSourcePreview(w http.ResponseWriter, r *http.Request, user userContext) {
+	if s.UserSources == nil {
+		writeError(w, http.StatusServiceUnavailable, "服务暂不可用")
+		return
+	}
+
+	sourceID := r.PathValue("id")
+	if sourceID == "" {
+		writeError(w, http.StatusBadRequest, "缺少信源标识")
+		return
+	}
+
+	// 获取公共信源详情及最近文章预览
+	result, err := s.UserSources.Preview(r.Context(), user.ID, sourceID)
+	if err != nil {
+		if errors.Is(err, usersources.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "信源不存在或非公开信源")
+			return
+		}
+
+		writeError(w, http.StatusInternalServerError, "获取信源预览失败")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+/** userSourcesSubscribeExisting handles one-click subscription to an existing public source. */
+func (s *Server) userSourcesSubscribeExisting(w http.ResponseWriter, r *http.Request, user userContext) {
+	if s.UserSources == nil {
+		writeError(w, http.StatusServiceUnavailable, "服务暂不可用")
+		return
+	}
+
+	var input usersources.SubscribeExistingInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式无效")
+		return
+	}
+
+	if input.SourceID == "" {
+		writeError(w, http.StatusBadRequest, "请选择要关注的信源")
+		return
+	}
+
+	// 执行关注与用户订阅关系持久化
+	result, err := s.UserSources.SubscribeExisting(r.Context(), user.ID, input)
+	if err != nil {
+		writeUserSourceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, result)
+}
+
 func writeUserSourceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, usersources.ErrNotFound):

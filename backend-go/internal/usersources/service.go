@@ -61,6 +61,7 @@ type Input struct {
 	ItemSelector       string `json:"itemSelector,omitempty"`
 	TitleSelector      string `json:"titleSelector,omitempty"`
 	Enabled            *bool  `json:"enabled,omitempty"`
+	FilterMode         string `json:"filterMode,omitempty"`
 	IntervalMinutes    int    `json:"intervalMinutes"`
 	ReuseWindowMinutes int    `json:"reuseWindowMinutes"`
 }
@@ -74,6 +75,7 @@ type Subscription struct {
 	ItemSelector                string     `json:"itemSelector,omitempty"`
 	TitleSelector               string     `json:"titleSelector,omitempty"`
 	Enabled                     bool       `json:"enabled"`
+	FilterMode                  string     `json:"filterMode"`
 	IntervalMinutes             int        `json:"intervalMinutes"`
 	ReuseWindowMinutes          int        `json:"reuseWindowMinutes"`
 	EffectiveIntervalMinutes    int        `json:"effectiveIntervalMinutes"`
@@ -119,11 +121,46 @@ type IngestResult struct {
 	URL       string `json:"url"`
 }
 
+type ExploreItem struct {
+	SourceID        string     `gorm:"column:source_id" json:"sourceId"`
+	Name            string     `gorm:"column:name" json:"name"`
+	Kind            string     `gorm:"column:kind" json:"kind"`
+	URL             string     `gorm:"column:url" json:"url"`
+	Health          string     `gorm:"column:health" json:"health"`
+	SubscriberCount int64      `gorm:"column:subscriber_count" json:"subscriberCount"`
+	ArticleCount    int64      `gorm:"column:article_count" json:"articleCount"`
+	LastCheckedAt   *time.Time `gorm:"column:last_checked_at" json:"lastCheckedAt"`
+	IsSubscribed    bool       `gorm:"column:is_subscribed" json:"isSubscribed"`
+	SubscriptionID  int64      `gorm:"column:subscription_id" json:"subscriptionId,omitempty"`
+}
+
+type PreviewArticleItem struct {
+	ID          string     `gorm:"column:id" json:"id"`
+	Title       string     `gorm:"column:title" json:"title"`
+	URL         string     `gorm:"column:url" json:"url"`
+	Author      string     `gorm:"column:author" json:"author,omitempty"`
+	PublishedAt *time.Time `gorm:"column:published_at" json:"publishedAt"`
+	Excerpt     string     `gorm:"column:excerpt" json:"excerpt,omitempty"`
+}
+
+type SourcePreview struct {
+	Source   ExploreItem          `json:"source"`
+	Articles []PreviewArticleItem `json:"articles"`
+}
+
+type SubscribeExistingInput struct {
+	SourceID           string `json:"sourceId"`
+	Name               string `json:"name"`
+	FilterMode         string `json:"filterMode,omitempty"`
+	IntervalMinutes    int    `json:"intervalMinutes"`
+	ReuseWindowMinutes int    `json:"reuseWindowMinutes"`
+}
+
 const subscriptionSelect = `SELECT sub.id,sub.source_id,src.kind,sub.name,
 	coalesce(src.config->>'feedUrl',src.config->>'url','') AS url,
 	coalesce(src.config->>'itemSelector','') AS item_selector,
 	coalesce(src.config->>'titleSelector','') AS title_selector,
-	sub.enabled,sub.interval_minutes,sub.reuse_window_minutes,
+	sub.enabled,sub.filter_mode,sub.interval_minutes,sub.reuse_window_minutes,
 	greatest(src.interval_minutes,src.reuse_window_minutes) AS effective_interval_minutes,src.reuse_window_minutes AS effective_reuse_window_minutes,
 	src.last_ok_at AS last_checked_at,src.next_fetch_at,src.health
 	FROM user_source_subscriptions sub JOIN sources src ON src.id=sub.source_id`
@@ -159,6 +196,231 @@ func (s *Service) Get(ctx context.Context, userID, id int64) (Subscription, erro
 	return row, nil
 }
 
+/** Explore searches or recommends public sources for users to discover and follow. */
+func (s *Service) Explore(ctx context.Context, userID int64, query string, limit, offset int) ([]ExploreItem, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+
+	if offset < 0 {
+		offset = 0
+	}
+
+	query = strings.TrimSpace(query)
+
+	var sqlQuery string
+	var args []any
+	if query == "" {
+		// 检索高热度与最新活跃的公共信源（排除失效与单篇投递源）
+		sqlQuery = `SELECT 
+			s.id AS source_id,
+			s.name,
+			s.kind,
+			coalesce(s.config->>'feedUrl', s.config->>'url', '') AS url,
+			s.health,
+			s.last_ok_at AS last_checked_at,
+			coalesce(sub_count.count, 0) AS subscriber_count,
+			coalesce(art_count.count, 0) AS article_count,
+			(coalesce(my_sub.id, 0) > 0) AS is_subscribed,
+			coalesce(my_sub.id, 0) AS subscription_id
+		FROM sources s
+		LEFT JOIN (
+			SELECT source_id, COUNT(*) AS count 
+			FROM user_source_subscriptions 
+			WHERE enabled = true 
+			GROUP BY source_id
+		) sub_count ON sub_count.source_id = s.id
+		LEFT JOIN (
+			SELECT source_id, COUNT(*) AS count 
+			FROM articles 
+			GROUP BY source_id
+		) art_count ON art_count.source_id = s.id
+		LEFT JOIN user_source_subscriptions my_sub ON my_sub.source_id = s.id AND my_sub.user_id = ?
+		WHERE s.kind IN ('rss', 'web_list')
+		  AND s.health != 'failing'
+		ORDER BY is_subscribed ASC, subscriber_count DESC, s.last_ok_at DESC NULLS LAST, s.id ASC
+		LIMIT ? OFFSET ?`
+		args = []any{
+			userID,
+			limit,
+			offset,
+		}
+	} else {
+		// 模糊搜索：支持匹配信源名称与链接地址
+		pattern := "%" + query + "%"
+		sqlQuery = `SELECT 
+			s.id AS source_id,
+			s.name,
+			s.kind,
+			coalesce(s.config->>'feedUrl', s.config->>'url', '') AS url,
+			s.health,
+			s.last_ok_at AS last_checked_at,
+			coalesce(sub_count.count, 0) AS subscriber_count,
+			coalesce(art_count.count, 0) AS article_count,
+			(coalesce(my_sub.id, 0) > 0) AS is_subscribed,
+			coalesce(my_sub.id, 0) AS subscription_id
+		FROM sources s
+		LEFT JOIN (
+			SELECT source_id, COUNT(*) AS count 
+			FROM user_source_subscriptions 
+			WHERE enabled = true 
+			GROUP BY source_id
+		) sub_count ON sub_count.source_id = s.id
+		LEFT JOIN (
+			SELECT source_id, COUNT(*) AS count 
+			FROM articles 
+			GROUP BY source_id
+		) art_count ON art_count.source_id = s.id
+		LEFT JOIN user_source_subscriptions my_sub ON my_sub.source_id = s.id AND my_sub.user_id = ?
+		WHERE s.kind IN ('rss', 'web_list')
+		  AND s.health != 'failing'
+		  AND (s.name ILIKE ? OR coalesce(s.config->>'feedUrl', s.config->>'url', '') ILIKE ?)
+		ORDER BY is_subscribed ASC, subscriber_count DESC, s.last_ok_at DESC NULLS LAST, s.id ASC
+		LIMIT ? OFFSET ?`
+		args = []any{
+			userID,
+			pattern,
+			pattern,
+			limit,
+			offset,
+		}
+	}
+
+	var rows []ExploreItem
+	err := s.db.WithContext(ctx).Raw(sqlQuery, args...).Scan(&rows).Error
+	if rows == nil {
+		rows = []ExploreItem{}
+	}
+
+	return rows, err
+}
+
+/** Preview retrieves public metadata and recent articles for a given source. */
+func (s *Service) Preview(ctx context.Context, userID int64, sourceID string) (SourcePreview, error) {
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return SourcePreview{}, ErrNotFound
+	}
+
+	// 读取公共信源基本信息与订阅状态
+	var item ExploreItem
+	err := s.db.WithContext(ctx).Raw(`SELECT 
+		s.id AS source_id,
+		s.name,
+		s.kind,
+		coalesce(s.config->>'feedUrl', s.config->>'url', '') AS url,
+		s.health,
+		s.last_ok_at AS last_checked_at,
+		coalesce(sub_count.count, 0) AS subscriber_count,
+		coalesce(art_count.count, 0) AS article_count,
+		(coalesce(my_sub.id, 0) > 0) AS is_subscribed,
+		coalesce(my_sub.id, 0) AS subscription_id
+	FROM sources s
+	LEFT JOIN (
+		SELECT source_id, COUNT(*) AS count 
+		FROM user_source_subscriptions 
+		WHERE enabled = true 
+		GROUP BY source_id
+	) sub_count ON sub_count.source_id = s.id
+	LEFT JOIN (
+		SELECT source_id, COUNT(*) AS count 
+		FROM articles 
+		GROUP BY source_id
+	) art_count ON art_count.source_id = s.id
+	LEFT JOIN user_source_subscriptions my_sub ON my_sub.source_id = s.id AND my_sub.user_id = ?
+	WHERE s.id = ? AND s.kind IN ('rss', 'web_list')`, userID, sourceID).Scan(&item).Error
+	if err != nil {
+		return SourcePreview{}, err
+	}
+
+	if item.SourceID == "" {
+		return SourcePreview{}, ErrNotFound
+	}
+
+	// 读取该信源最近收录的 10 篇文章公开导读
+	var articles []PreviewArticleItem
+	err = s.db.WithContext(ctx).Raw(`SELECT 
+		id,
+		title,
+		url,
+		author,
+		published_at,
+		excerpt
+	FROM articles
+	WHERE source_id = ?
+	ORDER BY coalesce(published_at, discovered_at) DESC
+	LIMIT 10`, sourceID).Scan(&articles).Error
+	if err != nil {
+		return SourcePreview{}, err
+	}
+
+	if articles == nil {
+		articles = []PreviewArticleItem{}
+	}
+
+	return SourcePreview{
+		Source:   item,
+		Articles: articles,
+	}, nil
+}
+
+/** SubscribeExisting allows a user to follow an existing public source with custom settings. */
+func (s *Service) SubscribeExisting(ctx context.Context, userID int64, input SubscribeExistingInput) (Subscription, error) {
+	sourceID := strings.TrimSpace(input.SourceID)
+	if sourceID == "" {
+		return Subscription{}, ErrInvalid
+	}
+
+	if input.IntervalMinutes <= 0 {
+		input.IntervalMinutes = 60
+	}
+
+	if input.ReuseWindowMinutes <= 0 {
+		input.ReuseWindowMinutes = 10
+	}
+
+	var id int64
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 验证公共信源是否存在
+		var defaultName string
+		err := tx.Raw(`SELECT name FROM sources WHERE id = ? AND kind IN ('rss', 'web_list')`, sourceID).Row().Scan(&defaultName)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+
+		if err != nil {
+			return err
+		}
+
+		name := strings.TrimSpace(input.Name)
+		if name == "" {
+			name = defaultName
+		}
+
+		filterMode := strings.TrimSpace(input.FilterMode)
+		if filterMode != "all" {
+			filterMode = "label"
+		}
+
+		// 插入或更新用户订阅
+		if err := tx.Raw(`INSERT INTO user_source_subscriptions(user_id, source_id, name, filter_mode, interval_minutes, reuse_window_minutes, cold_start_pending)
+			VALUES(?, ?, ?, ?, ?, ?, false)
+			ON CONFLICT(user_id, source_id)
+			DO UPDATE SET name = excluded.name, filter_mode = excluded.filter_mode, enabled = true, interval_minutes = excluded.interval_minutes, reuse_window_minutes = excluded.reuse_window_minutes, activated_at = now(), updated_at = now()
+			RETURNING id`, userID, sourceID, name, filterMode, input.IntervalMinutes, input.ReuseWindowMinutes).Row().Scan(&id); err != nil {
+			return err
+		}
+
+		// 重新计算信源聚合调度周期
+		return recompute(tx, sourceID, true)
+	})
+	if err != nil {
+		return Subscription{}, err
+	}
+
+	return s.Get(ctx, userID, id)
+}
+
 /** Create registers a new user source subscription. */
 func (s *Service) Create(ctx context.Context, userID int64, input Input) (Subscription, error) {
 	input = withDefaults(input)
@@ -173,7 +435,12 @@ func (s *Service) Create(ctx context.Context, userID int64, input Input) (Subscr
 			return err
 		}
 
-		if err := tx.Raw(`INSERT INTO user_source_subscriptions(user_id,source_id,name,interval_minutes,reuse_window_minutes,cold_start_pending) VALUES(?,?,?,?,?,true) ON CONFLICT(user_id,source_id) DO UPDATE SET name=excluded.name,enabled=true,interval_minutes=excluded.interval_minutes,reuse_window_minutes=excluded.reuse_window_minutes,cold_start_pending=true,activated_at=now(),updated_at=now() RETURNING id`, userID, sourceID, strings.TrimSpace(input.Name), input.IntervalMinutes, input.ReuseWindowMinutes).Row().Scan(&id); err != nil {
+		filterMode := strings.TrimSpace(input.FilterMode)
+		if filterMode != "all" {
+			filterMode = "label"
+		}
+
+		if err := tx.Raw(`INSERT INTO user_source_subscriptions(user_id,source_id,name,filter_mode,interval_minutes,reuse_window_minutes,cold_start_pending) VALUES(?,?,?,?,?,?,true) ON CONFLICT(user_id,source_id) DO UPDATE SET name=excluded.name,filter_mode=excluded.filter_mode,enabled=true,interval_minutes=excluded.interval_minutes,reuse_window_minutes=excluded.reuse_window_minutes,cold_start_pending=true,activated_at=now(),updated_at=now() RETURNING id`, userID, sourceID, strings.TrimSpace(input.Name), filterMode, input.IntervalMinutes, input.ReuseWindowMinutes).Row().Scan(&id); err != nil {
 			return err
 		}
 
@@ -198,6 +465,10 @@ func withDefaults(input Input) Input {
 
 	if input.ReuseWindowMinutes == 0 {
 		input.ReuseWindowMinutes = 10
+	}
+
+	if input.FilterMode != "all" {
+		input.FilterMode = "label"
 	}
 
 	return input
@@ -236,7 +507,12 @@ func (s *Service) Update(ctx context.Context, userID, id int64, input Input) (Su
 			enabled = *input.Enabled
 		}
 
-		if err := tx.Exec(`UPDATE user_source_subscriptions SET source_id=?,name=?,enabled=?,interval_minutes=?,reuse_window_minutes=?,cold_start_pending=CASE WHEN source_id<>? THEN true ELSE cold_start_pending END,activated_at=CASE WHEN enabled<>? OR source_id<>? THEN now() ELSE activated_at END,updated_at=now() WHERE user_id=? AND id=?`, newSource, strings.TrimSpace(input.Name), enabled, input.IntervalMinutes, input.ReuseWindowMinutes, newSource, enabled, newSource, userID, id).Error; err != nil {
+		filterMode := strings.TrimSpace(input.FilterMode)
+		if filterMode != "all" {
+			filterMode = "label"
+		}
+
+		if err := tx.Exec(`UPDATE user_source_subscriptions SET source_id=?,name=?,filter_mode=?,enabled=?,interval_minutes=?,reuse_window_minutes=?,cold_start_pending=CASE WHEN source_id<>? THEN true ELSE cold_start_pending END,activated_at=CASE WHEN enabled<>? OR source_id<>? THEN now() ELSE activated_at END,updated_at=now() WHERE user_id=? AND id=?`, newSource, strings.TrimSpace(input.Name), filterMode, enabled, input.IntervalMinutes, input.ReuseWindowMinutes, newSource, enabled, newSource, userID, id).Error; err != nil {
 			return err
 		}
 
@@ -476,6 +752,10 @@ func validate(in Input) error {
 	}
 
 	if in.Kind != "" && in.Kind != "rss" && in.Kind != "web_list" {
+		return ErrInvalid
+	}
+
+	if in.FilterMode != "" && in.FilterMode != "label" && in.FilterMode != "all" {
 		return ErrInvalid
 	}
 

@@ -58,6 +58,7 @@ type ArticleArgs struct {
 	ModelVersion      int    `json:"modelVersion"`
 	PreferenceVersion int    `json:"preferenceVersion"`
 	ColdStart         bool   `json:"coldStart,omitempty"`
+	FilterMode        string `json:"filterMode,omitempty"`
 }
 
 func (ArticleArgs) Kind() string { return "myhot_personal_article" }
@@ -71,6 +72,7 @@ type TriageCandidate struct {
 	Snippet      string   `json:"snippet"`
 	MatchedHints []string `json:"matchedHints,omitempty"`
 	ColdStart    bool     `json:"coldStart,omitempty"`
+	FilterMode   string   `json:"filterMode,omitempty"`
 }
 
 // TriageBatchArgs represents a user-scoped Stage 2 batch triage LLM call.
