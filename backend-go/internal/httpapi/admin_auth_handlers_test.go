@@ -49,6 +49,34 @@ func (r *memoryAdminRepository) DeleteSession(_ context.Context, hash string) er
 	return nil
 }
 
+func TestSuperEndpointsRequireKeyAndCSRF(t *testing.T) {
+	repo := &memoryAdminRepository{}
+	cfg := config.Config{SessionSecret: "admin-session-secret", AdminPassword: "correct-admin-password", SiteURL: "http://localhost", DevAdmin: true}
+	server := &Server{Config: cfg, AdminAuth: adminauth.NewService(repo, cfg, nil), limiter: newRateLimiter()}
+	handler := server.Handler()
+
+	denied := httptest.NewRecorder()
+	handler.ServeHTTP(denied, httptest.NewRequest(http.MethodGet, "/api/super/users", nil))
+	if denied.Code != http.StatusForbidden {
+		t.Fatalf("non-super administrator must be forbidden: %d", denied.Code)
+	}
+	form := url.Values{"return": {"/super"}, "password": {cfg.AdminPassword}}
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/password", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	login := httptest.NewRecorder()
+	handler.ServeHTTP(login, request)
+	if login.Code != http.StatusSeeOther || login.Header().Get("Location") != "/super" {
+		t.Fatalf("super login failed: %d %s", login.Code, login.Header().Get("Location"))
+	}
+	request = httptest.NewRequest(http.MethodPut, "/api/super/users/1", strings.NewReader(`{"isAdmin":true}`))
+	request.AddCookie(login.Result().Cookies()[0])
+	missingCSRF := httptest.NewRecorder()
+	handler.ServeHTTP(missingCSRF, request)
+	if missingCSRF.Code != http.StatusForbidden {
+		t.Fatalf("super mutation without CSRF must be forbidden: %d", missingCSRF.Code)
+	}
+}
+
 func TestAdminPasswordRoutesKeepFormRedirectAndSessionContract(t *testing.T) {
 	repo := &memoryAdminRepository{}
 	cfg := config.Config{SessionSecret: "admin-session-secret", AdminPassword: "correct-admin-password", SiteURL: "https://admin.example", SiteName: "Example"}
