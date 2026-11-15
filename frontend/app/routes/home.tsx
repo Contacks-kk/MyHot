@@ -4,7 +4,7 @@ import type { Route } from "./+types/home";
 import type { Screen } from "../components/shell/screens";
 import type { MediaView } from "@aihot/contracts/site";
 import { SITE } from "@aihot/site";
-import { IconArrowUpRight, IconBolt, IconClock, IconPlug } from "../components/icons";
+import { IconArrowUpRight, IconBolt, IconPlug } from "../components/icons";
 import { MediaThumbs } from "../features/feed/parts";
 import { userApiGet, userApiMe } from "../lib/user-api.server";
 import { postJSON } from "../features/account/common";
@@ -27,14 +27,6 @@ interface Card {
   media?: MediaView[];
 }
 
-interface Report {
-  date: string;
-  model: string;
-  title: string;
-  summary: string;
-  createdAt: string;
-}
-
 interface FunnelItem {
   articleId: string;
   title: string;
@@ -51,6 +43,7 @@ interface FunnelView {
   filteredItems: FunnelItem[];
 }
 
+/** Load user feed, hotspot cards, and model configuration status. */
 export async function loader({ request }: Route.LoaderArgs) {
   const user = await userApiMe(request);
   if (!user) {
@@ -64,16 +57,16 @@ export async function loader({ request }: Route.LoaderArgs) {
       csrfToken: "",
       feed: [] as Card[],
       hot: [] as Card[],
-      reports: [] as Report[],
       funnel: { totalScanned: 0, passedCount: 0, filteredCount: 0, filteredItems: [] } as FunnelView,
       modelConfigured: false,
       interestsConfigured: false,
     };
   }
-  const [feed, hot, daily, model, interests, funnel] = await Promise.all([
+
+  // Fetch personal feed, 48h hotspots, filter funnel stats, and user settings concurrently
+  const [feed, hot, model, interests, funnel] = await Promise.all([
     userApiGet<{ items: Card[] }>(request, "/api/me/feed"),
     userApiGet<{ items: Card[] }>(request, "/api/me/hot"),
-    userApiGet<{ reports: Report[] }>(request, "/api/me/daily"),
     userApiGet<{ configured: boolean }>(request, "/api/me/model"),
     userApiGet<{ keywords: string[]; entityIds: string[] }>(request, "/api/me/interests"),
     userApiGet<FunnelView>(request, "/api/me/feed/funnel").catch(() => ({
@@ -83,13 +76,13 @@ export async function loader({ request }: Route.LoaderArgs) {
       filteredItems: [] as FunnelItem[],
     })),
   ]);
+
   return {
     user,
     registrationEnabled: false,
     csrfToken: user.csrfToken,
     feed: feed.items,
     hot: hot.items,
-    reports: daily.reports,
     funnel: funnel ?? { totalScanned: 0, passedCount: 0, filteredCount: 0, filteredItems: [] },
     modelConfigured: model.configured,
     interestsConfigured: interests.keywords.length + interests.entityIds.length > 0,
@@ -348,20 +341,6 @@ export default function Home() {
         </div>
         <ResultList items={data.feed.slice(0, 10)} />
       </section>
-
-      {data.reports[0] && (
-        <section className="rounded-card border border-line bg-surface p-5">
-          <div className="flex items-center gap-2 text-[12px] text-ink-4">
-            <IconClock size={15} />
-            {data.reports[0].date} {isEn ? "Daily Brief" : "每日简报"}
-          </div>
-          <h2 className="mt-2 text-[16px] font-semibold text-ink">{data.reports[0].title}</h2>
-          <p className="mt-2 whitespace-pre-line text-[13px] leading-relaxed text-ink-3">{data.reports[0].summary}</p>
-          <Link to="/daily" className="mt-3 inline-block text-[12px] font-medium text-accent">
-            {isEn ? "View Briefing Archive" : "查看日报历史"}
-          </Link>
-        </section>
-      )}
 
       {message && <p role="alert" className="mt-4 text-[12px] text-hot">{message}</p>}
     </div>
