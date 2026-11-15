@@ -20,6 +20,7 @@ import (
 	"aihot/backend-go/internal/adminauth"
 	"aihot/backend-go/internal/admincontent"
 	"aihot/backend-go/internal/admindeliveries"
+	"aihot/backend-go/internal/adminlabels"
 	"aihot/backend-go/internal/adminmodels"
 	"aihot/backend-go/internal/adminops"
 	"aihot/backend-go/internal/adminruns"
@@ -68,6 +69,7 @@ type Server struct {
 	AdminOps         *adminops.Service
 	AdminRuns        *adminruns.Service
 	AdminSources     *adminsources.Service
+	AdminLabels      *adminlabels.Service
 	UserSources      *usersources.Service
 	FeedDiscovery    *feeddiscovery.Service
 	AdminSelectBench *adminselectbench.Service
@@ -202,6 +204,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/admin/receipts/{id}/release", s.adminReceiptRelease)
 	mux.HandleFunc("GET /api/admin/sources", s.adminSourcesList)
 	mux.HandleFunc("GET /api/admin/sources/{id}", s.adminSourceDetail)
+	mux.HandleFunc("GET /api/admin/labels", s.adminLabelsOverview)
+	mux.HandleFunc("GET /api/admin/labels/hotspots", s.adminLabelHotspots)
 	mux.HandleFunc("GET /api/admin/selectbench", s.adminSelectBenchList)
 	mux.HandleFunc("GET /api/admin/selectbench/{id}", s.adminSelectBenchRun)
 	mux.HandleFunc("POST /api/admin/selectbench/import", s.adminSelectBenchImport)

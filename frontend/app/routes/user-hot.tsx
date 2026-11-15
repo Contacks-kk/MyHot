@@ -30,6 +30,15 @@ export const meta: Route.MetaFunction = () => [{ title: "个人热点榜 · MyHO
 
 export const headers: Route.HeadersFunction = () => ({ "Cache-Control": "private, no-store", "X-Robots-Tag": "noindex, nofollow" });
 
+/** Extract the clean domain or hostname from an article URL. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
 /** Render the personal hotspot list with localized UI. */
 export default function UserHot() {
   const { items } = useLoaderData<typeof loader>();
@@ -75,20 +84,17 @@ export default function UserHot() {
                 </div>
                 <p className="mt-2 text-[12.5px] leading-relaxed text-ink-3">{item.summary}</p>
                 {item.media && item.media.length > 0 && <MediaThumbs media={item.media} className="mt-3" />}
-                <p className="mt-2 text-[11px] text-ink-4">
-                  {item.source} ·{" "}
-                  {new Date(item.createdAt).toLocaleString(isEn ? "en-US" : "zh-CN", {
-                    timeZone: "Asia/Shanghai",
-                  })}
-                </p>
-                <a
-                  href={item.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="relative z-10 mt-2 inline-block text-[11.5px] text-accent"
-                >
-                  {dict.action.readOriginal}
-                </a>
+                {/* 底部元信息行：左下角信源 URL 与右下角时间戳高度齐平 */}
+                <div className="mt-2.5 flex items-center justify-between gap-3 text-[11px] text-ink-4">
+                  <span className="min-w-0 truncate" title={item.url}>
+                    {isEn ? "Source: " : "来源："}{hostOf(item.url)}
+                  </span>
+                  <time className="shrink-0">
+                    {new Date(item.createdAt).toLocaleString(isEn ? "en-US" : "zh-CN", {
+                      timeZone: "Asia/Shanghai",
+                    })}
+                  </time>
+                </div>
               </div>
             </article>
           );

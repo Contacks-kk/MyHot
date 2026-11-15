@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"aihot/backend-go/internal/materials"
+	"aihot/backend-go/internal/model"
 	"gorm.io/gorm"
 )
 
@@ -67,22 +68,23 @@ type Input struct {
 }
 
 type Subscription struct {
-	ID                          int64      `json:"id"`
-	SourceID                    string     `json:"sourceId"`
-	Kind                        string     `json:"kind"`
-	Name                        string     `json:"name"`
-	URL                         string     `json:"url"`
-	ItemSelector                string     `json:"itemSelector,omitempty"`
-	TitleSelector               string     `json:"titleSelector,omitempty"`
-	Enabled                     bool       `json:"enabled"`
-	FilterMode                  string     `json:"filterMode"`
-	IntervalMinutes             int        `json:"intervalMinutes"`
-	ReuseWindowMinutes          int        `json:"reuseWindowMinutes"`
-	EffectiveIntervalMinutes    int        `json:"effectiveIntervalMinutes"`
-	EffectiveReuseWindowMinutes int        `json:"effectiveReuseWindowMinutes"`
-	LastCheckedAt               *time.Time `json:"lastCheckedAt"`
-	NextFetchAt                 *time.Time `json:"nextFetchAt"`
-	Health                      string     `json:"health"`
+	ID                          int64           `json:"id"`
+	SourceID                    string          `json:"sourceId"`
+	Kind                        string          `json:"kind"`
+	Name                        string          `json:"name"`
+	URL                         string          `json:"url"`
+	ItemSelector                string          `json:"itemSelector,omitempty"`
+	TitleSelector               string          `json:"titleSelector,omitempty"`
+	Enabled                     bool            `json:"enabled"`
+	FilterMode                  string          `json:"filterMode"`
+	IntervalMinutes             int             `json:"intervalMinutes"`
+	ReuseWindowMinutes          int             `json:"reuseWindowMinutes"`
+	EffectiveIntervalMinutes    int             `json:"effectiveIntervalMinutes"`
+	EffectiveReuseWindowMinutes int             `json:"effectiveReuseWindowMinutes"`
+	LastCheckedAt               *time.Time      `json:"lastCheckedAt"`
+	NextFetchAt                 *time.Time      `json:"nextFetchAt"`
+	Health                      string          `json:"health"`
+	Tags                        model.TextArray `gorm:"column:tags" json:"tags"`
 }
 
 type FetchRequest struct {
@@ -162,7 +164,7 @@ const subscriptionSelect = `SELECT sub.id,sub.source_id,src.kind,sub.name,
 	coalesce(src.config->>'titleSelector','') AS title_selector,
 	sub.enabled,sub.filter_mode,sub.interval_minutes,sub.reuse_window_minutes,
 	greatest(src.interval_minutes,src.reuse_window_minutes) AS effective_interval_minutes,src.reuse_window_minutes AS effective_reuse_window_minutes,
-	src.last_ok_at AS last_checked_at,src.next_fetch_at,src.health
+	src.last_ok_at AS last_checked_at,src.next_fetch_at,src.health,src.tags
 	FROM user_source_subscriptions sub JOIN sources src ON src.id=sub.source_id`
 
 /** List retrieves all source subscriptions for a given user. */

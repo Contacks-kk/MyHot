@@ -26,6 +26,7 @@ type Subscription = {
   nextFetchAt: string | null;
   health: string;
   filterMode?: "label" | "all";
+  tags?: string[];
 };
 
 type FetchResult = {
@@ -1291,6 +1292,23 @@ export default function SourcesRoute() {
                         </span>
                       )}
                     </div>
+
+                    {source.tags && source.tags.length > 0 && (
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5 pl-[23px]">
+                        <span className="text-[10.5px] text-ink-4 flex items-center gap-1 mr-0.5">
+                          <span>🏷️</span>
+                          <span>{locale === "en" ? "Auto-Labels:" : "智能标签:"}</span>
+                        </span>
+                        {source.tags.map((tag) => (
+                          <span
+                            key={tag}
+                            className="inline-flex items-center rounded-md bg-surface-2 px-2 py-0.5 text-[10.5px] font-medium text-ink-2 border border-line/60"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
 
                     <p className="mt-1.5 pl-[23px] text-[11px] text-ink-4">
                       {locale === "en"

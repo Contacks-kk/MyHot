@@ -40,6 +40,7 @@ import (
 	"aihot/backend-go/internal/sourceicons"
 	"aihot/backend-go/internal/storydigest"
 	"aihot/backend-go/internal/storylinks"
+	"aihot/backend-go/internal/tagging"
 	"aihot/backend-go/internal/topics"
 	"aihot/backend-go/internal/translations"
 
@@ -741,9 +742,15 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 	// 注册扫描Worker，开启采集时注册SourceScanWorker
 	river.AddWorker(workers, &ReportComposeWorker{Service: reportService, DB: orm})
 	river.AddWorker(workers, sourceScanWorker)
+	var sourceWorker *SourceWorker
 	if cfg.CollectorEnabled {
-		river.AddWorker(workers, &SourceWorker{Service: collectorService, Enabled: true})
+		sourceWorker = &SourceWorker{Service: collectorService, DB: orm, Enabled: true}
+		river.AddWorker(workers, sourceWorker)
 	}
+
+	taggingEngine := tagging.NewEngine(entities, topicDefinitions)
+	taggingService := tagging.NewService(orm, taggingEngine, chat, "")
+	river.AddWorker(workers, &SourceTaggingWorker{Service: taggingService})
 	if xShardWorker != nil {
 		river.AddWorker(workers, xShardWorker)
 	}
@@ -904,6 +911,9 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 	}
 	dailyScanWorker.Client = client
 	sourceScanWorker.Client = client
+	if sourceWorker != nil {
+		sourceWorker.Client = client
+	}
 	sourceHealthScanWorker.Client = client
 	sourceIconsScanWorker.Client = client
 	if mpScanWorker != nil {

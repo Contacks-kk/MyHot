@@ -10,6 +10,7 @@ import (
 	"aihot/backend-go/internal/adminauth"
 	"aihot/backend-go/internal/admincontent"
 	"aihot/backend-go/internal/admindeliveries"
+	"aihot/backend-go/internal/adminlabels"
 	"aihot/backend-go/internal/adminmodels"
 	"aihot/backend-go/internal/adminops"
 	"aihot/backend-go/internal/adminruns"
@@ -19,6 +20,7 @@ import (
 	"aihot/backend-go/internal/agentmd"
 	"aihot/backend-go/internal/config"
 	"aihot/backend-go/internal/discovery"
+	"aihot/backend-go/internal/editorial"
 	"aihot/backend-go/internal/feedback"
 	"aihot/backend-go/internal/feeddiscovery"
 	"aihot/backend-go/internal/feeds"
@@ -121,6 +123,8 @@ func New(cfg config.Config, db *pgxpool.Pool, orm *gorm.DB, entities map[string]
 	server.AdminOps = adminops.NewService(adminops.NewRepository(orm))
 	server.AdminRuns = adminruns.NewService(adminruns.NewRepository(orm))
 	server.AdminSources = adminsources.NewService(adminsources.NewRepository(orm))
+	vocabulary, _ := editorial.LoadVocabulary()
+	server.AdminLabels = adminlabels.NewService(adminlabels.NewRepository(orm, vocabulary))
 	server.UserSources = usersources.NewService(orm)
 	server.UserSources.SetMaterials(materialService)
 	server.UserSources.SetCollectorEnabled(cfg.CollectorEnabled)

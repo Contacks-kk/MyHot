@@ -4,6 +4,7 @@ import type { Screen } from "../components/shell/screens";
 import type { Route } from "./+types/user-daily";
 import { Halftone } from "../features/report/Halftone";
 import { Kicker } from "../components/ui/Kicker";
+import { MarkdownContent } from "../components/ui/MarkdownContent";
 import { scrollToAnchor } from "../components/ui/OutlineSheet";
 import { userApiGet, userApiMe } from "../lib/user-api.server";
 import { postJSON } from "../features/account/common";
@@ -61,7 +62,9 @@ function Story({ entry, index }: { entry: DailyEntry; index: number }) {
         <span className="num shrink-0">{entry.score} 分</span>
       </div>
       <h3 className="mt-3 text-[19px] font-bold leading-[1.5] text-ink">{entry.title}</h3>
-      <p className="mt-2 whitespace-pre-line text-[15px] leading-[1.85] text-ink-2">{entry.summary}</p>
+      <div className="mt-2 text-[15px] leading-[1.85] text-ink-2">
+        <MarkdownContent content={entry.summary} />
+      </div>
       <a href={entry.url} target="_blank" rel="noopener noreferrer" className="mt-4 inline-block text-[12px] font-medium text-accent hover:underline">阅读原文 ↗</a>
     </article>
   );
@@ -227,10 +230,14 @@ export default function UserDaily() {
                 <div id="story-0" className="scroll-mt-24">
                   <Kicker>{lead ? "头条" : "本期导读"}</Kicker>
                   <h2 className="mt-6 text-[32px] font-black leading-[1.25] tracking-[-0.03em] text-ink sm:text-[46px]">{lead?.title ?? report.title}</h2>
-                  <div className="mt-6 whitespace-pre-line text-[16px] leading-[2] text-ink-2">{lead?.summary ?? report.summary}</div>
+                  <div className="mt-6 text-[16px] leading-[2] text-ink-2">
+                    <MarkdownContent content={lead?.summary ?? report.summary} />
+                  </div>
                   {lead && <p className="mt-5 text-[12px] text-ink-4">{lead.source} · <a href={lead.url} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">阅读原文 ↗</a></p>}
                 </div>
-                {lead && <div className="mt-10 border-t border-line-strong pt-7"><Kicker>本期导读</Kicker><h2 className="mt-4 text-[20px] font-bold text-ink">{report.title}</h2><div className="mt-3 whitespace-pre-line text-[15px] leading-[1.9] text-ink-2">{report.summary}</div></div>}
+                {lead && <div className="mt-10 border-t border-line-strong pt-7"><Kicker>本期导读</Kicker><h2 className="mt-4 text-[20px] font-bold text-ink">{report.title}</h2><div className="mt-3 text-[15px] leading-[1.9] text-ink-2">
+                    <MarkdownContent content={report.summary} />
+                  </div></div>}
                 {entries.length > 1 && <div className="mt-10 border-t border-line-strong pt-7"><Kicker>本期文章</Kicker><div className="mt-2">{entries.slice(1).map((entry, index) => <Story key={entry.articleId} entry={entry} index={index + 1} />)}</div></div>}
               </section>
               {entries.length > 0 && (

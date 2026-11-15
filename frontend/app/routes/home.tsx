@@ -99,6 +99,15 @@ export async function loader({ request }: Route.LoaderArgs) {
 export const meta: Route.MetaFunction = () => [{ title: `我的热点 · ${SITE.name}` }, { name: "robots", content: "noindex, nofollow" }];
 export const headers: Route.HeadersFunction = () => ({ "Cache-Control": "private, no-store", "X-Robots-Tag": "noindex, nofollow" });
 
+/** Extract the clean domain or hostname from an article URL. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
 /** Render a list of personal article results. */
 function ResultList({ items }: { items: Card[] }) {
   const locale = useLocalePreference();
@@ -132,31 +141,17 @@ function ResultList({ items }: { items: Card[] }) {
               </h2>
               <p className="mt-2 whitespace-pre-line text-[13px] leading-relaxed text-ink-3">{item.summary}</p>
               {item.media && item.media.length > 0 && <MediaThumbs media={item.media} className="mt-3" />}
-              <div className="mt-2 flex items-center gap-2 text-[11px] text-ink-4">
-                <span>{item.source}</span>
-                <span>·</span>
-                <time>
+              {/* 底部元信息行：左下角信源 URL 与右下角时间戳高度齐平 */}
+              <div className="mt-2.5 flex items-center justify-between gap-3 text-[11px] text-ink-4">
+                <span className="min-w-0 truncate" title={item.url}>
+                  {isEn ? "Source: " : "来源："}{hostOf(item.url)}
+                </span>
+                <time className="shrink-0">
                   {new Date(item.publishedAt ?? item.createdAt).toLocaleString(isEn ? "en-US" : "zh-CN", {
-                    dateStyle: "short",
-                    timeStyle: "short",
                     timeZone: "Asia/Shanghai",
                   })}
                 </time>
               </div>
-              {item.reason && (
-                <p className="mt-2 text-[11px] text-ink-4">
-                  {dict.article.matched}：{item.reason}
-                </p>
-              )}
-              <a
-                className="relative z-10 mt-2 inline-flex items-center gap-1 text-[11.5px] text-accent hover:underline"
-                href={item.url}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                {dict.action.readOriginal}
-                <IconArrowUpRight size={13} />
-              </a>
             </div>
           </div>
         </article>
