@@ -4,6 +4,7 @@ import type { Screen } from "../components/shell/screens";
 import type { Route } from "./+types/user-daily";
 import { Halftone } from "../features/report/Halftone";
 import { Kicker } from "../components/ui/Kicker";
+import { scrollToAnchor } from "../components/ui/OutlineSheet";
 import { userApiGet, userApiMe } from "../lib/user-api.server";
 import { postJSON } from "../features/account/common";
 
@@ -71,10 +72,53 @@ export default function UserDaily() {
   const { reports, report, csrfToken } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const revalidator = useRevalidator();
+  const entries = report?.entries ?? [];
+  const lead = entries[0];
+  const mark = report ? formatDate(report.date) : null;
+  const sourceCount = new Set(entries.map((entry) => entry.source).filter(Boolean)).size;
   const [jobId, setJobId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [activeStory, setActiveStory] = useState<number | null>(null);
+
+  // 监听当前滚动位置，同步激活右侧篇目导航高亮
+  useEffect(() => {
+    if (!report || entries.length === 0) {
+      return;
+    }
+    const count = Math.min(entries.length, 5);
+
+    /** 计算当前阅读位置对应的篇目索引 */
+    function onScroll() {
+      // 头部偏移阈值：在尚未滑入头条正文时保持无高亮状态
+      const offset = 140;
+      const first = document.getElementById("story-0");
+      if (first && first.getBoundingClientRect().top > offset) {
+        setActiveStory(null);
+        return;
+      }
+
+      let current = 0;
+      for (let i = 0; i < count; i += 1) {
+        const el = document.getElementById(`story-${i}`);
+        if (el) {
+          const rect = el.getBoundingClientRect();
+          if (rect.top <= offset) {
+            current = i;
+          }
+        }
+      }
+      setActiveStory(current);
+    }
+
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+    };
+  }, [report, entries.length]);
 
   // Follow the queued job until it completes, fails or the page is closed.
   useEffect(() => {
@@ -139,10 +183,6 @@ export default function UserDaily() {
       setError(cause instanceof Error ? cause.message : "无法提交日报任务");
     }
   }
-  const entries = report?.entries ?? [];
-  const lead = entries[0];
-  const mark = report ? formatDate(report.date) : null;
-  const sourceCount = new Set(entries.map((entry) => entry.source).filter(Boolean)).size;
 
   return (
     <div className="report-shell lg:-mx-7 lg:-mb-[72px] lg:-mt-6 lg:flex lg:min-h-dvh">
@@ -182,7 +222,7 @@ export default function UserDaily() {
               <div className="flex flex-wrap items-baseline gap-x-8 gap-y-2 border-y border-line-strong py-4 text-[12px] text-ink-4"><span><strong className="num mr-1.5 text-[24px] text-ink">{entries.length}</strong>篇文章</span><span><strong className="num mr-1.5 text-[24px] text-ink">{sourceCount}</strong>个来源</span><span className="sm:ml-auto">{report.id.startsWith("manual-") ? "汇总上期至手动生成时的个人结果" : "汇总此前 24 小时的个人结果"}</span></div>
             </header>
 
-            <div className="grid lg:grid-cols-[minmax(0,1fr)_290px]">
+            <div className="grid items-start lg:grid-cols-[minmax(0,1fr)_290px]">
               <section className="min-w-0 py-10 lg:pr-12">
                 <div id="story-0" className="scroll-mt-24">
                   <Kicker>{lead ? "头条" : "本期导读"}</Kicker>
@@ -193,7 +233,42 @@ export default function UserDaily() {
                 {lead && <div className="mt-10 border-t border-line-strong pt-7"><Kicker>本期导读</Kicker><h2 className="mt-4 text-[20px] font-bold text-ink">{report.title}</h2><div className="mt-3 whitespace-pre-line text-[15px] leading-[1.9] text-ink-2">{report.summary}</div></div>}
                 {entries.length > 1 && <div className="mt-10 border-t border-line-strong pt-7"><Kicker>本期文章</Kicker><div className="mt-2">{entries.slice(1).map((entry, index) => <Story key={entry.articleId} entry={entry} index={index + 1} />)}</div></div>}
               </section>
-              {entries.length > 0 && <aside className="border-t border-line py-8 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-10"><Kicker>今日看点</Kicker><ol className="mt-3">{entries.slice(0, 5).map((entry, index) => <li key={entry.articleId} className="border-b border-line py-4"><a href={`#story-${index}`} className="group flex gap-4"><span className="num text-[25px] font-black leading-none text-accent">{index + 1}</span><span><span className="block text-[14px] font-bold leading-6 text-ink group-hover:text-accent">{entry.title}</span><span className="mt-1 block text-[12px] text-ink-4">{entry.source}</span></span></a></li>)}</ol></aside>}
+              {entries.length > 0 && (
+                <aside className="border-t border-line py-8 lg:sticky lg:top-0 lg:self-start lg:max-h-dvh lg:overflow-y-auto lg:border-l lg:border-t-0 lg:pl-8 lg:pt-10 scrollbar-thin">
+                  <Kicker>今日看点</Kicker>
+                  <ol className="mt-3">
+                    {entries.slice(0, 5).map((entry, index) => {
+                      const isActive = activeStory === index;
+                      return (
+                        <li key={entry.articleId} className="border-b border-line py-4">
+                          <a
+                            href={`#story-${index}`}
+                            aria-current={isActive ? "location" : undefined}
+                            onClick={(e) => {
+                              if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) {
+                                return;
+                              }
+                              e.preventDefault();
+                              scrollToAnchor(`story-${index}`);
+                            }}
+                            className="group flex gap-4"
+                          >
+                            <span className="num text-[25px] font-black leading-none text-accent">
+                              {index + 1}
+                            </span>
+                            <span>
+                              <span className={`block text-[14px] font-bold leading-6 transition-colors ${isActive ? "text-accent" : "text-ink group-hover:text-accent"}`}>
+                                {entry.title}
+                              </span>
+                              <span className="mt-1 block text-[12px] text-ink-4">{entry.source}</span>
+                            </span>
+                          </a>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </aside>
+              )}
             </div>
           </div>
         )}

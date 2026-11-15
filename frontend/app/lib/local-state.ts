@@ -8,6 +8,7 @@ export const KEYS = {
   starred: "aihot-starred-items",
   read: "aihot-read-items",
   theme: "aihot-theme",
+  locale: "aihot-locale",
   changelogSeen: "aihot-changelog-seen-version",
   feedbackDraft: "aihot-feedback-draft-v1",
   recentSearches: "aihot-recent-searches",
@@ -112,6 +113,7 @@ function subscribeKey(key: string) {
 const subscribeStarred = subscribeKey(KEYS.starred);
 const subscribeRead = subscribeKey(KEYS.read);
 const subscribeTheme = subscribeKey(KEYS.theme);
+const subscribeLocale = subscribeKey(KEYS.locale);
 const subscribeChangelog = subscribeKey(KEYS.changelogSeen);
 const subscribeRecentSearches = subscribeKey(KEYS.recentSearches);
 
@@ -241,6 +243,25 @@ export function getThemePreference(): ThemePreference {
 export function setThemePreference(pref: ThemePreference) {
   writeRaw(KEYS.theme, pref);
   invalidate(KEYS.theme);
+}
+
+// locale
+export type LocalePreference = "zh" | "en";
+
+/** Get the stored user locale preference (default: "zh"). */
+export function getLocalePreference(): LocalePreference {
+  const v = readRaw(KEYS.locale);
+  return v === "en" ? "en" : "zh";
+}
+
+/** Set the user locale preference, update document lang, set cookie, and notify listeners. */
+export function setLocalePreference(pref: LocalePreference) {
+  writeRaw(KEYS.locale, pref);
+  if (typeof document !== "undefined") {
+    document.documentElement.setAttribute("lang", pref === "en" ? "en" : "zh-CN");
+    document.cookie = `myhot_locale=${pref}; path=/; max-age=31536000; SameSite=Lax`;
+  }
+  invalidate(KEYS.locale);
 }
 
 export function resolvedTheme(pref: ThemePreference = getThemePreference()): "light" | "dark" {
@@ -455,6 +476,11 @@ export function useReadSet(): Set<string> {
 
 export function useThemePreference(): ThemePreference {
   return useSyncExternalStore(subscribeTheme, getThemePreference, () => null);
+}
+
+/** Reactive hook for current locale preference ("zh" or "en"). */
+export function useLocalePreference(): LocalePreference {
+  return useSyncExternalStore(subscribeLocale, getLocalePreference, () => "zh");
 }
 
 export function useChangelogSeen(): string | null {

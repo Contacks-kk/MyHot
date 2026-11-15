@@ -214,4 +214,85 @@ func (r *Repository) History(ctx context.Context) ([]Card, error) {
 	return items, err
 }
 
+type FunnelItem struct {
+	ArticleID   string     `gorm:"column:article_id" json:"articleId"`
+	Title       string     `gorm:"column:title" json:"title"`
+	Source      string     `gorm:"column:source" json:"source"`
+	URL         string     `gorm:"column:url" json:"url"`
+	PublishedAt *time.Time `gorm:"column:published_at" json:"publishedAt"`
+	CreatedAt   time.Time  `gorm:"column:created_at" json:"createdAt"`
+}
+
+type FunnelCounts struct {
+	TotalScanned  int64 `gorm:"column:total_scanned"`
+	PassedCount   int64 `gorm:"column:passed_count"`
+	FilteredCount int64 `gorm:"column:filtered_count"`
+}
+
+type FunnelView struct {
+	TotalScanned  int64        `json:"totalScanned"`
+	PassedCount   int64        `json:"passedCount"`
+	FilteredCount int64        `json:"filteredCount"`
+	FilteredItems []FunnelItem `json:"filteredItems"`
+}
+
+/** Funnel calculates today's scan, pass, and filter metrics and lists recent filtered articles. */
+func (r *Repository) Funnel(ctx context.Context, userID int64) (FunnelView, error) {
+	var counts FunnelCounts
+
+	// 统计今日扫描、入库和被过滤数量
+	countQuery := `WITH today_scanned AS (
+		SELECT DISTINCT a.id AS article_id
+		FROM articles a
+		JOIN article_discoveries ad ON ad.article_id = a.id
+		JOIN user_source_subscriptions sub ON sub.source_id = ad.source_id AND sub.enabled
+		WHERE sub.user_id = ?
+		  AND ad.discovered_at >= (now() AT TIME ZONE 'Asia/Shanghai')::date
+	),
+	user_evaluated AS (
+		SELECT article_id FROM user_article_results WHERE user_id = ?
+	)
+	SELECT 
+		(SELECT count(*) FROM today_scanned) AS total_scanned,
+		(SELECT count(*) FROM today_scanned t JOIN user_evaluated e ON e.article_id = t.article_id) AS passed_count,
+		(SELECT count(*) FROM today_scanned t WHERE NOT EXISTS (SELECT 1 FROM user_evaluated e WHERE e.article_id = t.article_id)) AS filtered_count`
+
+	if err := r.db.WithContext(ctx).Raw(countQuery, userID, userID).Scan(&counts).Error; err != nil {
+		return FunnelView{}, err
+	}
+
+	var items []FunnelItem
+
+	// 查询被过滤的最近文章列表
+	itemsQuery := `WITH today_scanned AS (
+		SELECT DISTINCT a.id AS article_id, a.title, s.name AS source, a.url, a.published_at, ad.discovered_at AS created_at
+		FROM articles a
+		JOIN article_discoveries ad ON ad.article_id = a.id
+		JOIN user_source_subscriptions sub ON sub.source_id = ad.source_id AND sub.enabled
+		JOIN sources s ON s.id = ad.source_id
+		WHERE sub.user_id = ?
+		  AND ad.discovered_at >= (now() AT TIME ZONE 'Asia/Shanghai')::date
+	)
+	SELECT t.article_id, t.title, t.source, t.url, t.published_at, t.created_at
+	FROM today_scanned t
+	WHERE NOT EXISTS (SELECT 1 FROM user_article_results e WHERE e.user_id = ? AND e.article_id = t.article_id)
+	ORDER BY t.created_at DESC
+	LIMIT 20`
+
+	if err := r.db.WithContext(ctx).Raw(itemsQuery, userID, userID).Scan(&items).Error; err != nil {
+		return FunnelView{}, err
+	}
+
+	if items == nil {
+		items = []FunnelItem{}
+	}
+
+	return FunnelView{
+		TotalScanned:  counts.TotalScanned,
+		PassedCount:   counts.PassedCount,
+		FilteredCount: counts.FilteredCount,
+		FilteredItems: items,
+	}, nil
+}
+
 const personalSelect = `SELECT r.article_id,r.relevance_score::float8 AS score,r.title,r.summary,r.reason,a.url,s.name AS source,a.published_at,r.created_at,a.media FROM user_article_results r JOIN articles a ON a.id=r.article_id JOIN sources s ON s.id=a.source_id`

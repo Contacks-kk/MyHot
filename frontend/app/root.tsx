@@ -15,7 +15,7 @@ import { usePageTransition } from "./components/shell/transitions";
 import { SearchOverlay } from "./features/search/SearchOverlay";
 import { BackToTop, NavigationProgress } from "./components/shell/Chrome";
 import { buttonClass } from "./components/ui/Controls";
-import { rememberPage, THEME_BOOT_SCRIPT, useThemeSync } from "./lib/local-state";
+import { rememberPage, THEME_BOOT_SCRIPT, useLocalePreference, useThemeSync } from "./lib/local-state";
 import { apiGet } from "./lib/api.server";
 import { useHydratedFlag } from "./lib/hydration";
 import { titled } from "./lib/seo";
@@ -51,8 +51,9 @@ export const headers: Route.HeadersFunction = () => ({ "Cache-Control": "private
 export function Layout({ children }: { children: React.ReactNode }) {
   const site = useRouteLoaderData<typeof loader>("root");
   const [documentRelease] = useState(site?.release ?? null);
+  const locale = useLocalePreference();
   return (
-    <html lang={SITE.locale} suppressHydrationWarning>
+    <html lang={locale === "en" ? "en" : SITE.locale} suppressHydrationWarning>
       <head>
         <meta charSet="utf-8" />
         {documentRelease && <meta name="aihot-release" content={documentRelease} />}
@@ -124,8 +125,13 @@ export default function App() {
     return () => document.removeEventListener("touchstart", noop);
   }, []);
   // The admin has its own chrome.
-  if (pathname === "/admin" || pathname.startsWith("/admin/")) return <Outlet />;
-  if (["/login", "/register", "/verify-email", "/password-reset", "/about", "/terms", "/privacy"].includes(pathname)) return <Outlet />;
+  if (pathname === "/super" || pathname === "/admin" || pathname.startsWith("/admin/")) return <Outlet />;
+  if (["/login", "/register", "/verify-email", "/password-reset", "/terms", "/privacy"].includes(pathname)) {
+    return <Outlet />;
+  }
+  if (pathname === "/about" && !meta.user) {
+    return <Outlet />;
+  }
   if (pathname === "/" && !meta.user) return <Outlet />;
   return (
     <>
@@ -168,6 +174,6 @@ export function ErrorBoundary() {
     </div>
   );
   // Admin errors stay inside the admin's own chrome.
-  if (pathname === "/admin" || pathname.startsWith("/admin/")) return body;
+  if (pathname === "/super" || pathname === "/admin" || pathname.startsWith("/admin/")) return body;
   return <SiteShell changelogVersion={site?.changelogVersion ?? null}>{body}</SiteShell>;
 }

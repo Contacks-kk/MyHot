@@ -73,6 +73,7 @@ type userScanCandidate struct {
 	preferenceVersion int
 	matchedHints      []string
 	coldStart         bool
+	filterMode        string
 }
 
 type userScanBucket struct {
@@ -100,9 +101,15 @@ func (s *Service) ScanWithTriage(ctx context.Context, enqueueArticle ArticleEnqu
 	return s.repository.WithPersonalScanLockTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		byUser := make(map[int64]*userScanBucket)
 		appendCandidate := func(row scanUserArticle) {
-			hits, ok := s.matchesUserInterests(row.Title, row.Excerpt, row.Body, row.Keywords, row.EntityIDs)
-			if !ok {
-				return
+			var hits []string
+			if row.FilterMode == "all" {
+				hits, _ = s.matchesUserInterests(row.Title, row.Excerpt, row.Body, row.Keywords, row.EntityIDs)
+			} else {
+				var ok bool
+				hits, ok = s.matchesUserInterests(row.Title, row.Excerpt, row.Body, row.Keywords, row.EntityIDs)
+				if !ok {
+					return
+				}
 			}
 			bucket := byUser[row.UserID]
 			if bucket == nil {
@@ -131,6 +138,7 @@ func (s *Service) ScanWithTriage(ctx context.Context, enqueueArticle ArticleEnqu
 				preferenceVersion: row.PreferenceVersion,
 				matchedHints:      hits,
 				coldStart:         row.ColdStart,
+				filterMode:        row.FilterMode,
 			})
 		}
 
@@ -269,6 +277,7 @@ func (s *Service) ProcessTriageBatch(ctx context.Context, args TriageBatchArgs, 
 				ModelVersion:      state.ModelVersion,
 				PreferenceVersion: state.PreferenceVersion,
 				ColdStart:         item.ColdStart,
+				FilterMode:        item.FilterMode,
 			}); err != nil {
 				return err
 			}
@@ -317,6 +326,7 @@ func (s *Service) ProcessTriageBatch(ctx context.Context, args TriageBatchArgs, 
 			ModelVersion:      state.ModelVersion,
 			PreferenceVersion: state.PreferenceVersion,
 			ColdStart:         chosen.ColdStart,
+			FilterMode:        chosen.FilterMode,
 		}); err != nil {
 			return err
 		}
@@ -341,7 +351,7 @@ func (s *Service) ProcessArticle(ctx context.Context, args ArticleArgs, jobID in
 	}
 
 	hits, matched := s.matchesUserInterests(input.Title, input.Excerpt, input.Body, input.Keywords, input.EntityIDs)
-	if !matched {
+	if !matched && args.FilterMode != "all" {
 		return nil
 	}
 	dayStartUTC, err := shanghaiDayStartUTC(time.Now())
@@ -724,6 +734,7 @@ func planUserDispatches(userID int64, items []userScanCandidate, remaining int, 
 			ModelVersion:      item.modelVersion,
 			PreferenceVersion: item.preferenceVersion,
 			ColdStart:         item.coldStart,
+			FilterMode:        item.filterMode,
 		}
 	}
 
@@ -760,6 +771,7 @@ func planUserDispatches(userID int64, items []userScanCandidate, remaining int, 
 				Snippet:      compactSnippet(item.excerpt, item.body, triageSnippetRunes),
 				MatchedHints: item.matchedHints,
 				ColdStart:    item.coldStart,
+				FilterMode:   item.filterMode,
 			})
 		}
 		modelVersion := chunk[0].modelVersion

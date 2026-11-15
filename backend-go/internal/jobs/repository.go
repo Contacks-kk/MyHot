@@ -54,6 +54,7 @@ type scanUserArticle struct {
 	Keywords          []string
 	EntityIDs         []string
 	ColdStart         bool
+	FilterMode        string
 }
 
 type coldStartSubscription struct {
@@ -64,6 +65,7 @@ type coldStartSubscription struct {
 	PreferenceVersion int
 	Keywords          []string
 	EntityIDs         []string
+	FilterMode        string
 }
 
 type triageUserState struct {
@@ -189,7 +191,8 @@ func (r *Repository) IncrementalCandidatesTx(ctx context.Context, tx pgx.Tx, art
 		       m.config_version,
 		       coalesce(ui.preference_version, 1) AS preference_version,
 		       coalesce(ui.keywords, '{}'::text[]) AS keywords,
-		       coalesce(ui.entity_ids, '{}'::text[]) AS entity_ids
+		       coalesce(ui.entity_ids, '{}'::text[]) AS entity_ids,
+		       sub.filter_mode
 		FROM user_accounts u
 		JOIN user_model_configs m ON m.user_id = u.id
 		LEFT JOIN user_interests ui ON ui.user_id = u.id
@@ -230,7 +233,7 @@ func (r *Repository) IncrementalCandidatesTx(ctx context.Context, tx pgx.Tx, art
 			Body:      article.Body,
 			Excerpt:   article.Excerpt,
 		}
-		if err := rows.Scan(&candidate.SourceID, &candidate.UserID, &candidate.ModelVersion, &candidate.PreferenceVersion, &candidate.Keywords, &candidate.EntityIDs); err != nil {
+		if err := rows.Scan(&candidate.SourceID, &candidate.UserID, &candidate.ModelVersion, &candidate.PreferenceVersion, &candidate.Keywords, &candidate.EntityIDs, &candidate.FilterMode); err != nil {
 			return nil, err
 		}
 		out = append(out, candidate)
@@ -256,7 +259,8 @@ func (r *Repository) ColdStartSubscriptionsTx(ctx context.Context, tx pgx.Tx) ([
 		       m.config_version,
 		       coalesce(ui.preference_version, 1) AS preference_version,
 		       coalesce(ui.keywords, '{}'::text[]) AS keywords,
-		       coalesce(ui.entity_ids, '{}'::text[]) AS entity_ids
+		       coalesce(ui.entity_ids, '{}'::text[]) AS entity_ids,
+		       sub.filter_mode
 		FROM user_source_subscriptions sub
 		JOIN sources src ON src.id = sub.source_id
 		JOIN user_accounts u ON u.id = sub.user_id
@@ -276,7 +280,7 @@ func (r *Repository) ColdStartSubscriptionsTx(ctx context.Context, tx pgx.Tx) ([
 	var subs []coldStartSubscription
 	for rows.Next() {
 		var sub coldStartSubscription
-		if err := rows.Scan(&sub.SubscriptionID, &sub.UserID, &sub.SourceID, &sub.ModelVersion, &sub.PreferenceVersion, &sub.Keywords, &sub.EntityIDs); err != nil {
+		if err := rows.Scan(&sub.SubscriptionID, &sub.UserID, &sub.SourceID, &sub.ModelVersion, &sub.PreferenceVersion, &sub.Keywords, &sub.EntityIDs, &sub.FilterMode); err != nil {
 			return nil, err
 		}
 		subs = append(subs, sub)
@@ -327,6 +331,7 @@ func (r *Repository) ColdStartArticlesTx(ctx context.Context, tx pgx.Tx, sub col
 			Keywords:          sub.Keywords,
 			EntityIDs:         sub.EntityIDs,
 			ColdStart:         true,
+			FilterMode:        sub.FilterMode,
 		}
 		if err := rows.Scan(&item.ArticleID, &item.Revision, &item.Title, &item.Body, &item.Excerpt); err != nil {
 			return nil, err

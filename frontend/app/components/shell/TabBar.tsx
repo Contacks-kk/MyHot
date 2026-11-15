@@ -4,6 +4,7 @@ import { tabs, type TabKey } from "./nav";
 import { noteScreen, rememberedTab, useScreen } from "./screens";
 import { markBack } from "./transitions";
 import { useChangelogDot } from "./Sidebar";
+import { useLocalePreference } from "../../lib/local-state";
 
 const subscribe = () => () => {};
 const serverTab = () => null;
@@ -32,7 +33,8 @@ export function TabBar({ changelogVersion }: { changelogVersion: string | null }
     noteScreen(screen.name, key, active);
   }, [active, key, screen.name, restored]);
   if (screen.toolbar) return null;
-  const items = tabs();
+  const locale = useLocalePreference();
+  const items = tabs(locale);
   return (
     <nav
       aria-label="底部导航"

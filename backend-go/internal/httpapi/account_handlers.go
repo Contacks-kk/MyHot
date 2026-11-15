@@ -221,6 +221,7 @@ func (s *Server) verifyEmail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"message": "邮箱验证完成，请登录"})
 }
 
+// send verification code
 func (s *Server) resendVerification(w http.ResponseWriter, r *http.Request) {
 	if !sameOrigin(r, s.Config.TrustProxy) {
 		writeError(w, http.StatusForbidden, "请求来源无效")
@@ -269,6 +270,7 @@ func (s *Server) resendVerification(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"message": "验证码已发送，60秒内有效", "serverTime": timing.ServerTime, "expiresAt": timing.ExpiresAt, "retryAt": timing.RetryAt})
 }
 
+// forgot password
 func (s *Server) forgotPassword(w http.ResponseWriter, r *http.Request) {
 	if !sameOrigin(r, s.Config.TrustProxy) {
 		writeError(w, http.StatusForbidden, "请求来源无效")

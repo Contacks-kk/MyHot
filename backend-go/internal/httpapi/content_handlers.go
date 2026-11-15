@@ -60,6 +60,17 @@ func (s *Server) feed(w http.ResponseWriter, r *http.Request, u userContext) {
 	})
 }
 
+/** funnel returns today's scan and filter statistics for the authenticated user. */
+func (s *Server) funnel(w http.ResponseWriter, r *http.Request, u userContext) {
+	view, err := s.Personal.Funnel(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "漏斗统计暂不可用")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, view)
+}
+
 /** hot returns the authenticated user's top 48-hour hotspots. */
 func (s *Server) hot(w http.ResponseWriter, r *http.Request, u userContext) {
 	items, err := s.Personal.Hot(r.Context(), u.ID)

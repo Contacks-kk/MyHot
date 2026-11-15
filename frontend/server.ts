@@ -134,7 +134,7 @@ async function handle(req: import("node:http").IncomingMessage, res: import("nod
   if ((req.method === "GET" || req.method === "HEAD") && pathname.includes(".") && (await serveStatic(pathname, res))) return;
   const routePath = pagePath(pathname);
   const publicPage = isAnonymousPage(pathname);
-  if (!publicPage && !/^\/admin(?:\/|$)/i.test(routePath)) {
+  if (!publicPage && !/^\/(?:admin|super)(?:\/|$)/i.test(routePath)) {
     const upstream = await fetch(`${USER_API_BASE_URL}/api/me`, {
       headers: { cookie: req.headers.cookie ?? "", accept: "application/json" },
       signal: AbortSignal.timeout(3000),

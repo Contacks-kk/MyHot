@@ -8,6 +8,7 @@ type UserSourceSubscription struct {
 	SourceID           string    `gorm:"column:source_id"`
 	Name               string    `gorm:"column:name"`
 	Enabled            bool      `gorm:"column:enabled"`
+	FilterMode         string    `gorm:"column:filter_mode"`
 	IntervalMinutes    int       `gorm:"column:interval_minutes"`
 	ReuseWindowMinutes int       `gorm:"column:reuse_window_minutes"`
 	ColdStartPending   bool      `gorm:"column:cold_start_pending"`

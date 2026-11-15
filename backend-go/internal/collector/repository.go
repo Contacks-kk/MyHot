@@ -33,7 +33,7 @@ type sourceRun struct {
 
 func (r *Repository) DueSourceIDs(ctx context.Context) ([]string, error) {
 	var ids []string
-	err := r.orm.WithContext(ctx).Model(&model.Source{}).Where("enabled AND kind = 'rss' AND EXISTS (SELECT 1 FROM user_source_subscriptions u WHERE u.source_id=sources.id AND u.enabled) AND (next_fetch_at IS NULL OR next_fetch_at <= now())").Order("next_fetch_at NULLS FIRST, id").Limit(40).Pluck("id", &ids).Error
+	err := r.orm.WithContext(ctx).Model(&model.Source{}).Where("enabled AND kind IN ('rss','web_list') AND EXISTS (SELECT 1 FROM user_source_subscriptions u WHERE u.source_id=sources.id AND u.enabled) AND (next_fetch_at IS NULL OR next_fetch_at <= now())").Order("next_fetch_at NULLS FIRST, id").Limit(40).Pluck("id", &ids).Error
 	if ids == nil {
 		ids = []string{}
 	}
@@ -63,7 +63,7 @@ func (r *Repository) BeginSourceRun(ctx context.Context, id string, force bool) 
 		ReuseWindow int             `gorm:"column:reuse_window_minutes"`
 		LastOK      *time.Time      `gorm:"column:last_ok_at"`
 	}
-	result := r.orm.WithContext(ctx).Model(&model.Source{}).Select("id", "kind", "participation_mode", "config", "cursor", "interval_minutes", "reuse_window_minutes", "last_ok_at", "fail_count", "last_ok_at IS NULL AS first").Where("id = ? AND kind IN ('rss','x_search') AND (? OR kind='rss') AND (? OR enabled) AND EXISTS (SELECT 1 FROM user_source_subscriptions u WHERE u.source_id=sources.id AND (? OR u.enabled)) AND (? OR next_fetch_at IS NULL OR next_fetch_at <= now())", id, force, force, force, force).Scan(&record)
+	result := r.orm.WithContext(ctx).Model(&model.Source{}).Select("id", "kind", "participation_mode", "config", "cursor", "interval_minutes", "reuse_window_minutes", "last_ok_at", "fail_count", "last_ok_at IS NULL AS first").Where("id = ? AND kind IN ('rss','web_list','x_search') AND (? OR kind IN ('rss','web_list')) AND (? OR enabled) AND EXISTS (SELECT 1 FROM user_source_subscriptions u WHERE u.source_id=sources.id AND (? OR u.enabled)) AND (? OR next_fetch_at IS NULL OR next_fetch_at <= now())", id, force, force, force, force).Scan(&record)
 	if result.Error != nil {
 		r.ReleaseSource(run)
 		return nil, false, result.Error

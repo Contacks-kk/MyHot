@@ -20,6 +20,7 @@ import (
 	"aihot/backend-go/internal/config"
 	"aihot/backend-go/internal/discovery"
 	"aihot/backend-go/internal/feedback"
+	"aihot/backend-go/internal/feeddiscovery"
 	"aihot/backend-go/internal/feeds"
 	"aihot/backend-go/internal/health"
 	"aihot/backend-go/internal/ingest"
@@ -100,7 +101,8 @@ func New(cfg config.Config, db *pgxpool.Pool, orm *gorm.DB, entities map[string]
 	})
 	server.Accounts = account.NewService(account.NewRepository(orm), cfg, accountMailer{server: server})
 	server.AdminAuth = adminauth.NewService(adminauth.NewRepository(orm), cfg, nil)
-	server.Ingest = ingest.NewService(ingest.NewRepository(orm), materials.NewService(materials.NewRepository(orm)))
+	materialService := materials.NewService(materials.NewRepository(orm))
+	server.Ingest = ingest.NewService(ingest.NewRepository(orm), materialService)
 	server.AdminContent = admincontent.NewService(admincontent.NewRepository(orm))
 	if transactionClient, err := jobs.NewTransactionClient(db); err == nil {
 		publicationRepository := publicationdomain.NewRepository(db, entities, publicationSettings, cfg.SiteName, cfg.SiteURL)
@@ -120,10 +122,12 @@ func New(cfg config.Config, db *pgxpool.Pool, orm *gorm.DB, entities map[string]
 	server.AdminRuns = adminruns.NewService(adminruns.NewRepository(orm))
 	server.AdminSources = adminsources.NewService(adminsources.NewRepository(orm))
 	server.UserSources = usersources.NewService(orm)
+	server.UserSources.SetMaterials(materialService)
 	server.UserSources.SetCollectorEnabled(cfg.CollectorEnabled)
-	server.UserSources.SetEnqueuer(func(ctx context.Context, sourceID string) (int64, error) {
-		return jobs.InsertManualSourceFetch(ctx, db, sourceID, "rss")
+	server.UserSources.SetEnqueuer(func(ctx context.Context, sourceID, sourceKind string) (int64, error) {
+		return jobs.InsertManualSourceFetch(ctx, db, sourceID, sourceKind)
 	})
+	server.FeedDiscovery = feeddiscovery.NewService()
 	server.AdminSelectBench = adminselectbench.NewService(adminselectbench.NewRepository(orm))
 	server.AdminSettings = adminsettings.NewService(adminsettings.NewRepository(orm, bundledContactDefaults(cfg.SiteContactDir)), adminsettings.Config{FeishuContentPushEnabled: cfg.FeishuContentPushEnabled, DataDir: cfg.DataDir})
 	server.AdminModels = adminmodels.NewService(adminmodels.NewRepository(orm), modelCatalog, cfg.ModelEnvironment)

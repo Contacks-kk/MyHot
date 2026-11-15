@@ -10,7 +10,6 @@ type AdminUser struct {
 	FeishuUnionID *string    `gorm:"column:feishu_union_id"`
 	Email         *string    `gorm:"column:email"`
 	DisplayName   *string    `gorm:"column:display_name"`
-	Role          string     `gorm:"column:role;default:admin"`
 	CreatedAt     time.Time  `gorm:"column:created_at"`
 	LastLoginAt   *time.Time `gorm:"column:last_login_at"`
 }

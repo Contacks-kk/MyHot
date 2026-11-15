@@ -30,6 +30,7 @@ import (
 	"aihot/backend-go/internal/config"
 	"aihot/backend-go/internal/discovery"
 	"aihot/backend-go/internal/feedback"
+	"aihot/backend-go/internal/feeddiscovery"
 	"aihot/backend-go/internal/feeds"
 	"aihot/backend-go/internal/ingest"
 	"aihot/backend-go/internal/interests"
@@ -68,6 +69,7 @@ type Server struct {
 	AdminRuns        *adminruns.Service
 	AdminSources     *adminsources.Service
 	UserSources      *usersources.Service
+	FeedDiscovery    *feeddiscovery.Service
 	AdminSelectBench *adminselectbench.Service
 	AdminSettings    *adminsettings.Service
 	AdminModels      *adminmodels.Service
@@ -170,6 +172,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/auth/login", s.adminLogin)
 	mux.HandleFunc("GET /api/auth/options", s.adminLoginOptions)
 	mux.HandleFunc("POST /api/auth/password", s.adminPasswordLogin)
+	mux.HandleFunc("POST /api/auth/admin-account", s.adminAccountLogin)
+	mux.HandleFunc("GET /api/super/users", s.superUsers)
+	mux.HandleFunc("PUT /api/super/users/{id}", s.superSetAdmin)
 	mux.HandleFunc("GET /api/auth/feishu", s.adminFeishuLogin)
 	mux.HandleFunc("GET /api/auth/callback", s.adminOAuthCallback)
 	mux.HandleFunc("GET /api/auth/check", s.adminAuthCheck)
@@ -226,6 +231,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/me/interests", s.withUser(s.putInterests))
 	mux.HandleFunc("GET /api/me/entities", s.withUser(s.getEntities))
 	mux.HandleFunc("GET /api/me/feed", s.withUser(s.feed))
+	mux.HandleFunc("GET /api/me/feed/funnel", s.withUser(s.funnel))
 	mux.HandleFunc("GET /api/me/hot", s.withUser(s.hot))
 	mux.HandleFunc("GET /api/me/articles/{id}", s.withUser(s.personalArticle))
 	mux.HandleFunc("GET /api/me/daily", s.withUser(s.daily))
@@ -233,8 +239,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/me/daily/generate/{jobId}", s.withUser(s.manualDailyStatus))
 	mux.HandleFunc("GET /api/me/history", s.withUser(s.history))
 	mux.HandleFunc("GET /api/me/sources", s.withUser(s.userSourcesList))
+	mux.HandleFunc("GET /api/me/sources/explore", s.withUser(s.userSourcesExplore))
 	mux.HandleFunc("POST /api/me/sources", s.withUser(s.userSourcesCreate))
+	mux.HandleFunc("POST /api/me/sources/subscribe", s.withUser(s.userSourcesSubscribeExisting))
+	mux.HandleFunc("POST /api/me/sources/discover", s.withUser(s.userSourcesDiscover))
+	mux.HandleFunc("POST /api/me/ingest", s.withUser(s.userIngestArticle))
 	mux.HandleFunc("GET /api/me/sources/{id}", s.withUser(s.userSourceGet))
+	mux.HandleFunc("GET /api/me/sources/{id}/preview", s.withUser(s.userSourcePreview))
 	mux.HandleFunc("PUT /api/me/sources/{id}", s.withUser(s.userSourceUpdate))
 	mux.HandleFunc("PATCH /api/me/sources/{id}", s.withUser(s.userSourceUpdate))
 	mux.HandleFunc("DELETE /api/me/sources/{id}", s.withUser(s.userSourceDelete))

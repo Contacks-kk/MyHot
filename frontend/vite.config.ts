@@ -42,7 +42,7 @@ function devEdge(): Plugin {
         let publicPage: boolean;
         try { routePath = pagePath(pathname); publicPage = isAnonymousPage(pathname); }
         catch { res.statusCode = 400; res.setHeader("Cache-Control", "private, no-store"); return res.end("Bad request"); }
-        if (publicPage || /^\/admin(?:\/|$)/i.test(routePath)) return next();
+        if (publicPage || /^\/(?:admin|super)(?:\/|$)/i.test(routePath)) return next();
         const account = await fetch(`${USER_API_BASE_URL}/api/me`, { headers: { cookie: req.headers.cookie ?? "" }, signal: AbortSignal.timeout(3000) }).catch(() => null);
         if (!account || (account.status !== 401 && !account.ok)) { res.statusCode = 503; res.setHeader("Cache-Control", "private, no-store"); return res.end("Account service unavailable"); }
         if (!account.ok) {

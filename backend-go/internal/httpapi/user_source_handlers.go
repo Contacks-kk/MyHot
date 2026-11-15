@@ -36,6 +36,39 @@ func (s *Server) userSourcesCreate(w http.ResponseWriter, r *http.Request, user 
 	writeJSON(w, http.StatusCreated, result)
 }
 
+type userSourceDiscoverInput struct {
+	URL string `json:"url"`
+}
+
+/** userSourcesDiscover handles automatic discovery of RSS/Atom feeds or Sitemap XMLs from a given website URL. */
+func (s *Server) userSourcesDiscover(w http.ResponseWriter, r *http.Request, user userContext) {
+	if s.FeedDiscovery == nil {
+		writeError(w, http.StatusServiceUnavailable, "探测服务暂不可用")
+		return
+	}
+
+	var input userSourceDiscoverInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式无效")
+		return
+	}
+
+	rawURL := input.URL
+	if rawURL == "" {
+		writeError(w, http.StatusBadRequest, "请输入需要探测的网址")
+		return
+	}
+
+	// Execute feed and sitemap discovery with context timeout
+	result, err := s.FeedDiscovery.Discover(r.Context(), rawURL)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) userSourceGet(w http.ResponseWriter, r *http.Request, user userContext) {
 	id, ok := userSourceID(w, r)
 	if !ok {
@@ -126,7 +159,7 @@ func readUserSourceInput(w http.ResponseWriter, r *http.Request, dst *usersource
 		return false
 	}
 	if err := usersources.ValidateInput(*dst); err != nil {
-		writeError(w, http.StatusBadRequest, "请检查名称、RSS 地址和时间参数")
+		writeError(w, http.StatusBadRequest, "请检查名称、信源地址和时间参数")
 		return false
 	}
 	return true
@@ -141,14 +174,127 @@ func userSourceID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return id, true
 }
 
+/** userIngestArticle handles direct manual ingestion of a single article into the user's isolated external source. */
+func (s *Server) userIngestArticle(w http.ResponseWriter, r *http.Request, user userContext) {
+	if s.UserSources == nil {
+		writeError(w, http.StatusServiceUnavailable, "服务暂不可用")
+		return
+	}
+
+	var input usersources.IngestInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式无效")
+		return
+	}
+
+	// Persist single article via usersources service
+	result, err := s.UserSources.IngestDirect(r.Context(), user.ID, input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+/** userSourcesExplore handles fuzzy search and recommendations for public sources. */
+func (s *Server) userSourcesExplore(w http.ResponseWriter, r *http.Request, user userContext) {
+	if s.UserSources == nil {
+		writeError(w, http.StatusServiceUnavailable, "服务暂不可用")
+		return
+	}
+
+	q := r.URL.Query().Get("q")
+	limit := 20
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if val, err := strconv.Atoi(l); err == nil && val > 0 && val <= 50 {
+			limit = val
+		}
+	}
+
+	offset := 0
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if val, err := strconv.Atoi(o); err == nil && val >= 0 {
+			offset = val
+		}
+	}
+
+	// 检索公共信源列表
+	result, err := s.UserSources.Explore(r.Context(), user.ID, q, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "检索信源失败")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sources": result,
+	})
+}
+
+/** userSourcePreview handles returning metadata and recent articles of a public source. */
+func (s *Server) userSourcePreview(w http.ResponseWriter, r *http.Request, user userContext) {
+	if s.UserSources == nil {
+		writeError(w, http.StatusServiceUnavailable, "服务暂不可用")
+		return
+	}
+
+	sourceID := r.PathValue("id")
+	if sourceID == "" {
+		writeError(w, http.StatusBadRequest, "缺少信源标识")
+		return
+	}
+
+	// 获取公共信源详情及最近文章预览
+	result, err := s.UserSources.Preview(r.Context(), user.ID, sourceID)
+	if err != nil {
+		if errors.Is(err, usersources.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "信源不存在或非公开信源")
+			return
+		}
+
+		writeError(w, http.StatusInternalServerError, "获取信源预览失败")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+/** userSourcesSubscribeExisting handles one-click subscription to an existing public source. */
+func (s *Server) userSourcesSubscribeExisting(w http.ResponseWriter, r *http.Request, user userContext) {
+	if s.UserSources == nil {
+		writeError(w, http.StatusServiceUnavailable, "服务暂不可用")
+		return
+	}
+
+	var input usersources.SubscribeExistingInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式无效")
+		return
+	}
+
+	if input.SourceID == "" {
+		writeError(w, http.StatusBadRequest, "请选择要关注的信源")
+		return
+	}
+
+	// 执行关注与用户订阅关系持久化
+	result, err := s.UserSources.SubscribeExisting(r.Context(), user.ID, input)
+	if err != nil {
+		writeUserSourceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, result)
+}
+
 func writeUserSourceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, usersources.ErrNotFound):
 		writeError(w, http.StatusNotFound, "信息源不存在")
 	case errors.Is(err, usersources.ErrInvalid):
-		writeError(w, http.StatusBadRequest, "请检查名称、RSS 地址和时间参数")
+		writeError(w, http.StatusBadRequest, "请检查名称、信源地址和时间参数")
 	case errors.Is(err, usersources.ErrAlreadySubscribed):
-		writeError(w, http.StatusConflict, "你已添加这个 RSS 地址，请直接编辑已有订阅")
+		writeError(w, http.StatusConflict, "你已添加这个信源，请直接编辑已有订阅")
 	default:
 		writeError(w, http.StatusInternalServerError, "信息源操作失败")
 	}
