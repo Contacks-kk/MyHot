@@ -1,0 +1,1 @@
+ALTER TABLE user_source_subscriptions VALIDATE CONSTRAINT user_source_subscriptions_filter_mode_check;
