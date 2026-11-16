@@ -85,7 +85,7 @@ export default function UserDaily() {
   const [error, setError] = useState("");
   const [activeStory, setActiveStory] = useState<number | null>(null);
 
-  // 监听当前滚动位置，同步激活右侧篇目导航高亮
+  // 监听当前滚动位置，同步激活移动端横滑与桌面端侧栏篇目高亮
   useEffect(() => {
     if (!report || entries.length === 0) {
       return;
@@ -225,6 +225,51 @@ export default function UserDaily() {
               <div className="flex flex-wrap items-baseline gap-x-8 gap-y-2 border-y border-line-strong py-4 text-[12px] text-ink-4"><span><strong className="num mr-1.5 text-[24px] text-ink">{entries.length}</strong>篇文章</span><span><strong className="num mr-1.5 text-[24px] text-ink">{sourceCount}</strong>个来源</span><span className="sm:ml-auto">{report.id.startsWith("manual-") ? "汇总上期至手动生成时的个人结果" : "汇总此前 24 小时的个人结果"}</span></div>
             </header>
 
+            {/* 移动端今日看点：横向滑动卡片，置于日报头部与头条正文之间 */}
+            {entries.length > 0 && (
+              <section aria-label="今日看点" className="border-b border-line py-5 lg:hidden">
+                <div className="border-b border-line-strong pb-3">
+                  <Kicker>今日看点</Kicker>
+                </div>
+                <nav aria-label="今日看点" className="mt-2 flex gap-2 overflow-x-auto pb-1">
+                  {entries.slice(0, 5).map((entry, index) => {
+                    const isActive = activeStory === index;
+                    return (
+                      <a
+                        key={entry.articleId}
+                        href={`#story-${index}`}
+                        aria-current={isActive ? "location" : undefined}
+                        onClick={(e) => {
+                          if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) {
+                            return;
+                          }
+
+                          e.preventDefault();
+                          scrollToAnchor(`story-${index}`);
+                        }}
+                        className={`flex min-w-[190px] max-w-[240px] shrink-0 gap-3 rounded-tile px-3 py-3 transition-colors ${
+                          isActive ? "bg-accent-soft" : "hover:bg-bg-sunk active:bg-bg-sunk"
+                        }`}
+                      >
+                        <span className="flex w-9 shrink-0 flex-col text-center">
+                          <span className={`num text-[22px] font-black leading-none ${isActive ? "text-accent" : "text-ink"}`}>
+                            {index + 1}
+                          </span>
+                          <span className="mt-1 text-[10px] text-ink-4">看点</span>
+                        </span>
+                        <span className="min-w-0">
+                          <span className={`line-clamp-2 text-[13px] font-medium leading-5 ${isActive ? "font-bold text-accent" : "text-ink-2"}`}>
+                            {entry.title}
+                          </span>
+                          {entry.source && <span className="mt-1 block truncate text-[10px] text-ink-4">{entry.source}</span>}
+                        </span>
+                      </a>
+                    );
+                  })}
+                </nav>
+              </section>
+            )}
+
             <div className="grid items-start lg:grid-cols-[minmax(0,1fr)_290px]">
               <section className="min-w-0 py-10 lg:pr-12">
                 <div id="story-0" className="scroll-mt-24">
@@ -241,7 +286,7 @@ export default function UserDaily() {
                 {entries.length > 1 && <div className="mt-10 border-t border-line-strong pt-7"><Kicker>本期文章</Kicker><div className="mt-2">{entries.slice(1).map((entry, index) => <Story key={entry.articleId} entry={entry} index={index + 1} />)}</div></div>}
               </section>
               {entries.length > 0 && (
-                <aside className="border-t border-line py-8 lg:sticky lg:top-0 lg:self-start lg:max-h-dvh lg:overflow-y-auto lg:border-l lg:border-t-0 lg:pl-8 lg:pt-10 scrollbar-thin">
+                <aside className="hidden border-t border-line py-8 lg:sticky lg:top-0 lg:block lg:self-start lg:max-h-dvh lg:overflow-y-auto lg:border-l lg:border-t-0 lg:pl-8 lg:pt-10 scrollbar-thin">
                   <Kicker>今日看点</Kicker>
                   <ol className="mt-3">
                     {entries.slice(0, 5).map((entry, index) => {

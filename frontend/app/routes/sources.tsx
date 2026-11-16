@@ -161,15 +161,18 @@ export default function SourcesRoute() {
   const [discoverResult, setDiscoverResult] = useState<DiscoverCandidate[] | null>(null);
   const [discoverNotice, setDiscoverNotice] = useState("");
 
-  // 已订阅信源卡片展开详情状态
-  const [expandedSources, setExpandedSources] = useState<Record<number, boolean>>({});
+  // 已订阅信源卡片展开详情状态（仅允许同时展开一项）
+  const [expandedSourceId, setExpandedSourceId] = useState<number | null>(null);
 
-  /** Toggle details visibility for a subscribed source card. */
+  /** Toggle details visibility for a subscribed source card, ensuring only one is open at a time. */
   function toggleExpand(id: number) {
-    setExpandedSources(prev => ({
-      ...prev,
-      [id]: !prev[id],
-    }));
+    setExpandedSourceId(prevId => {
+      if (prevId === id) {
+        return null;
+      }
+
+      return id;
+    });
   }
 
   const [ingestForm, setIngestForm] = useState<IngestFormValue>(emptyIngestForm);
@@ -603,6 +606,10 @@ export default function SourcesRoute() {
       setSources(rows => rows.filter(row => row.id !== source.id));
       if (editing === source.id) {
         reset();
+      }
+
+      if (expandedSourceId === source.id) {
+        setExpandedSourceId(null);
       }
       // 同步探索列表中的已关注状态
       setExploreResults(prev => prev.map(item => item.sourceId === source.sourceId ? {
@@ -1245,7 +1252,7 @@ export default function SourcesRoute() {
               const result = fetchResults[source.id];
               const isWebList = source.kind === "web_list";
               const isIngest = source.kind === "external";
-              const isExpanded = !!expandedSources[source.id];
+              const isExpanded = expandedSourceId === source.id;
 
               return (
                 <article className="card p-4 sm:p-5 transition-all" key={source.id}>
