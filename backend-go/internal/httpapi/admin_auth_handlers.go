@@ -125,7 +125,9 @@ func (s *Server) adminOAuthCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminAuthCheck(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+	if w.Header().Get("Cache-Control") == "" {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 	if s.AdminAuth == nil {
 		writeAdminProblem(w, http.StatusServiceUnavailable, "temporarily_unavailable", "Temporarily unavailable.")
 		return

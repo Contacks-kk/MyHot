@@ -91,6 +91,17 @@ func New(cfg config.Config, db *pgxpool.Pool, orm *gorm.DB, entities map[string]
 	}
 	server.CategoryOrder = append([]string(nil), categoryKeys...)
 	server.ReportSubject = publicationSettings.Subject
+	var topicGroups []interests.CatalogTopicGroup
+	var topicEntries []interests.CatalogTopic
+	if len(catalogs) > 0 {
+		for _, group := range catalogs[0].TopicGroups {
+			topicGroups = append(topicGroups, interests.CatalogTopicGroup{Key: group.Key, Name: group.Name, Blurb: group.Blurb})
+		}
+		for _, topic := range catalogs[0].Topics {
+			topicEntries = append(topicEntries, interests.CatalogTopic{Slug: topic.Slug, Name: topic.Name, Group: topic.Group, Definition: topic.Definition})
+		}
+	}
+	server.Catalog = interests.NewCatalogService(categoryKeys, server.CategoryLabels, feedLabels, publicationSettings, topicGroups, topicEntries)
 	server.CategoryKeys = make(map[string]struct{}, len(categoryKeys))
 	for _, key := range categoryKeys {
 		server.CategoryKeys[key] = struct{}{}

@@ -55,6 +55,7 @@ type Server struct {
 	CategoryKeys     map[string]struct{}
 	CategoryOrder    []string
 	CategoryLabels   map[string]string
+	Catalog          *interests.CatalogService
 	TopicDefinitions []topics.Definition
 	TopicGroups      []topics.Group
 	ReportSubject    string
@@ -182,6 +183,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/auth/check", s.adminAuthCheck)
 	mux.HandleFunc("POST /api/admin/auth/logout", s.adminLogout)
 	mux.HandleFunc("GET /api/admin/me", s.adminMe)
+	mux.HandleFunc("GET /api/admin/catalog", s.adminCatalog)
 	mux.HandleFunc("GET /api/admin/feedback", s.adminFeedbackList)
 	mux.HandleFunc("PATCH /api/admin/feedback/{id}", s.adminFeedbackUpdate)
 	mux.HandleFunc("POST /api/admin/feedback/{id}/erase", s.adminFeedbackErase)
@@ -234,6 +236,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/me/interests", s.withUser(s.getInterests))
 	mux.HandleFunc("PUT /api/me/interests", s.withUser(s.putInterests))
 	mux.HandleFunc("GET /api/me/entities", s.withUser(s.getEntities))
+	mux.HandleFunc("GET /api/me/catalog", s.userCatalog)
 	mux.HandleFunc("GET /api/me/feed", s.withUser(s.feed))
 	mux.HandleFunc("GET /api/me/feed/funnel", s.withUser(s.funnel))
 	mux.HandleFunc("GET /api/me/hot", s.withUser(s.hot))
