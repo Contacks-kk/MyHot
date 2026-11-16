@@ -1,0 +1,1 @@
+CREATE TABLE source_labels (source_id text NOT NULL REFERENCES sources(id) ON DELETE CASCADE, label_id text NOT NULL REFERENCES labels(id) ON DELETE CASCADE, confidence real NOT NULL DEFAULT 1.0, origin text NOT NULL DEFAULT 'rule' CHECK (origin IN ('rule', 'llm', 'manual')), created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (source_id, label_id));

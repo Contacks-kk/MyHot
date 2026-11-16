@@ -1,0 +1,1 @@
+CREATE TABLE labels (id text PRIMARY KEY, name text NOT NULL, category text NOT NULL, is_canonical boolean NOT NULL DEFAULT false, use_count integer NOT NULL DEFAULT 1, created_at timestamptz NOT NULL DEFAULT now());
