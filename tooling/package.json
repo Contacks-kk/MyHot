@@ -1,0 +1,9 @@
+{
+  "name": "@aihot/tooling",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@aihot/contracts": "*",
+    "postgres": "3.4.9"
+  }
+}

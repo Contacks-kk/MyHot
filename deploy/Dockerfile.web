@@ -1,7 +1,9 @@
 # React Router SSR runtime. Go API and Worker are deployed as separate services.
 FROM node:24-trixie-slim AS base
 WORKDIR /app
-RUN apt-get update \
+ARG DEBIAN_MIRROR=deb.debian.org
+RUN sed -i "s|deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+ && apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 

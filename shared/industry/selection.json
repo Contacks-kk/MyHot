@@ -1,0 +1,4 @@
+{
+  "thresholds": { "T1": 60, "T1_5": 65, "T2": 76 },
+  "understandFloor": 50
+}

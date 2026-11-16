@@ -1,0 +1,82 @@
+{
+  "itemTypes": [
+    "model_release",
+    "product_launch",
+    "tool_or_prompt",
+    "research_paper",
+    "industry_event",
+    "opinion_analysis",
+    "tutorial_explainer"
+  ],
+  "categoryTags": [
+    "产品更新", "模型发布", "论文/研究", "开源/仓库", "教程/实践", "现象/趋势", "大佬观点", "评测/基准", "安全/对齐", "行业动态", "政策/监管", "非AI/通用工具", "其他"
+  ],
+  "topicTags": [
+    "Agent", "编码", "推理", "多模态", "语音", "视频", "图像生成", "RAG", "端侧", "数据/训练", "搜索", "部署/工程", "开源生态", "具身智能", "MCP/工具调用"
+  ],
+  "entityTags": [
+    "OpenAI", "Anthropic", "DeepSeek", "DeepMind", "Google", "Meta", "Microsoft", "xAI", "Hugging Face", "GitHub", "arXiv"
+  ],
+  "tagSynonyms": {
+    "教程/玩法": "教程/实践", "技巧/最佳实践": "教程/实践", "合作/生态": "行业动态", "融资/收购": "行业动态", "公司动态": "行业动态",
+    "合作": "行业动态", "生态": "行业动态", "融资": "行业动态", "收购": "行业动态", "投资": "行业动态", "并购": "行业动态",
+    "政策": "政策/监管", "监管": "政策/监管", "法规": "政策/监管", "安全": "安全/对齐", "对齐": "安全/对齐",
+    "论文": "论文/研究", "研究": "论文/研究", "paper": "论文/研究", "papers": "论文/研究",
+    "open-source": "开源/仓库", "开源": "开源/仓库", "仓库": "开源/仓库", "repo": "开源/仓库",
+    "教程": "教程/实践", "玩法": "教程/实践", "指南": "教程/实践", "技巧": "教程/实践", "最佳实践": "教程/实践", "实践": "教程/实践",
+    "产品": "产品更新", "更新": "产品更新", "发布": "模型发布", "模型": "模型发布", "趋势": "现象/趋势", "现象": "现象/趋势", "观点": "大佬观点",
+    "视频生成": "视频", "非ai": "非AI/通用工具", "non-ai": "非AI/通用工具", "通用工具": "非AI/通用工具", "工程工具": "非AI/通用工具",
+    "安全扫描": "非AI/通用工具", "devops": "非AI/通用工具", "行业": "行业动态", "动态": "行业动态"
+  },
+  "identityLexicon": [
+    { "id": "openai", "name": "OpenAI", "patterns": [{ "source": "openai|chatgpt|\\bgpt-?[o\\d]|\\bsora\\b|\\bcodex\\b", "flags": "i" }] },
+    { "id": "anthropic", "name": "Anthropic", "patterns": [{ "source": "anthropic|\\bclaude\\b", "flags": "i" }, { "source": "\\b(?:opus|sonnet|haiku)\\s*\\d+(?:[.\\-]\\d+)*\\b", "flags": "i" }, { "source": "\\bfable\\s*\\d+(?:[.\\-]\\d+)*\\b|\\bmythos\\b", "flags": "i" }] },
+    { "id": "google", "name": "Google / Gemini", "patterns": [{ "source": "google|deepmind|\\bgemini\\b|notebooklm|\\bveo\\s?\\d|\\bAlphaFold\\b|\\bAMIE\\b", "flags": "i" }] },
+    { "id": "deepseek", "name": "DeepSeek", "patterns": [{ "source": "deepseek|深度求索", "flags": "i" }] },
+    { "id": "xai", "name": "xAI / Grok", "patterns": [{ "source": "\\bxai\\b|\\bgrok\\b", "flags": "i" }] },
+    { "id": "meta", "name": "Meta / Llama", "patterns": [{ "source": "\\bMeta\\b", "flags": "" }, { "source": "\\bmeta\\s?ai\\b|\\bllama\\b", "flags": "i" }] },
+    { "id": "microsoft", "name": "Microsoft / Copilot", "patterns": [{ "source": "microsoft|copilot|微软", "flags": "i" }] },
+    { "id": "nvidia", "name": "NVIDIA", "patterns": [{ "source": "nvidia|英伟达|\\bnemotron\\b|\\bnemo\\b|\\bblackwell\\b|\\brubin(?:\\s+ultra)?\\b|\\bcuda\\b", "flags": "i" }] },
+    { "id": "qwen", "name": "千问 Qwen", "patterns": [{ "source": "\\bqwen|通义|千问", "flags": "i" }] },
+    { "id": "hugging-face", "name": "Hugging Face", "patterns": [{ "source": "hugging\\s?face", "flags": "i" }] },
+    { "id": "cursor", "name": "Cursor", "patterns": [{ "source": "\\bCursor\\b", "flags": "" }] },
+    { "id": "kimi", "name": "Kimi / 月之暗面", "patterns": [{ "source": "\\bkimi\\b|月之暗面|\\bmoonshot\\s?ai\\b", "flags": "i" }] },
+    { "id": "openrouter", "name": "OpenRouter", "patterns": [{ "source": "openrouter", "flags": "i" }] },
+    { "id": "minimax", "name": "MiniMax", "patterns": [{ "source": "minimax", "flags": "i" }] },
+    { "id": "zhipu", "name": "智谱 GLM", "patterns": [{ "source": "智谱|\\bglm-?[4-9]", "flags": "i" }] },
+    { "id": "hunyuan", "name": "腾讯混元", "patterns": [{ "source": "混元|hunyuan", "flags": "i" }] },
+    { "id": "doubao", "name": "字节豆包", "patterns": [{ "source": "豆包|doubao|字节跳动|bytedance", "flags": "i" }] },
+    { "id": "mistral", "name": "Mistral", "patterns": [{ "source": "mistral", "flags": "i" }] },
+    { "id": "perplexity", "name": "Perplexity", "patterns": [{ "source": "\\bPerplexity\\b", "flags": "" }] },
+    { "id": "runway", "name": "Runway", "patterns": [{ "source": "\\brunway\\b", "flags": "i" }] },
+    { "id": "suno", "name": "Suno", "patterns": [{ "source": "\\bsuno\\b", "flags": "i" }] },
+    { "id": "midjourney", "name": "Midjourney", "patterns": [{ "source": "midjourney", "flags": "i" }] },
+    { "id": "stability-ai", "name": "Stability AI", "patterns": [{ "source": "stability\\s?ai", "flags": "i" }] },
+    { "id": "elevenlabs", "name": "ElevenLabs", "patterns": [{ "source": "eleven\\s?labs", "flags": "i" }] },
+    { "id": "vllm", "name": "vLLM", "patterns": [{ "source": "\\bvllm\\b", "flags": "i" }] },
+    { "id": "ollama", "name": "Ollama", "patterns": [{ "source": "\\bollama\\b", "flags": "i" }] },
+    { "id": "windsurf", "name": "Windsurf", "patterns": [{ "source": "windsurf", "flags": "i" }] },
+    { "id": "devin", "name": "Devin", "patterns": [{ "source": "\\bdevin\\b", "flags": "i" }] },
+    { "id": "manus", "name": "Manus", "patterns": [{ "source": "\\bmanus\\b", "flags": "i" }] },
+    { "id": "apple", "name": "Apple AI", "patterns": [{ "source": "\\bapple\\s?(intelligence|silicon|ai)\\b|苹果(智能|\\s?AI)", "flags": "i" }] },
+    { "id": "amazon", "name": "Amazon / AWS", "patterns": [{ "source": "amazon|\\baws\\b|亚马逊", "flags": "i" }] },
+    { "id": "baidu", "name": "百度文心", "patterns": [{ "source": "百度|baidu|文心|\\bernie\\s?bot\\b", "flags": "i" }] }
+  ],
+  "publisherDomains": [
+    { "entityId": "openai", "domains": ["openai.com"] },
+    { "entityId": "anthropic", "domains": ["anthropic.com", "claude.com"] },
+    { "entityId": "google", "domains": ["deepmind.google", "ai.google", "blog.google"] },
+    { "entityId": "deepseek", "domains": ["deepseek.com"] },
+    { "entityId": "xai", "domains": ["x.ai"] },
+    { "entityId": "meta", "domains": ["ai.meta.com"] },
+    { "entityId": "microsoft", "domains": ["microsoft.com"] },
+    { "entityId": "nvidia", "domains": ["nvidia.com"] },
+    { "entityId": "qwen", "domains": ["qwen.ai"] },
+    { "entityId": "cursor", "domains": ["cursor.com"] },
+    { "entityId": "openrouter", "domains": ["openrouter.ai"] }
+  ],
+  "identityContextAliases": [
+    { "entityId": "meta", "source": "@AIatMeta\\b", "flags": "i" },
+    { "entityId": "zhipu", "source": "\\bZhipu(?:\\s+AI\\b|['’]s\\b)", "flags": "i" }
+  ]
+}

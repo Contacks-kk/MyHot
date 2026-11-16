@@ -1,0 +1,4 @@
+{
+  "plainTerms": ["ai", "api", "llm", "gpu", "agi", "ceo", "ipo"],
+  "release": { "category": "ai-models", "tag": "模型发布", "unit": "个新模型" }
+}

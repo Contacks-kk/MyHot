@@ -1,0 +1,66 @@
+# Environment and runtime secrets/data
+.env
+.env.*
+!.env.example
+!.env.development.example
+*.pem
+*.key
+*.p12
+*.pfx
+.data/
+**/.data/
+
+# Node and frontend build outputs
+node_modules/
+dist/
+.cache/
+frontend/build/
+frontend/.react-router/
+
+# Go build and test outputs
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.*
+
+# IDE, AI tooling, logs, and OS files
+.idea/
+.vscode/
+.claude/
+*.log
+.DS_Store
+Thumbs.db
+
+# Font package unpacked to regenerate the report nameplates (docs/customize.md)
+
+fontsource-noto-sans-sc-*.tgz
+
+# docs
+docs
+
+# env
+.env
+.env.development.example
+.env.development
+.env.example
+
+# other
+.github
+README.md
+SECURITY.md
+LICENSE
+NOTICE
+AGENTS.md
+CLAUDE.md
+CONTRIBUTING.md
+
+# Server-specific deployment settings and local release artifacts
+deploy.conf
+compose.server.yaml
+releases/
+backups/
+logs/

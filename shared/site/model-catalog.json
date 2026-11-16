@@ -1,0 +1,82 @@
+{
+  "presets": {
+    "glm-5.3-flash": {
+      "service": "zhipu",
+      "model": "glm-5.3-flash",
+      "baseUrlEnv": "ZHIPU_BASE_URL",
+      "apiKeyEnv": "ZHIPU_API_KEY",
+      "extra": { "thinking": { "type": "enabled" }, "reasoning_effort": "low" },
+      "jsonMode": true
+    },
+    "glm-5.3-flash-selection": {
+      "service": "zhipu",
+      "model": "glm-5.3-flash",
+      "baseUrlEnv": "ZHIPU_BASE_URL",
+      "apiKeyEnv": "ZHIPU_API_KEY",
+      "extra": { "thinking": { "type": "enabled", "clear_thinking": false }, "reasoning_effort": "high", "top_p": 0.95 },
+      "jsonMode": true
+    },
+    "deepseek-flash": {
+      "service": "deepseek",
+      "model": "deepseek-flash",
+      "baseUrlEnv": "DEEPSEEK_BASE_URL",
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "extra": { "thinking": { "type": "disabled" } },
+      "jsonMode": true
+    },
+    "deepseek-flash-think": {
+      "service": "deepseek",
+      "model": "deepseek-flash",
+      "baseUrlEnv": "DEEPSEEK_BASE_URL",
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "reasoningTokens": 4000,
+      "jsonMode": true
+    },
+    "qwen3.7-flash": {
+      "service": "dashscope",
+      "model": "qwen3.7-flash",
+      "baseUrlEnv": "DASHSCOPE_BASE_URL",
+      "apiKeyEnv": "DASHSCOPE_API_KEY",
+      "extra": { "enable_thinking": false },
+      "jsonMode": true
+    },
+    "qwen3.8-flash": {
+      "service": "dashscope",
+      "model": "qwen3.8-flash",
+      "baseUrlEnv": "DASHSCOPE_BASE_URL",
+      "apiKeyEnv": "DASHSCOPE_API_KEY",
+      "extra": { "enable_thinking": false },
+      "jsonMode": true
+    },
+    "mimo-v2.6-flash": {
+      "service": "mimo",
+      "model": "mimo-v2.6-flash",
+      "baseUrlEnv": "XIAOMI_MIMO_BASE_URL",
+      "apiKeyEnv": "XIAOMI_MIMO_API_KEY",
+      "extra": { "thinking": { "type": "disabled" } },
+      "jsonMode": true
+    },
+    "qwen3-vl-flash": {
+      "service": "dashscope",
+      "model": "qwen3-vl-flash",
+      "baseUrlEnv": "DASHSCOPE_BASE_URL",
+      "apiKeyEnv": "DASHSCOPE_API_KEY",
+      "extra": { "enable_thinking": false },
+      "jsonMode": false,
+      "vision": true
+    }
+  },
+  "defaults": {},
+  "capabilities": [
+    { "key": "prefilter", "label": "精选预筛（是否属于这个行业，宽召回）", "env": "PREFILTER_MODEL", "default": "default", "purposes": ["prefilter_article"] },
+    { "key": "score", "label": "精选评分（两次独立评分，按信源分级门槛）", "env": "SCORE_MODEL", "default": "default", "purposes": ["score_article"] },
+    { "key": "understand", "label": "内容理解（入选和接近入选的标题、摘要、推荐理由，能看图时看首图）", "env": "UNDERSTAND_MODEL", "default": "default", "purposes": ["understand_article"] },
+    { "key": "summarize", "label": "标题摘要（其余文章的中文标题与摘要）", "env": "SUMMARIZE_MODEL", "default": "default", "purposes": ["summarize_article"] },
+    { "key": "structure", "label": "结构抽取（分类、标签、主体公司、事件事实，不写读者文字）", "env": "STRUCTURE_MODEL", "default": "default", "purposes": ["structure_article"] },
+    { "key": "group", "label": "事件归组（新报道与候选事实的关系：同一次发生、同一事件的进展、无关；被同一篇报道连起来的两个事件是否同一事件）", "env": "GROUP_MODEL", "default": "default", "purposes": ["group_article", "group_signal", "group_story"] },
+    { "key": "groupReview", "label": "归组复核（相似度不高的合并、两个事件的合并，写入前再读一遍；最好换一家模型）", "env": "GROUP_REVIEW_MODEL", "default": "default", "purposes": ["group_review", "group_story_review"] },
+    { "key": "digest", "label": "事件综述", "env": "DIGEST_MODEL", "default": "default", "purposes": ["story_digest"] },
+    { "key": "report", "label": "周报、月报的总述与主题（日报由规则算出，不用模型）", "env": "REPORT_MODEL", "default": "default", "purposes": ["report_weekly", "report_monthly", "report_lead", "report_daily"] },
+    { "key": "translate", "label": "精选全文翻译（含引用帖）", "env": "TRANSLATE_MODEL", "default": "default", "purposes": ["translate_body", "translate_quoted"] }
+  ]
+}

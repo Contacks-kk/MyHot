@@ -1,6 +1,9 @@
-FROM golang:1.25.1-alpine AS build
+ARG GO_IMAGE=golang:1.25.1-alpine
+ARG ALPINE_IMAGE=alpine:3.22
+FROM ${GO_IMAGE} AS build
 WORKDIR /src
 COPY backend-go/go.mod backend-go/go.sum ./
+ARG GOPROXY=https://proxy.golang.org,direct
 RUN go mod download
 COPY backend-go/ ./
 RUN mkdir -p /app/shared/site /app/shared/site/brand /app/shared/industry /app/shared/industry/prompts
@@ -23,8 +26,10 @@ COPY shared/industry/prompts/report-period-no-sections.md /app/shared/industry/p
 RUN CGO_ENABLED=0 go build -tags nodynamic -trimpath -ldflags="-s -w" -o /out/myhot-api ./cmd/api \
  && CGO_ENABLED=0 go build -tags nodynamic -trimpath -ldflags="-s -w" -o /out/myhot-worker ./cmd/worker
 
-FROM alpine:3.22
-RUN apk add --no-cache ca-certificates tzdata postgresql17-client tar
+FROM ${ALPINE_IMAGE}
+ARG ALPINE_MIRROR=dl-cdn.alpinelinux.org
+RUN sed -i "s|dl-cdn.alpinelinux.org|${ALPINE_MIRROR}|g" /etc/apk/repositories \
+ && apk add --no-cache ca-certificates tzdata postgresql17-client tar
 WORKDIR /app
 RUN mkdir -p /app/shared/site /app/shared/site/brand /app/shared/industry /app/shared/industry/prompts /data && chown 1000:1000 /data
 COPY --from=build /app/shared/site/changelog.json /app/shared/site/changelog.json

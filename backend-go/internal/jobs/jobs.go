@@ -475,8 +475,14 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 	modelPresets := make(map[string]modelcall.Preset, len(modelCatalog.Presets))
 	for key, preset := range modelCatalog.Presets {
 		modelPresets[key] = modelcall.Preset{
-			Service: preset.Service, Model: preset.Model, BaseURLEnv: preset.BaseURLEnv, APIKeyEnv: preset.APIKeyEnv,
-			Extra: preset.Extra, ReasoningTokens: preset.ReasoningTokens, JSONMode: preset.JSONMode, Vision: preset.Vision,
+			Service:         preset.Service,
+			Model:           preset.Model,
+			BaseURLEnv:      preset.BaseURLEnv,
+			APIKeyEnv:       preset.APIKeyEnv,
+			Extra:           preset.Extra,
+			ReasoningTokens: preset.ReasoningTokens,
+			JSONMode:        preset.JSONMode,
+			Vision:          preset.Vision,
 		}
 	}
 	modelCapabilities := make(map[string]modelcall.Capability, len(modelCatalog.Capabilities))
