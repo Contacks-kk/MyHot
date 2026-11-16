@@ -7,7 +7,9 @@ import (
 	"strconv"
 	"time"
 
+	"aihot/backend-go/internal/config"
 	"aihot/backend-go/internal/model"
+	"aihot/backend-go/internal/sourceschedule"
 	"gorm.io/gorm"
 )
 
@@ -88,10 +90,10 @@ func (r *Repository) PasswordHash(ctx context.Context, userID int64) (string, er
 	return hash, nil
 }
 
-func (r *Repository) DeleteAccount(ctx context.Context, userID int64) error {
+func (r *Repository) DeleteAccount(ctx context.Context, userID int64, schedule config.SourceSchedule) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var sourceIDs []string
-		if err := tx.Raw(`SELECT source_id FROM user_source_subscriptions WHERE user_id=?`, userID).Scan(&sourceIDs).Error; err != nil {
+		if err := tx.Raw(`SELECT source_id FROM user_source_subscriptions WHERE user_id=? ORDER BY source_id`, userID).Scan(&sourceIDs).Error; err != nil {
 			return err
 		}
 		var queueExists bool
@@ -107,25 +109,7 @@ func (r *Repository) DeleteAccount(ctx context.Context, userID int64) error {
 			return err
 		}
 		for _, sourceID := range sourceIDs {
-			var lockedID string
-			if err := tx.Raw(`SELECT id FROM sources WHERE id=? FOR UPDATE`, sourceID).Row().Scan(&lockedID); err != nil {
-				return err
-			}
-			var effective struct {
-				Count    int `gorm:"column:count"`
-				Interval int `gorm:"column:interval"`
-				Window   int `gorm:"column:window"`
-			}
-			if err := tx.Raw(`SELECT count(*) AS count,coalesce(min(interval_minutes),60) AS interval,coalesce(min(reuse_window_minutes),10) AS window FROM user_source_subscriptions WHERE source_id=? AND enabled`, sourceID).Scan(&effective).Error; err != nil {
-				return err
-			}
-			if effective.Count == 0 {
-				if err := tx.Exec(`UPDATE sources SET enabled=false,health='paused',next_fetch_at=NULL,updated_at=now() WHERE id=?`, sourceID).Error; err != nil {
-					return err
-				}
-				continue
-			}
-			if err := tx.Exec(`UPDATE sources SET enabled=true,interval_minutes=?,reuse_window_minutes=?,next_fetch_at=now(),updated_at=now() WHERE id=?`, max(effective.Interval, effective.Window), effective.Window, sourceID).Error; err != nil {
+			if err := sourceschedule.Recompute(tx, sourceID, schedule); err != nil {
 				return err
 			}
 		}

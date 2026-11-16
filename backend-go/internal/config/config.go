@@ -13,6 +13,13 @@ import (
 	"strings"
 )
 
+// SourceSchedule holds optional platform limits in minutes.
+type SourceSchedule struct {
+	AutoMinInterval   int
+	ManualReuseWindow int
+	AutoReuseWindow   int
+}
+
 type Config struct {
 	Addr                        string
 	DatabaseURL                 string
@@ -29,6 +36,7 @@ type Config struct {
 	SMTPFrom                    string
 	PersonalizationEnabled      bool
 	CollectorEnabled            bool
+	SourceSchedule              SourceSchedule
 	SharedBodyEnabled           bool
 	SharedPipelineEnabled       bool
 	StoryDigestEnabled          bool
@@ -106,6 +114,23 @@ type Config struct {
 }
 
 func Load() (Config, error) {
+	var sourceSchedule SourceSchedule
+	for name, target := range map[string]*int{
+		"SOURCE_AUTO_MIN_INTERVAL_MINUTES":   &sourceSchedule.AutoMinInterval,
+		"SOURCE_MANUAL_REUSE_WINDOW_MINUTES": &sourceSchedule.ManualReuseWindow,
+		"SOURCE_AUTO_REUSE_WINDOW_MINUTES":   &sourceSchedule.AutoReuseWindow,
+	} {
+		raw := strings.TrimSpace(os.Getenv(name))
+		if raw == "" {
+			continue
+		}
+		minutes, err := strconv.Atoi(raw)
+		if err != nil || minutes < 1 || minutes > 1440 {
+			return Config{}, fmt.Errorf("%s must be an integer between 1 and 1440 minutes", name)
+		}
+		*target = minutes
+	}
+
 	// 加载凭据组
 	credentials := loadCredentialGroups()
 	credential := func(group, name string) string {
@@ -170,6 +195,7 @@ func Load() (Config, error) {
 		SMTPFrom:                    strings.TrimSpace(os.Getenv("SMTP_FROM")),
 		PersonalizationEnabled:      envBool("PERSONALIZATION_ENABLED", false),
 		CollectorEnabled:            envBool("COLLECT_ENABLED", false),
+		SourceSchedule:              sourceSchedule,
 		SharedBodyEnabled:           envBool("GO_SHARED_BODY_ENABLED", false),
 		SharedPipelineEnabled:       envBool("GO_SHARED_PIPELINE_ENABLED", false),
 		StoryDigestEnabled:          envBool("GO_STORY_DIGEST_ENABLED", false),

@@ -125,7 +125,7 @@ func New(cfg config.Config, db *pgxpool.Pool, orm *gorm.DB, entities map[string]
 	server.AdminSources = adminsources.NewService(adminsources.NewRepository(orm))
 	vocabulary, _ := editorial.LoadVocabulary()
 	server.AdminLabels = adminlabels.NewService(adminlabels.NewRepository(orm, vocabulary))
-	server.UserSources = usersources.NewService(orm)
+	server.UserSources = usersources.NewService(orm, cfg.SourceSchedule)
 	server.UserSources.SetMaterials(materialService)
 	server.UserSources.SetCollectorEnabled(cfg.CollectorEnabled)
 	server.UserSources.SetEnqueuer(func(ctx context.Context, sourceID, sourceKind string) (int64, error) {

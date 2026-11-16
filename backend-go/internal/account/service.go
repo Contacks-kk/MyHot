@@ -110,7 +110,7 @@ func (s *Service) DeleteAccount(ctx context.Context, userID int64, password stri
 	if err != nil || !auth.VerifyPassword(hash, password) {
 		return ErrPasswordMismatch
 	}
-	return s.repository.DeleteAccount(ctx, userID)
+	return s.repository.DeleteAccount(ctx, userID, s.config.SourceSchedule)
 }
 
 func (s *Service) VerifyEmail(ctx context.Context, email, code string) error {

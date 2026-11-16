@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -38,6 +39,7 @@ import (
 	"aihot/backend-go/internal/retention"
 	"aihot/backend-go/internal/sourcehealth"
 	"aihot/backend-go/internal/sourceicons"
+	"aihot/backend-go/internal/sourceschedule"
 	"aihot/backend-go/internal/storydigest"
 	"aihot/backend-go/internal/storylinks"
 	"aihot/backend-go/internal/tagging"
@@ -592,7 +594,12 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 	dailyScanWorker := &DailyScanWorker{Service: service, Enabled: cfg.PersonalizationEnabled}
 	translationScanWorker := &TranslationScanWorker{Service: translationService, DB: orm}
 	materialService := materials.NewService(materials.NewRepository(orm))
-	collectorService := collector.NewService(collector.NewRepository(orm, pool), collector.NewHTTPClient(), materialService)
+	if cfg.CollectorEnabled {
+		if err := sourceschedule.Reconcile(ctx, orm, cfg.SourceSchedule); err != nil {
+			return nil, fmt.Errorf("reconcile source schedules: %w", err)
+		}
+	}
+	collectorService := collector.NewService(collector.NewRepository(orm, pool, cfg.SourceSchedule), collector.NewHTTPClient(), materialService)
 	var xArticleReader articlebody.XArticleReader
 	var xShardWorker *XShardWorker
 	if strings.TrimSpace(cfg.SocialDataKey) != "" {

@@ -13,8 +13,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"aihot/backend-go/internal/config"
 	"aihot/backend-go/internal/materials"
 	"aihot/backend-go/internal/model"
+	"aihot/backend-go/internal/sourceschedule"
+
 	"gorm.io/gorm"
 )
 
@@ -31,12 +34,14 @@ type Service struct {
 	materials      MaterialWriter
 	enqueue        func(context.Context, string, string) (int64, error)
 	collectEnabled bool
+	schedule       config.SourceSchedule
 }
 
 /** NewService creates a new usersources service. */
-func NewService(db *gorm.DB) *Service {
+func NewService(db *gorm.DB, schedule config.SourceSchedule) *Service {
 	return &Service{
-		db: db,
+		db:       db,
+		schedule: schedule,
 	}
 }
 
@@ -163,14 +168,17 @@ const subscriptionSelect = `SELECT sub.id,sub.source_id,src.kind,sub.name,
 	coalesce(src.config->>'itemSelector','') AS item_selector,
 	coalesce(src.config->>'titleSelector','') AS title_selector,
 	sub.enabled,sub.filter_mode,sub.interval_minutes,sub.reuse_window_minutes,
-	greatest(src.interval_minutes,src.reuse_window_minutes) AS effective_interval_minutes,src.reuse_window_minutes AS effective_reuse_window_minutes,
+	CASE WHEN src.kind IN ('rss','web_list') THEN src.interval_minutes
+	     ELSE greatest(src.interval_minutes,src.reuse_window_minutes) END AS effective_interval_minutes,
+	CASE WHEN src.kind IN ('rss','web_list') THEN least(src.reuse_window_minutes,nullif(?,0))
+	     ELSE src.reuse_window_minutes END AS effective_reuse_window_minutes,
 	src.last_ok_at AS last_checked_at,src.next_fetch_at,src.health,src.tags
 	FROM user_source_subscriptions sub JOIN sources src ON src.id=sub.source_id`
 
 /** List retrieves all source subscriptions for a given user. */
 func (s *Service) List(ctx context.Context, userID int64) ([]Subscription, error) {
 	var rows []Subscription
-	err := s.db.WithContext(ctx).Raw(subscriptionSelect+` WHERE sub.user_id=? ORDER BY sub.created_at DESC,sub.id`, userID).Scan(&rows).Error
+	err := s.db.WithContext(ctx).Raw(subscriptionSelect+` WHERE sub.user_id=? ORDER BY sub.created_at DESC,sub.id`, s.schedule.AutoReuseWindow, userID).Scan(&rows).Error
 	if rows == nil {
 		rows = []Subscription{}
 	}
@@ -181,7 +189,7 @@ func (s *Service) List(ctx context.Context, userID int64) ([]Subscription, error
 /** Get retrieves a single source subscription by ID for a given user. */
 func (s *Service) Get(ctx context.Context, userID, id int64) (Subscription, error) {
 	var row Subscription
-	err := s.db.WithContext(ctx).Raw(subscriptionSelect+` WHERE sub.user_id=? AND sub.id=?`, userID, id).Scan(&row).Error
+	err := s.db.WithContext(ctx).Raw(subscriptionSelect+` WHERE sub.user_id=? AND sub.id=?`, s.schedule.AutoReuseWindow, userID, id).Scan(&row).Error
 	if err != nil {
 		return Subscription{}, err
 	}
@@ -414,7 +422,7 @@ func (s *Service) SubscribeExisting(ctx context.Context, userID int64, input Sub
 		}
 
 		// 重新计算信源聚合调度周期
-		return recompute(tx, sourceID, true)
+		return sourceschedule.Recompute(tx, sourceID, s.schedule)
 	})
 	if err != nil {
 		return Subscription{}, err
@@ -446,7 +454,7 @@ func (s *Service) Create(ctx context.Context, userID int64, input Input) (Subscr
 			return err
 		}
 
-		return recompute(tx, sourceID, true)
+		return sourceschedule.Recompute(tx, sourceID, s.schedule)
 	})
 	if err != nil {
 		return Subscription{}, err
@@ -519,14 +527,14 @@ func (s *Service) Update(ctx context.Context, userID, id int64, input Input) (Su
 		}
 
 		if oldSource == newSource {
-			return recompute(tx, newSource, true)
+			return sourceschedule.Recompute(tx, newSource, s.schedule)
 		}
 
-		if err := recompute(tx, oldSource, true); err != nil {
+		if err := sourceschedule.Recompute(tx, oldSource, s.schedule); err != nil {
 			return err
 		}
 
-		return recompute(tx, newSource, true)
+		return sourceschedule.Recompute(tx, newSource, s.schedule)
 	})
 	if err != nil {
 		return Subscription{}, err
@@ -545,7 +553,7 @@ func (s *Service) SetEnabled(ctx context.Context, userID, id int64, enabled bool
 			return err
 		}
 
-		return recompute(tx, sourceID, enabled)
+		return sourceschedule.Recompute(tx, sourceID, s.schedule)
 	})
 	if err != nil {
 		return Subscription{}, err
@@ -564,7 +572,7 @@ func (s *Service) Delete(ctx context.Context, userID, id int64) error {
 			return err
 		}
 
-		return recompute(tx, sourceID, false)
+		return sourceschedule.Recompute(tx, sourceID, s.schedule)
 	})
 }
 
@@ -920,35 +928,6 @@ func identityFor(raw string) string {
 
 	sum := sha256.Sum256([]byte(u.String()))
 	return hex.EncodeToString(sum[:])
-}
-
-/** recompute recalibrates schedule and enabled flags on the source record. */
-func recompute(tx *gorm.DB, sourceID string, immediate bool) error {
-	var lockedID string
-	if err := tx.Raw(`SELECT id FROM sources WHERE id=? FOR UPDATE`, sourceID).Row().Scan(&lockedID); err != nil {
-		return err
-	}
-
-	var values struct {
-		Count    int `gorm:"column:count"`
-		Interval int `gorm:"column:interval"`
-		Window   int `gorm:"column:window"`
-	}
-	if err := tx.Raw(`SELECT count(*) AS count,coalesce(min(interval_minutes),60) AS interval,coalesce(min(reuse_window_minutes),10) AS window FROM user_source_subscriptions WHERE source_id=? AND enabled`, sourceID).Scan(&values).Error; err != nil {
-		return err
-	}
-
-	if values.Count == 0 {
-		return tx.Exec(`UPDATE sources SET enabled=false,health='paused',next_fetch_at=NULL,updated_at=now() WHERE id=?`, sourceID).Error
-	}
-
-	period := max(values.Interval, values.Window)
-	next := "next_fetch_at"
-	if immediate {
-		next = "now()"
-	}
-
-	return tx.Exec(fmt.Sprintf(`UPDATE sources SET enabled=true,interval_minutes=?,reuse_window_minutes=?,health=CASE WHEN health='paused' THEN 'unknown' ELSE health END,next_fetch_at=%s,updated_at=now() WHERE id=?`, next), period, values.Window, sourceID).Error
 }
 
 func ValidateInput(in Input) error { return validate(in) }

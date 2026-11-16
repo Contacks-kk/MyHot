@@ -74,7 +74,6 @@ type source struct {
 	Config             settings
 	Cursor             settings
 	Interval, Failures int
-	ReuseWindow        int
 	LastOK             *time.Time
 	First              bool
 }
@@ -256,11 +255,7 @@ func (s *Service) collectSource(ctx context.Context, id string, force bool) erro
 		if errors.Is(fetchErr, errUnsupported) {
 			message = "source adapter is unsupported by Go collector; configure RSS, CSS/Markdown list or ordinary JSON"
 		}
-		interval := src.Interval * (src.Failures + 2)
-		if interval > 360 {
-			interval = 360
-		}
-		if err := s.Repository.FinishFailure(finishCtx, run, found, created, interval, message); err != nil {
+		if err := s.Repository.FinishFailure(finishCtx, run, found, created, message); err != nil {
 			return err
 		}
 		log.Printf("source collection failed source_id=%q source_kind=%q stage=%s class=%s", src.ID, src.Kind, failureStage, failureClass)
