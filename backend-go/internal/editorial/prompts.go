@@ -1,6 +1,7 @@
 package editorial
 
 import (
+	"aihot/backend-go/internal/promptpath"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -25,9 +26,9 @@ type PromptPack struct {
 }
 
 func LoadPrompts(siteName string) (*PromptPack, error) {
-	directory := strings.TrimSpace(os.Getenv("INDUSTRY_PROMPT_DIR"))
+	directory := promptpath.Configured()
 	if directory == "" {
-		for _, candidate := range []string{filepath.Join("shared", "industry", "prompts"), filepath.Join("..", "shared", "industry", "prompts"), filepath.Join("..", "..", "shared", "industry", "prompts"), filepath.Join("/app", "shared", "industry", "prompts")} {
+		for _, candidate := range []string{filepath.Join("backend-go", "config", "prompts"), filepath.Join("config", "prompts"), filepath.Join("..", "..", "config", "prompts"), filepath.Join("..", "backend-go", "config", "prompts"), filepath.Join("..", "..", "backend-go", "config", "prompts"), filepath.Join("/app", "backend-go", "config", "prompts")} {
 			if info, err := os.Stat(candidate); err == nil && info.IsDir() {
 				directory = candidate
 				break
@@ -57,6 +58,32 @@ func (p *PromptPack) Render(name string, values map[string]string) (string, erro
 	if err != nil {
 		return "", err
 	}
+	return p.fill(name, text, values)
+}
+
+/** RenderText expands a candidate prompt using the same includes and values as the prompt pack. */
+func (p *PromptPack) RenderText(label, text string, values map[string]string) (string, error) {
+	var includeErr error
+	expanded := promptToken.ReplaceAllStringFunc(text, func(token string) string {
+		match := promptToken.FindStringSubmatch(token)
+		if match[1] == "" {
+			return token
+		}
+		inner, _, err := p.expand(match[2], nil)
+		if err != nil {
+			includeErr = err
+			return ""
+		}
+		return inner
+	})
+	if includeErr != nil {
+		return "", includeErr
+	}
+	return p.fill(label, expanded, values)
+}
+
+/** fill replaces prompt variables and rejects missing values. */
+func (p *PromptPack) fill(name, text string, values map[string]string) (string, error) {
 	all := make(map[string]string, len(values)+1)
 	all["siteName"] = p.siteName
 	for key, value := range values {

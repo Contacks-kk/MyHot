@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
-import { Link, useLocation } from "react-router";
+import { Link, useLocation, useRouteLoaderData } from "react-router";
+import type { loader as rootLoader } from "../../root";
+import { postJSON } from "../../features/account/common";
 import { SITE } from "@aihot/site";
-import { Wordmark } from "@aihot/site/brand/Logo.tsx";
+import { Wordmark } from "../../../brand/Logo.tsx";
 import { useChangelogSeen, useLocalePreference } from "../../lib/local-state";
 import { getDict } from "../../lib/i18n";
 import { sidebar, sidebarIsActive, type NavItem } from "./nav";
 import { ThemeSwitch } from "./ThemeSwitch";
-import { IconGithub } from "../icons";
+import { IconGithub, IconLogout } from "../icons";
 
 /** True while the changelog has an entry newer than the one this reader last opened. */
 export function useChangelogDot(latestVersion: string | null): boolean {
@@ -44,6 +46,24 @@ export function Sidebar({ changelogVersion }: { changelogVersion: string | null 
   const dot = useChangelogDot(changelogVersion);
   const locale = useLocalePreference();
   const dict = getDict(locale);
+  const rootData = useRouteLoaderData<typeof rootLoader>("root");
+  const csrfToken = rootData?.user?.csrfToken;
+
+  /** Perform user logout and redirect to home. */
+  async function handleLogout() {
+    if (!csrfToken) {
+      window.location.assign("/login");
+      return;
+    }
+
+    // Submit logout request to backend
+    try {
+      await postJSON("/api/auth/logout", {}, csrfToken);
+      window.location.assign("/");
+    } catch {
+      window.location.assign("/");
+    }
+  }
 
   return (
     <aside className="sticky top-0 hidden h-dvh w-[180px] shrink-0 flex-col border-r border-line bg-sidebar px-3 pb-3.5 pt-6 lg:flex">
@@ -51,16 +71,31 @@ export function Sidebar({ changelogVersion }: { changelogVersion: string | null 
         <Wordmark size={26} />
       </Link>
       <nav className="scrollbar-thin -mx-1 flex-1 overflow-y-auto px-1" aria-label="主导航">
-        {sidebar(locale).map((section) => (
-          <div key={section.title}>
-            <div className="px-2.5 pb-1 pt-3.5 text-[11px] text-ink-4">{section.title}</div>
-            <div className="flex flex-col gap-1">
-              {section.items.map((item) => (
-                <SideLink key={item.to} item={item} dot={dot} />
-              ))}
+        {sidebar(locale).map((section, sectionIdx, allSections) => {
+          const isLastSection = sectionIdx === allSections.length - 1;
+          return (
+            <div key={section.title}>
+              <div className="px-2.5 pb-1 pt-3.5 text-[11px] text-ink-4">{section.title}</div>
+              <div className="flex flex-col gap-1">
+                {section.items.map((item) => (
+                  <SideLink key={item.to} item={item} dot={dot} />
+                ))}
+                {isLastSection && csrfToken && (
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="flex h-10 w-full items-center gap-2.5 rounded-control px-2.5 text-[14px] font-medium text-ink-3 transition-colors duration-150 hover:bg-bg-sunk hover:text-hot"
+                  >
+                    <span className="flex w-[22px] shrink-0 justify-center">
+                      <IconLogout size={17} />
+                    </span>
+                    <span className="min-w-0 truncate">{dict.action.logout}</span>
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </nav>
       <div className="mt-2 space-y-2 px-1 pt-1">
         {SITE.github && (

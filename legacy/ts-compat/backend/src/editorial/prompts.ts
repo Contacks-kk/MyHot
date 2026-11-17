@@ -1,4 +1,4 @@
-// Every editorial prompt lives in the industry pack as a Markdown file (shared/industry/prompts/*.md), so a new
+// Every editorial prompt lives in the industry pack as a Markdown file (backend-go/config/prompts/*.md), so a new
 // industry changes its taste by editing text, not code. Two template forms, nothing else:
 //   {{name}}     a value the calling step passes (plus siteName, from shared/site/site.ts)
 //   {{> file}}   another prompt file, inserted as it is (shared rules)
@@ -11,7 +11,7 @@ import path from "node:path";
 import { SITE } from "@aihot/site";
 import { REPO_ROOT } from "../config.ts";
 
-const DIR = path.join(REPO_ROOT, "shared/industry/prompts");
+const DIR = path.join(REPO_ROOT, "backend-go/config/prompts");
 const TOKEN = /\{\{(>\s*)?([A-Za-z][\w.-]*)\s*\}\}/g;
 
 const files = new Map<string, string>();

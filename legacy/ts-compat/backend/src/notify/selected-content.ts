@@ -2,7 +2,7 @@
 import { sql } from "../db.ts";
 import { itemUrl } from "../publication/links.ts";
 import { publicSourceName } from "../publication/rules.ts";
-import { CATEGORY_LABELS, type CategoryKey } from "@aihot/contracts/taxonomy";
+import { CATEGORY_LABELS, type CategoryKey } from "@aihot/backend/publication/category-contract";
 import { ITEM_COPY, SITE } from "@aihot/site";
 
 const MAX_AGE_MS = 12 * 3600_000;

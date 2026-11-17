@@ -5,16 +5,24 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { FIRST_ONLINE_MIGRATION, migrationPlan } from "./migration-safety.ts";
 
-const isMigration = (file: string) => /^(database\/migrations|shared\/modules\/[^/]+\/migrations)\/[^/]+\.sql$/.test(file);
+const isMigration = (file: string) => /^(database\/migrations|backend-go\/modules\/[^/]+\/migrations)\/[^/]+\.sql$/.test(file);
+const isOldModuleMigration = (file: string) => /^shared\/modules\/[^/]+\/migrations\/[^/]+\.sql$/.test(file);
+const migratedPath = (file: string) => isOldModuleMigration(file) ? file.replace(/^shared\/modules\//, "backend-go/modules/") : file;
 
 export function checkMigrations(root: string, base: string): string[] {
   const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
   const normalizeLineEndings = (text: string) => text.replace(/\r\n/g, "\n");
-  const before = new Set(git("ls-tree", "-r", "--name-only", base).split("\n").filter(isMigration));
-  const current = git("ls-files", "--cached", "--others", "--exclude-standard").split("\n").filter((file) => isMigration(file) && existsSync(path.join(root, file)));
+  const previous = git("ls-tree", "-r", "--name-only", base).split("\n").filter((file) => isMigration(file) || isOldModuleMigration(file));
+  const before = new Set(previous.map(migratedPath));
+  const files = git("ls-files", "--cached", "--others", "--exclude-standard").split("\n").filter((file) => existsSync(path.join(root, file)));
+  const current = files.filter(isMigration);
   const problems: string[] = [];
-  for (const file of before) {
-    if (!existsSync(path.join(root, file)) || normalizeLineEndings(readFileSync(path.join(root, file), "utf8")) !== normalizeLineEndings(git("show", `${base}:${file}`))) problems.push(`${file}: deployed migrations are immutable; add a new migration`);
+  for (const file of files.filter(isOldModuleMigration)) {
+    problems.push(`${file}: move module migrations to backend-go/modules`);
+  }
+  for (const file of previous) {
+    const target = migratedPath(file);
+    if (!existsSync(path.join(root, target)) || normalizeLineEndings(readFileSync(path.join(root, target), "utf8")) !== normalizeLineEndings(git("show", `${base}:${file}`))) problems.push(`${target}: deployed migrations are immutable; add a new migration`);
   }
   const names = new Set<string>();
   for (const file of current) {

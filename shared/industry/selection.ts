@@ -1,4 +1,4 @@
-import selection from "./selection.json" with { type: "json" };
+import selection from "../../backend-go/config/selection.json" with { type: "json" };
 
 // 精选的门槛。评分标准本身写在 prompts/selection-score.md；这里只决定“多少分算入选”。
 // 每篇资料由评分模型独立打两次分（0–100），两次之和 ≥ 2 × 门槛、并确认不是精选里已有新闻的重复报道才进精选

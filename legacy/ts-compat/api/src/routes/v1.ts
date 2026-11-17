@@ -1,7 +1,7 @@
 // Public API v1 (long-term). Field shapes follow the OpenAPI document at /openapi-v1.json (the paths stay
 // /api/v1); each operation's query parameters and Cache-Control are listed in V1_OPERATIONS.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { PUBLIC_API_CATEGORY_KEYS, type PublicApiCategoryKey } from "@aihot/contracts/taxonomy";
+import { PUBLIC_API_CATEGORY_KEYS, type PublicApiCategoryKey } from "@aihot/backend/publication/category-contract";
 import { config } from "@aihot/backend/config";
 import { InvalidCursorError } from "@aihot/backend/lib/cursor";
 import { SearchBusyError } from "@aihot/backend/publication/pool";

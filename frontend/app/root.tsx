@@ -4,7 +4,7 @@ import {
 } from "react-router";
 import type { SiteMeta } from "@aihot/contracts/site";
 import { SITE } from "@aihot/site";
-import { RingMark } from "@aihot/site/brand/Logo.tsx";
+import { RingMark } from "../brand/Logo.tsx";
 import { useEffect, useState, type ReactNode } from "react";
 import type { Route } from "./+types/root";
 import "./app.css";
@@ -20,7 +20,8 @@ import { apiGet } from "./lib/api.server";
 import { useHydratedFlag } from "./lib/hydration";
 import { titled } from "./lib/seo";
 import { webModules } from "./site-modules";
-import { userApiMe } from "./lib/user-api.server";
+import { userApiGet, userApiMe } from "./lib/user-api.server";
+import type { Catalog } from "./lib/catalog";
 
 export const links: Route.LinksFunction = () => [
   { rel: "icon", href: "/favicon.ico", sizes: "any" },
@@ -33,15 +34,38 @@ export const links: Route.LinksFunction = () => [
 export async function loader({ request }: Route.LoaderArgs) {
   const release = process.env.AIHOT_RELEASE ?? null;
   const user = await userApiMe(request).catch(() => null);
+  const catalog = user ? await userApiGet<Catalog>(request, "/api/me/catalog") : null;
   try {
     const meta = await apiGet<SiteMeta>("/api/site/meta", {
       request,
       headers: Object.assign({}, ...webModules().map((m) => m.root?.documentHeaders?.(request) ?? {})),
       signal: request.signal,
     });
-    return { ...meta, release, user: user ? { id: user.id, email: user.email } : null };
+    return {
+      ...meta,
+      release,
+      user: user
+        ? {
+            id: user.id,
+            email: user.email,
+            csrfToken: user.csrfToken,
+          }
+        : null,
+      catalog,
+    };
   } catch {
-    return { changelogVersion: null, release, user: user ? { id: user.id, email: user.email } : null };
+    return {
+      changelogVersion: null,
+      release,
+      user: user
+        ? {
+            id: user.id,
+            email: user.email,
+            csrfToken: user.csrfToken,
+          }
+        : null,
+      catalog,
+    };
   }
 }
 

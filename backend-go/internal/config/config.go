@@ -225,9 +225,9 @@ func Load() (Config, error) {
 		SitePrivacyCovers:           os.Getenv("SITE_PRIVACY_COVERS"),
 		SiteTermsLLMSLicense:        os.Getenv("SITE_TERMS_LLMS_LICENSE"),
 		SiteAccessRatePerMinute:     envInt("SITE_ACCESS_RATE_PER_MINUTE", 0),
-		SiteChangelogPath:           env("SITE_CHANGELOG_PATH", filepath.Join(repositoryRoot(), "shared", "site", "changelog.json")),
-		SitePublicDir:               env("SITE_PUBLIC_DIR", filepath.Join(repositoryRoot(), "shared", "site", "public")),
-		SiteContactDir:              env("SITE_CONTACT_DIR", filepath.Join(repositoryRoot(), "shared", "site", "brand", "contact")),
+		SiteChangelogPath:           env("SITE_CHANGELOG_PATH", filepath.Join(repositoryRoot(), "backend-go", "config", "changelog.json")),
+		SitePublicDir:               sitePublicDir(),
+		SiteContactDir:              siteContactDir(),
 		IndexNowKey:                 indexNowKey,
 		IndexNowSubmitEnabled:       envBool("INDEXNOW_SUBMIT_ENABLED", false),
 		MCPAllowedHosts:             splitCSV(os.Getenv("MCP_ALLOWED_HOSTS"), true),
@@ -362,6 +362,18 @@ func repositoryRoot() string {
 			return current
 		}
 	}
+}
+
+/** siteContactDir locates bundled contact images while preserving configured directories. */
+func siteContactDir() string {
+	root := repositoryRoot()
+	return env("SITE_CONTACT_DIR", filepath.Join(root, "frontend", "brand", "contact"))
+}
+
+/** sitePublicDir locates the bundled API document while preserving custom directories. */
+func sitePublicDir() string {
+	root := repositoryRoot()
+	return env("SITE_PUBLIC_DIR", filepath.Join(root, "backend-go", "config", "public"))
 }
 
 // 读取环境变量配置

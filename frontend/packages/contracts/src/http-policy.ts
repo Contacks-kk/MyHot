@@ -2,7 +2,7 @@
 // owns a path, the engine's and then those of the site's modules. The API server and the web server both
 // read this module.
 import { ABOUT, POLICY, SITE } from "@aihot/site";
-import { MODULES } from "@aihot/site/modules";
+import { MODULES } from "./module-registry.ts";
 
 /** CORS for /api/v1/* and /openapi-v1.json. */
 export const PUBLIC_API_CORS: Record<string, string> = {
@@ -22,7 +22,7 @@ export const PUBLIC_API_CORS: Record<string, string> = {
   "Access-Control-Max-Age": "86400",
 };
 
-/** MCP and the v1 OpenAPI carry one public version, the site's (shared/site/site.ts); it only goes up. */
+/** MCP and the v1 OpenAPI carry one public version; it only goes up. */
 export const PUBLIC_INTERFACE_VERSION = SITE.interfaceVersion;
 
 export const NO_STORE = "no-store";

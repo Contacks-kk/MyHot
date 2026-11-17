@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Form, Link, useSearchParams } from "react-router";
 import { SITE } from "@aihot/site";
-import { CATEGORY_LABELS } from "@aihot/contracts/taxonomy";
+import { useAdminCatalog } from "../../lib/catalog";
 import type { Route } from "./+types/labels";
 import type {
   AdminLabelsOverview,
@@ -47,6 +47,8 @@ export const meta: Route.MetaFunction = () => [
 
 /** AdminLabelsPage renders stable labels, promotion candidates, and ranked hotspots. */
 export default function AdminLabelsPage({ loaderData }: Route.ComponentProps) {
+  const catalog = useAdminCatalog();
+  const categoryLabels = Object.fromEntries(catalog.categories.map(({ key, label }) => [key, label]));
   const { overview, hotspots } = loaderData;
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -520,7 +522,7 @@ export default function AdminLabelsPage({ loaderData }: Route.ComponentProps) {
                       {r.selected && <Badge tone="accent">精选头条</Badge>}
                       {r.category && (
                         <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[10.5px] font-medium text-ink-3">
-                          {CATEGORY_LABELS[r.category as keyof typeof CATEGORY_LABELS] ??
+                          {categoryLabels[r.category] ??
                             r.category}
                         </span>
                       )}

@@ -9,7 +9,7 @@ export interface ContactSettings {
   feishuQr: string | null;
 }
 
-const PACK_CODES = path.join(REPO_ROOT, "shared/site/brand/contact");
+const PACK_CODES = path.join(REPO_ROOT, "frontend/brand/contact");
 
 /** The pack's code for a slot, served under /contact/; none when the pack ships no such file. */
 function packCode(slot: "wechat" | "feishu"): string | null {

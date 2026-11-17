@@ -4,7 +4,7 @@
 // it is a subject of, but not those that only mention it — among several subject companies, its name must
 // appear in the Chinese or the original title. Lists and counts read the selected set one report per
 // fact, as v1 and RSS do.
-import type { CategoryKey } from "@aihot/contracts/taxonomy";
+import type { CategoryKey } from "@aihot/backend/publication/category-contract";
 import type {
   Brand, TopicGroup, TopicGroupKey, TopicLink, TopicPage, TopicSummary, TopicsResponse,
 } from "@aihot/contracts/site";
@@ -50,7 +50,7 @@ function titlePattern(name: string, entityId: string): string {
   return `(?<![A-Za-z])(${[...names].map(escape).join("|")})(?![A-Za-z])`;
 }
 
-const file = JSON.parse(readFileSync(path.join(REPO_ROOT, "shared/industry/topics.json"), "utf8")) as TopicFile;
+const file = JSON.parse(readFileSync(path.join(REPO_ROOT, "backend-go/config/topics.json"), "utf8")) as TopicFile;
 
 export const TOPIC_GROUPS: TopicGroup[] = file.groups;
 

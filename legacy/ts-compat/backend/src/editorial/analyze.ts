@@ -8,7 +8,7 @@
 //      understanding for selected and near-selected items, by the cheaper title/summary prompts for the rest.
 // Material with only a title or a feed summary has its article page fetched before it is judged.
 import { z } from "zod";
-import { CATEGORY_KEYS } from "@aihot/contracts/taxonomy";
+import { CATEGORY_KEYS } from "@aihot/backend/publication/category-contract";
 import { CATEGORIES } from "@aihot/industry/taxonomy";
 import { SELECTION } from "@aihot/industry/selection";
 import { sql } from "../db.ts";

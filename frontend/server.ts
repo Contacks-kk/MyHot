@@ -28,6 +28,7 @@ const CLIENT_DIR = path.resolve(import.meta.dirname, "build/client");
 
 import { isAnonymousPage, pagePath } from "./app/lib/access.ts";
 import { isWebOgPath, webOgCard, webOgContentCard, webOgPoster, webOgTarget } from "./app/lib/og-assets.server.ts";
+import type { Catalog } from "./app/lib/catalog.ts";
 import { ogEtag, renderOg } from "@aihot/og-renderer/og";
 import { posterEtag, renderPoster } from "@aihot/og-renderer/poster";
 
@@ -216,11 +217,33 @@ async function serveWebOg(req: import("node:http").IncomingMessage, res: import(
     return;
   }
 
+  // Read display configuration using the same verified session as the image request.
+  const catalogResponse = await fetch(`${USER_API_BASE_URL}/api/me/catalog`, {
+    headers: { cookie: req.headers.cookie ?? "", accept: "application/json" },
+    cache: "no-store",
+    signal: AbortSignal.timeout(10_000),
+  }).catch(() => null);
+  if (!catalogResponse || !catalogResponse.ok) {
+    const status = catalogResponse?.status === 401 ? 401 : 503;
+    sendOgProblem(req, res, status, status === 401 ? "unauthorized" : "temporarily_unavailable", status === 401 ? "Sign in to view content." : "Temporarily unavailable.", requestId, status === 503 ? 30 : undefined);
+    return;
+  }
+  let catalog: Catalog;
+  try {
+    catalog = await catalogResponse.json() as Catalog;
+    if (!Array.isArray(catalog.categories) || !Array.isArray(catalog.topicGroups) || !Array.isArray(catalog.topics)) {
+      throw new Error("invalid catalog");
+    }
+  } catch {
+    sendOgProblem(req, res, 503, "temporarily_unavailable", "Temporarily unavailable.", requestId, 30);
+    return;
+  }
+
   let card: ReturnType<typeof webOgCard> = null;
   let poster = null as ReturnType<typeof webOgPoster>;
   let target: ReturnType<typeof webOgTarget>;
   try {
-    card = webOgCard(pathname);
+    card = webOgCard(pathname, catalog);
     target = webOgTarget(pathname);
   } catch {
     sendOgProblem(req, res, 400, "invalid_request", "The request could not be processed.", requestId);
@@ -251,8 +274,8 @@ async function serveWebOg(req: import("node:http").IncomingMessage, res: import(
     }
     try {
       const data: unknown = await content.json();
-      if (target.kind === "poster") poster = webOgPoster(target.id, data);
-      else card = webOgContentCard(target, data);
+      if (target.kind === "poster") poster = webOgPoster(target.id, data, catalog);
+      else card = webOgContentCard(target, data, catalog);
     } catch {
       card = null;
       poster = null;

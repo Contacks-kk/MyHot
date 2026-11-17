@@ -1,4 +1,4 @@
-// What a module's web.tsx (shared/modules/<name>/web.tsx) may add to the engine's pages: navigation entries, admin
+// What a module's web.tsx (frontend/modules/<name>/web.tsx) may add to the engine's pages: navigation entries, admin
 // entries and the parts of a few pages that leave room for them. Its own pages come from its module.ts
 // (routes.ts). The site's list is read through site-modules.ts.
 //
@@ -114,7 +114,7 @@ export interface TopicPagePart {
 }
 
 export interface WebModule {
-  /** Its folder under shared/modules/. */
+  /** Its folder under frontend/modules/. */
   name: string;
   /** Desktop sidebar: entries in a section between the engine's 内容 and 更多; modules naming the same section share it. */
   sidebar?: { section: string; items: NavItem[] };

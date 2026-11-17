@@ -1,9 +1,9 @@
 import { type RouteConfig, type RouteConfigEntry, index, layout, route } from "@react-router/dev/routes";
 import type { ModulePage } from "@aihot/contracts/modules";
-import { MODULES } from "@aihot/site/modules";
+import { MODULES } from "@aihot/contracts/module-registry";
 
 /** A module's route module, from the app directory. */
-const file = (module: string, path: string) => `../../shared/modules/${module}/${path}`;
+const file = (module: string, path: string) => `../modules/${module}/${path}`;
 const page = (module: string, p: ModulePage) => route(p.path, file(module, p.file), p.id ? { id: p.id } : {});
 
 /** The site's modules' pages, after the engine's. */

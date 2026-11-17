@@ -75,7 +75,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	var releaseUnit *string
 	if reportingConfig.Release != nil {
+		releaseUnit = &reportingConfig.Release.Unit
 		reportCorrection.ReleaseCategory,
 			reportCorrection.ReleaseTag = reportingConfig.Release.Category,
 			reportingConfig.Release.Tag
@@ -92,6 +94,7 @@ func main() {
 		CategoryKeys:       categoryKeys,
 		CategoryLabels:     categoryLabels,
 		CategoryFeedLabels: categoryFeedLabels,
+		ReleaseUnit:        releaseUnit,
 		ReportCorrection:   reportCorrection,
 		Publication:        publicationSettings,
 		Models:             modelCatalog,

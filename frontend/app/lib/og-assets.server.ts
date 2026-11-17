@@ -1,13 +1,9 @@
 import { CARDS, ITEM_COPY, REPORTS, SITE, subjectAfter, withSubject } from "@aihot/site";
-import { CATEGORY_LABELS } from "@aihot/contracts/taxonomy";
 import { beijingDate } from "@aihot/contracts/time";
-import topicsDocument from "../../../shared/industry/topics.json" with { type: "json" };
+import type { Catalog } from "./catalog.ts";
 import type { OgCard } from "@aihot/og-renderer/og";
 import type { Poster } from "@aihot/og-renderer/poster";
 
-type TopicGroup = { key: string; name: string };
-type Topic = { slug: string; name: string; group: string; definition: string };
-const { groups, topics } = topicsDocument as { groups: TopicGroup[]; topics: Topic[] };
 const SITE_URL = (process.env.SITE_URL || SITE.defaultUrl).replace(/\/+$/, "");
 
 export type WebOgTarget =
@@ -16,14 +12,7 @@ export type WebOgTarget =
   | { kind: "report"; reportKind: "daily" | "weekly" | "monthly"; key: string; apiPath: string }
   | { kind: "story"; publicId: string; apiPath: string };
 
-const pageCards: Record<string, OgCard> = {
-  ...CARDS,
-  topics: {
-    kicker: "主题",
-    title: `${topics.length} ${subjectAfter("个长期追踪的", "方向")}`,
-    subtitle: `${groups.map((group) => group.name).join("、")}。`,
-  },
-};
+const pageCards: Record<string, OgCard> = CARDS;
 
 /** Website, fixed-page and topic cards are Web presentation resources and need no content query. */
 export function isWebOgPath(pathname: string): boolean {
@@ -32,18 +21,27 @@ export function isWebOgPath(pathname: string): boolean {
 }
 
 /** Returns the same card data used by the former API renderer, or null for an unknown image. */
-export function webOgCard(pathname: string): OgCard | null {
+export function webOgCard(pathname: string, catalog: Catalog): OgCard | null {
   if (pathname === "/og/site.png") return pageCards.site ?? null;
   const match = /^\/og\/(pages|topics)\/([^/]+)$/.exec(pathname);
   if (!match) return null;
   const file = decodeURIComponent(match[2]!);
   if (!file.endsWith(".png")) return null;
   const slug = file.slice(0, -4);
-  if (match[1] === "pages") return pageCards[slug] ?? null;
-  const topic = topics.find((item) => item.slug === slug);
+  if (match[1] === "pages") {
+    if (slug === "topics") {
+      return {
+        kicker: "主题",
+        title: `${catalog.topics.length} ${subjectAfter("个长期追踪的", "方向")}`,
+        subtitle: `${catalog.topicGroups.map((group) => group.name).join("、")}。`,
+      };
+    }
+    return pageCards[slug] ?? null;
+  }
+  const topic = catalog.topics.find((item) => item.slug === slug);
   if (!topic) return null;
   return {
-    kicker: `主题 · ${groups.find((group) => group.key === topic.group)?.name ?? ""}`,
+    kicker: `主题 · ${catalog.topicGroups.find((group) => group.key === topic.group)?.name ?? ""}`,
     title: `${topic.name} 最新动态`,
     subtitle: topic.definition,
   };
@@ -119,19 +117,17 @@ function objectPayload(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
-function categoryLabel(value: unknown): string | null {
-  return typeof value === "string" && Object.hasOwn(CATEGORY_LABELS, value)
-    ? CATEGORY_LABELS[value as keyof typeof CATEGORY_LABELS]
-    : null;
+function categoryLabel(value: unknown, catalog: Catalog): string | null {
+  return typeof value === "string" ? catalog.categories.find((category) => category.key === value)?.label ?? null : null;
 }
 
-export function webOgPoster(id: string, value: unknown): Poster | null {
+export function webOgPoster(id: string, value: unknown, catalog: Catalog): Poster | null {
   const data = objectPayload(value) as ItemPayload | null;
   if (!data || data.id !== id || typeof data.title !== "string" || typeof data.timelineAt !== "string" || typeof data.source?.name !== "string") return null;
   const score = typeof data.score === "number" ? data.score : null;
   return {
     url: `${SITE_URL}/items/${encodeURIComponent(id)}`,
-    kicker: categoryLabel(data.category) ?? withSubject("动态"),
+    kicker: categoryLabel(data.category, catalog) ?? withSubject("动态"),
     title: data.title,
     summary: typeof data.summary === "string" ? data.summary : null,
     source: data.source.name,
@@ -140,13 +136,13 @@ export function webOgPoster(id: string, value: unknown): Poster | null {
   };
 }
 
-export function webOgContentCard(target: WebOgContentTarget, value: unknown): OgCard | null {
+export function webOgContentCard(target: WebOgContentTarget, value: unknown, catalog: Catalog): OgCard | null {
   const data = objectPayload(value);
   if (!data) return null;
   if (target.kind === "item") {
     const item = data as ItemPayload;
     if (item.id !== target.id || typeof item.title !== "string" || typeof item.timelineAt !== "string" || typeof item.source?.name !== "string") return null;
-    const category = categoryLabel(item.category);
+    const category = categoryLabel(item.category, catalog);
     const score = typeof item.score === "number" ? item.score : null;
     return {
       kicker: category ?? withSubject("动态"),

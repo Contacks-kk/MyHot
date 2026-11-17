@@ -3,10 +3,9 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { EDITION_TIMES, SITE } from "@aihot/site";
 import { PUBLIC_INTERFACE_VERSION } from "@aihot/contracts/http-policy";
-import { PUBLIC_API_CATEGORY_KEYS } from "@aihot/contracts/taxonomy";
 
-const BRAND_DIR = path.resolve(import.meta.dirname, "../../../shared/site/brand");
-const PUBLIC_DIR = path.resolve(import.meta.dirname, "../../../shared/site/public");
+const BRAND_DIR = path.resolve(import.meta.dirname, "../../brand");
+const PUBLIC_DIR = path.resolve(import.meta.dirname, "../site-public");
 const BRAND_FILES = new Set([
   "favicon.ico", "icon.png", "icon-192.png", "apple-icon.png", "logo.svg",
   ...SITE.rootIcons.filter((name) => name !== "." && name !== ".." && !name.includes("/") && !name.includes("\\")),
@@ -38,25 +37,13 @@ function fillPlaceholders(text: string, json: boolean): string {
     weeklyTime: EDITION_TIMES.weekly,
     monthlyTime: EDITION_TIMES.monthly,
     version: PUBLIC_INTERFACE_VERSION,
-    categoryList: PUBLIC_API_CATEGORY_KEYS.join(", "),
   };
   const filled = text.replace(/\{\{(\w+)\}\}/g, (all, key: string) => {
     const value = values[key];
     if (value === undefined) return all;
     return json ? JSON.stringify(value).slice(1, -1) : value;
   });
-  if (!json || !filled.includes('"{{categories}}"')) return filled;
-  const document: unknown = JSON.parse(filled);
-  const walk = (node: unknown) => {
-    if (!node || typeof node !== "object") return;
-    const object = node as Record<string, unknown>;
-    for (const key of ["enum", "examples"]) {
-      if (Array.isArray(object[key]) && (object[key] as unknown[]).includes("{{categories}}")) object[key] = [...PUBLIC_API_CATEGORY_KEYS];
-    }
-    for (const value of Object.values(object)) walk(value);
-  };
-  walk(document);
-  return JSON.stringify(document, null, 2);
+  return filled;
 }
 
 /** Whether the path names one of the root-level files configured as site branding. */

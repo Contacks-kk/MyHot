@@ -9,7 +9,7 @@ import { z } from "zod";
 import { POLICY, SITE } from "@aihot/site";
 import { PUBLIC_INTERFACE_VERSION } from "@aihot/contracts/http-policy";
 import { MCP_TOOL_NAMES as T, mcpToolName } from "@aihot/contracts/mcp";
-import { PUBLIC_API_CATEGORY_KEYS } from "@aihot/contracts/taxonomy";
+import { PUBLIC_API_CATEGORY_KEYS } from "@aihot/backend/publication/category-contract";
 import { isValidDate } from "@aihot/contracts/time";
 import { config } from "@aihot/backend/config";
 import { logError } from "@aihot/backend/lib/log-error";

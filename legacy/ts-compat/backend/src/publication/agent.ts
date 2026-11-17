@@ -5,7 +5,7 @@
 import { ACCESS, EDITION_WHEN, ITEM_COPY, POLICY, SITE, subjectAfter } from "@aihot/site";
 import { CATEGORIES } from "@aihot/industry/taxonomy";
 import { MCP_TOOL_NAMES as T } from "@aihot/contracts/mcp";
-import { CATEGORY_LABELS, isCategoryKey, PUBLIC_API_CATEGORY_KEYS, toPublicApiCategory, type PublicApiCategoryKey } from "@aihot/contracts/taxonomy";
+import { CATEGORY_LABELS, isCategoryKey, PUBLIC_API_CATEGORY_KEYS, toPublicApiCategory, type PublicApiCategoryKey } from "@aihot/backend/publication/category-contract";
 import { beijingDate, beijingTime, beijingWeekday } from "@aihot/contracts/time";
 import { serverModules } from "../modules.ts";
 import { siteUrl } from "./links.ts";

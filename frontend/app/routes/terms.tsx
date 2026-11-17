@@ -1,5 +1,5 @@
 import { POLICY, SITE } from "@aihot/site";
-import copy from "@aihot/site/pages/terms.md?raw";
+import copy from "../content/terms.md?raw";
 import { privatePageHeaders } from "../lib/api.server";
 import { pageMeta } from "../lib/seo";
 import { prepareCopy } from "../lib/site-copy";

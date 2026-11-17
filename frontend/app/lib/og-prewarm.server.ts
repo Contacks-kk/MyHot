@@ -29,11 +29,18 @@ export function parseOgPrewarmRequest(body: Buffer, signature: string | undefine
   if (typeof item.timelineAt !== "string" || item.timelineAt.length > 64 || !Number.isFinite(Date.parse(item.timelineAt))) return null;
   if (item.summary !== null && item.summary !== undefined && (typeof item.summary !== "string" || item.summary.length > 5000)) return null;
   if (item.category !== null && item.category !== undefined && (typeof item.category !== "string" || item.category.length > 120)) return null;
+  if (item.categoryLabel !== undefined && (typeof item.categoryLabel !== "string" || item.categoryLabel.length > 300)) return null;
   if (item.score !== null && item.score !== undefined && (typeof item.score !== "number" || !Number.isFinite(item.score))) return null;
   if (typeof item.selected !== "boolean" || !item.source || typeof item.source !== "object" || Array.isArray(item.source)) return null;
   const source = item.source as Record<string, unknown>;
   if (typeof source.name !== "string" || !source.name.trim() || source.name.length > 300) return null;
-  const card: OgCard | null = webOgContentCard({ kind: "item", id: input.id, apiPath: `/api/site/items/${encodeURIComponent(input.id)}` }, item);
+  const catalog = {
+    subject: "",
+    categories: typeof item.category === "string" && typeof item.categoryLabel === "string" ? [{ key: item.category, label: item.categoryLabel, publicKey: item.category, feedLabel: item.categoryLabel }] : [],
+    topicGroups: [],
+    topics: [],
+  };
+  const card: OgCard | null = webOgContentCard({ kind: "item", id: input.id, apiPath: `/api/site/items/${encodeURIComponent(input.id)}` }, item, catalog);
   if (!card) return null;
 
   return { id: input.id, card };

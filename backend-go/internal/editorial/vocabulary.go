@@ -82,7 +82,7 @@ type NormalizedStructure struct {
 func LoadVocabulary() (Vocabulary, error) {
 	path := strings.TrimSpace(os.Getenv("INDUSTRY_VOCABULARY_FILE"))
 	if path == "" {
-		for _, candidate := range []string{filepath.Join("shared", "industry", "vocabulary.json"), filepath.Join("..", "shared", "industry", "vocabulary.json"), filepath.Join("..", "..", "shared", "industry", "vocabulary.json"), filepath.Join("/app", "shared", "industry", "vocabulary.json")} {
+		for _, candidate := range []string{filepath.Join("backend-go", "config", "vocabulary.json"), filepath.Join("config", "vocabulary.json"), filepath.Join("..", "..", "config", "vocabulary.json"), filepath.Join("/app", "backend-go", "config", "vocabulary.json")} {
 			if _, err := os.Stat(candidate); err == nil {
 				path = candidate
 				break
@@ -90,7 +90,7 @@ func LoadVocabulary() (Vocabulary, error) {
 		}
 	}
 	if path == "" {
-		return Vocabulary{}, errors.New("shared/industry/vocabulary.json not found")
+		return Vocabulary{}, errors.New("backend-go/config/vocabulary.json not found")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -101,18 +101,18 @@ func LoadVocabulary() (Vocabulary, error) {
 		return Vocabulary{}, err
 	}
 	if len(vocabulary.CategoryTags) == 0 || len(vocabulary.ItemTypes) == 0 {
-		return Vocabulary{}, errors.New("shared/industry/vocabulary.json is incomplete")
+		return Vocabulary{}, errors.New("backend-go/config/vocabulary.json is incomplete")
 	}
 	for _, entry := range vocabulary.IdentityLexicon {
 		for _, pattern := range entry.Patterns {
 			if _, err := compilePattern(pattern); err != nil {
-				return Vocabulary{}, fmt.Errorf("shared/industry/vocabulary.json identity %s: %w", entry.ID, err)
+				return Vocabulary{}, fmt.Errorf("backend-go/config/vocabulary.json identity %s: %w", entry.ID, err)
 			}
 		}
 	}
 	for _, entry := range vocabulary.IdentityContextAliases {
 		if _, err := compilePattern(patternSpec{Source: entry.Source, Flags: entry.Flags}); err != nil {
-			return Vocabulary{}, fmt.Errorf("shared/industry/vocabulary.json identity alias %s: %w", entry.EntityID, err)
+			return Vocabulary{}, fmt.Errorf("backend-go/config/vocabulary.json identity alias %s: %w", entry.EntityID, err)
 		}
 	}
 	return vocabulary, nil

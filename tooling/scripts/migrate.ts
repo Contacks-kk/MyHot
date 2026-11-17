@@ -29,7 +29,7 @@ async function sameIndexDefinition(session: postgres.ReservedSql, oid: number, t
 
 export async function runMigrations(sql: postgres.Sql, root: string): Promise<number> {
   const sqlFiles = (dir: string) => existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".sql")).map((name) => ({ name, file: path.join(dir, name) })) : [];
-  const modules = path.join(root, "shared/modules");
+  const modules = path.join(root, "backend-go/modules");
   const migrations = [
     ...sqlFiles(path.join(root, "database/migrations")),
     ...(existsSync(modules) ? readdirSync(modules).flatMap((name) => sqlFiles(path.join(modules, name, "migrations"))) : []),

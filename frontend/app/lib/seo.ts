@@ -1,9 +1,9 @@
 // Page metadata from one place: title template, canonical address, OG images, robots; and list addresses,
-// with the feed filters they carry. The site's name and wording come from shared/site/site.ts;
+// with the feed filters they carry. The site's name and wording come from the frontend site package;
 //; its address from SITE_URL.
 import type { MetaDescriptor } from "react-router";
 import type { ReportDetail, TimelineFilters } from "@aihot/contracts/site";
-import { isCategoryKey, isChannelKey } from "@aihot/contracts/taxonomy";
+import { isChannelKey } from "@aihot/contracts/taxonomy";
 import { SITE, subjectAfter, withSubject } from "@aihot/site";
 
 /**
@@ -45,12 +45,12 @@ export function listPath(path: string, params: Record<string, string | number | 
 }
 
 /** The feed filters an address asks for; an unknown channel or category means none. */
-export function readFilters(params: URLSearchParams): TimelineFilters {
+export function readFilters(params: URLSearchParams, categoryKeys: readonly string[]): TimelineFilters {
   const channel = params.get("channel") ?? "all";
   const category = params.get("category");
   return {
     channel: isChannelKey(channel) ? channel : "all",
-    category: category && isCategoryKey(category) ? category : null,
+    category: category && categoryKeys.includes(category) ? category : null,
     tag: params.get("tag")?.trim() || null,
   };
 }

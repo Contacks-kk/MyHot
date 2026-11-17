@@ -30,6 +30,12 @@ type PairJudgement struct {
 	ReceiptID  int64
 }
 
+type EvaluationPairJudgement struct {
+	PairResult
+	ReceiptID int64
+	Reused    bool
+}
+
 type SignalJudgement struct {
 	Verdicts  map[int64]Verdict
 	ReceiptID int64
@@ -42,6 +48,14 @@ type JudgeService struct {
 
 func NewJudgeService(models JudgeModelClient, prompts *editorial.PromptPack) *JudgeService {
 	return &JudgeService{models: models, prompts: prompts}
+}
+
+/** EvaluationPromptVersion returns the prompt version used by relation evaluation. */
+func (s *JudgeService) EvaluationPromptVersion() (string, error) {
+	if err := validateJudgeService(s); err != nil {
+		return "", err
+	}
+	return s.prompts.Version("group-pair", "group-signal")
 }
 
 func (s *JudgeService) JudgeBatch(ctx context.Context, articleID string, query Report, candidates []Candidate, reading []ReadingContext) (BatchJudgement, error) {
@@ -100,6 +114,48 @@ func (s *JudgeService) ConfirmMerge(ctx context.Context, articleID string, query
 		return PairJudgement{}, s.rejectResult(ctx, result.ReceiptID, err)
 	}
 	return PairJudgement{Relation: parsed.Relation, Difference: parsed.Difference, Confidence: parsed.Confidence, ReceiptID: result.ReceiptID}, nil
+}
+
+/** EvaluatePair judges one labelled pair using the production prompt and evaluation receipt identity. */
+func (s *JudgeService) EvaluatePair(ctx context.Context, caseID, modelKey string, a, b Report) (EvaluationPairJudgement, error) {
+	if err := validateJudgeService(s); err != nil {
+		return EvaluationPairJudgement{}, err
+	}
+	version, err := s.prompts.Version("group-pair", "group-signal")
+	if err != nil {
+		return EvaluationPairJudgement{}, err
+	}
+	system, err := s.prompts.Render("group-pair", nil)
+	if err != nil {
+		return EvaluationPairJudgement{}, err
+	}
+	result, err := s.models.Call(ctx, modelcall.Request{
+		Capability:    "groupReview",
+		ModelKey:      modelKey,
+		Purpose:       "eval_relation_pair",
+		Subject:       "relation-gold:" + caseID,
+		PromptVersion: version,
+		System:        system,
+		User:          pairPrompt(a, b),
+		Temperature:   floatPointer(0),
+		MaxTokens:     400,
+	})
+	if err != nil {
+		return EvaluationPairJudgement{}, err
+	}
+	parsed, err := ParsePairResult([]byte(result.Completion.Text))
+	if err != nil {
+		return EvaluationPairJudgement{}, s.rejectResult(ctx, result.ReceiptID, err)
+	}
+	judgement := EvaluationPairJudgement{
+		PairResult: parsed,
+		ReceiptID:  result.ReceiptID,
+		Reused:     result.Reused,
+	}
+	if err := s.models.Complete(ctx, result.ReceiptID); err != nil {
+		return judgement, fmt.Errorf("complete evaluation receipt %d: %w", result.ReceiptID, err)
+	}
+	return judgement, nil
 }
 
 func (s *JudgeService) JudgeSignal(ctx context.Context, articleID string, query Report, candidates []Candidate) (SignalJudgement, error) {

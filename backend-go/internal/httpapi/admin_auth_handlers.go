@@ -125,9 +125,7 @@ func (s *Server) adminOAuthCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminAuthCheck(w http.ResponseWriter, r *http.Request) {
-	if w.Header().Get("Cache-Control") == "" {
-		w.Header().Set("Cache-Control", "no-store")
-	}
+	w.Header().Set("Cache-Control", "no-store")
 	if s.AdminAuth == nil {
 		writeAdminProblem(w, http.StatusServiceUnavailable, "temporarily_unavailable", "Temporarily unavailable.")
 		return
@@ -167,7 +165,9 @@ func (s *Server) adminMe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (*adminauth.AdminPrincipal, bool) {
-	w.Header().Set("Cache-Control", "no-store")
+	if w.Header().Get("Cache-Control") != "private, no-store" {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 	if s.AdminAuth == nil {
 		writeAdminProblem(w, http.StatusServiceUnavailable, "temporarily_unavailable", "Temporarily unavailable.")
 		return nil, false
@@ -269,7 +269,9 @@ func writeAdminProblem(w http.ResponseWriter, status int, code, detail string) {
 	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.Header().Set("X-Request-Id", requestID)
-	w.Header().Set("Cache-Control", "no-store")
+	if w.Header().Get("Cache-Control") != "private, no-store" {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 	problem := map[string]any{
 		"type": "/problems/" + strings.ReplaceAll(code, "_", "-"), "title": title, "status": status,
 		"detail": detail, "code": code, "requestId": requestID,

@@ -1,7 +1,5 @@
-// What a module (shared/modules/<name>/module.ts) says about its addresses: its pages, its redirects and the
-// paths the api process answers. Plain data, read by every process and by the web build; the site
-// lists the modules it runs (shared/site/modules/index.ts). The module's code plugs in through its own
-// server.ts (backend/modules.ts) and web.tsx (frontend/app/modules.ts).
+// Module routes and HTTP policies are registered in frontend/packages/contracts/src/module-registry.ts.
+// Web modules live in frontend/modules and expose their page extensions through frontend/app/modules.ts.
 import type { RedirectRule } from "./http-policy.ts";
 
 export interface ModulePage {
@@ -20,7 +18,7 @@ export interface ModuleLayout {
 }
 
 export interface ModuleDeclaration {
-  /** Its folder under shared/modules/. */
+  /** Its folder under frontend/modules/. */
   name: string;
   /** Public pages, beside the engine's. */
   pages?: Array<ModulePage | ModuleLayout>;

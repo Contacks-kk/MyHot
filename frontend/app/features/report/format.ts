@@ -2,7 +2,6 @@
 import type { ReportNavigationEntry, ReportKind } from "@aihot/contracts/site";
 import { beijingDate, beijingWeekday, isoWeekLabel, isoWeekRange } from "@aihot/contracts/time";
 import { EDITION_WHEN, REPORTS, SITE, subjectAfter } from "@aihot/site";
-import { RELEASE } from "@aihot/industry/taxonomy";
 import { monthDay, weekdayShort } from "../../lib/format.ts";
 
 export const KINDS: ReportKind[] = ["daily", "weekly", "monthly"];
@@ -28,7 +27,7 @@ const { measure, noun } = REPORTS.entry;
 /** "件大事": what an issue counts its entries in, in the site's words (REPORTS.entry). */
 export const ENTRIES_UNIT = `${measure}${noun}`;
 
-/** "这一天的 4 件 AI 大事" / "本周的 12 件 AI 大事" / "8 月的 20 件 AI 大事" (the subject and REPORTS.entry from shared/site/site.ts). */
+/** "这一天的 4 件 AI 大事" / "本周的 12 件 AI 大事" / "8 月的 20 件 AI 大事" (the subject and REPORTS.entry from the frontend site package). */
 export function headline(kind: ReportKind, key: string, count: number): string {
   if (kind === "daily") return subjectAfter(`这一天的 ${count} ${measure}`, noun);
   if (kind === "weekly") return subjectAfter(`本周的 ${count} ${measure}`, noun);
@@ -127,12 +126,15 @@ const METRICS: Array<[key: string, unit: string]> = [
   ["totalStories", ENTRIES_UNIT],
   ["sourcesCount", UNITS.sourcesCount],
   ["firstPartyEvents", UNITS.firstPartyEvents],
-  ...(RELEASE ? [["modelsReleased", RELEASE.unit] as [string, string]] : []),
   ["selectedCount", UNITS.selectedCount],
   ["reportsCovered", UNITS.reportsCovered],
 ];
-export function metricItems(metrics: Record<string, number>): Array<{ value: number; unit: string }> {
-  return METRICS.filter(([k]) => typeof metrics[k] === "number" && (k !== "modelsReleased" || metrics[k]! > 0)).map(([k, unit]) => ({ value: metrics[k]!, unit }));
+export function metricItems(metrics: Record<string, number>, releaseUnit?: string | null): Array<{ value: number; unit: string }> {
+  const entries = [...METRICS];
+  if (releaseUnit != null) {
+    entries.splice(4, 0, ["modelsReleased", releaseUnit]);
+  }
+  return entries.filter(([k]) => typeof metrics[k] === "number" && (k !== "modelsReleased" || metrics[k]! > 0)).map(([k, unit]) => ({ value: metrics[k]!, unit }));
 }
 
 /** "前一日 · 9月25日", "上一期 · 第 37 周", "下一期 · 7 月". */

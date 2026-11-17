@@ -6,50 +6,48 @@ COPY backend-go/go.mod backend-go/go.sum ./
 ARG GOPROXY=https://proxy.golang.org,direct
 RUN go mod download
 COPY backend-go/ ./
-RUN mkdir -p /app/shared/site /app/shared/site/brand /app/shared/industry /app/shared/industry/prompts
-COPY shared/site/changelog.json /app/shared/site/changelog.json
-COPY shared/site/public/ /app/shared/site/public/
-COPY shared/site/model-catalog.json /app/shared/site/model-catalog.json
-COPY shared/site/publication.json /app/shared/site/publication.json
-COPY shared/site/brand/ /app/shared/site/brand/
-COPY shared/industry/entities.json /app/shared/industry/entities.json
-COPY shared/industry/categories.json /app/shared/industry/categories.json
-COPY shared/industry/vocabulary.json /app/shared/industry/vocabulary.json
-COPY shared/industry/selection.json /app/shared/industry/selection.json
-COPY shared/industry/reporting.json /app/shared/industry/reporting.json
-COPY shared/industry/topics.json /app/shared/industry/topics.json
-COPY shared/industry/prompts/translate-body.md /app/shared/industry/prompts/translate-body.md
-COPY shared/industry/prompts/translate-post.md /app/shared/industry/prompts/translate-post.md
-COPY shared/industry/prompts/report-period.md /app/shared/industry/prompts/report-period.md
-COPY shared/industry/prompts/report-period-sections.md /app/shared/industry/prompts/report-period-sections.md
-COPY shared/industry/prompts/report-period-no-sections.md /app/shared/industry/prompts/report-period-no-sections.md
+RUN mkdir -p /app/frontend/brand /app/backend-go/config/prompts
+COPY backend-go/config/changelog.json /app/backend-go/config/changelog.json
+COPY backend-go/config/public/ /app/backend-go/config/public/
+COPY backend-go/config/model-catalog.json /app/backend-go/config/model-catalog.json
+COPY frontend/brand/ /app/frontend/brand/
+COPY backend-go/config/publication.json /app/backend-go/config/publication.json
+COPY backend-go/config/entities.json /app/backend-go/config/entities.json
+COPY backend-go/config/categories.json /app/backend-go/config/categories.json
+COPY backend-go/config/vocabulary.json /app/backend-go/config/vocabulary.json
+COPY backend-go/config/selection.json /app/backend-go/config/selection.json
+COPY backend-go/config/reporting.json /app/backend-go/config/reporting.json
+COPY backend-go/config/topics.json /app/backend-go/config/topics.json
+COPY backend-go/config/prompts/ /app/backend-go/config/prompts/
 RUN CGO_ENABLED=0 go build -tags nodynamic -trimpath -ldflags="-s -w" -o /out/myhot-api ./cmd/api \
- && CGO_ENABLED=0 go build -tags nodynamic -trimpath -ldflags="-s -w" -o /out/myhot-worker ./cmd/worker
+ && CGO_ENABLED=0 go build -tags nodynamic -trimpath -ldflags="-s -w" -o /out/myhot-worker ./cmd/worker \
+ && CGO_ENABLED=0 go build -tags nodynamic -trimpath -ldflags="-s -w" -o /out/eval-relations ./cmd/eval-relations \
+ && CGO_ENABLED=0 go build -tags nodynamic -trimpath -ldflags="-s -w" -o /out/eval-selection ./cmd/eval-selection \
+ && CGO_ENABLED=0 go build -tags nodynamic -trimpath -ldflags="-s -w" -o /out/eval-story-digests ./cmd/eval-story-digests
 
 FROM ${ALPINE_IMAGE}
 ARG ALPINE_MIRROR=dl-cdn.alpinelinux.org
 RUN sed -i "s|dl-cdn.alpinelinux.org|${ALPINE_MIRROR}|g" /etc/apk/repositories \
  && apk add --no-cache ca-certificates tzdata postgresql17-client tar
 WORKDIR /app
-RUN mkdir -p /app/shared/site /app/shared/site/brand /app/shared/industry /app/shared/industry/prompts /data && chown 1000:1000 /data
-COPY --from=build /app/shared/site/changelog.json /app/shared/site/changelog.json
-COPY --from=build /app/shared/site/public/ /app/shared/site/public/
-COPY --from=build /app/shared/site/model-catalog.json /app/shared/site/model-catalog.json
-COPY --from=build /app/shared/site/publication.json /app/shared/site/publication.json
-COPY --from=build /app/shared/site/brand/ /app/shared/site/brand/
-COPY --from=build /app/shared/industry/entities.json /app/shared/industry/entities.json
-COPY --from=build /app/shared/industry/categories.json /app/shared/industry/categories.json
-COPY --from=build /app/shared/industry/vocabulary.json /app/shared/industry/vocabulary.json
-COPY --from=build /app/shared/industry/selection.json /app/shared/industry/selection.json
-COPY --from=build /app/shared/industry/reporting.json /app/shared/industry/reporting.json
-COPY --from=build /app/shared/industry/topics.json /app/shared/industry/topics.json
-COPY --from=build /app/shared/industry/prompts/translate-body.md /app/shared/industry/prompts/translate-body.md
-COPY --from=build /app/shared/industry/prompts/translate-post.md /app/shared/industry/prompts/translate-post.md
-COPY --from=build /app/shared/industry/prompts/report-period.md /app/shared/industry/prompts/report-period.md
-COPY --from=build /app/shared/industry/prompts/report-period-sections.md /app/shared/industry/prompts/report-period-sections.md
-COPY --from=build /app/shared/industry/prompts/report-period-no-sections.md /app/shared/industry/prompts/report-period-no-sections.md
+RUN mkdir -p /app/frontend/brand /app/backend-go/config/prompts /data && chown 1000:1000 /data
+COPY --from=build /app/backend-go/config/changelog.json /app/backend-go/config/changelog.json
+COPY --from=build /app/backend-go/config/public/ /app/backend-go/config/public/
+COPY --from=build /app/backend-go/config/model-catalog.json /app/backend-go/config/model-catalog.json
+COPY --from=build /app/backend-go/config/publication.json /app/backend-go/config/publication.json
+COPY --from=build /app/frontend/brand/ /app/frontend/brand/
+COPY --from=build /app/backend-go/config/entities.json /app/backend-go/config/entities.json
+COPY --from=build /app/backend-go/config/categories.json /app/backend-go/config/categories.json
+COPY --from=build /app/backend-go/config/vocabulary.json /app/backend-go/config/vocabulary.json
+COPY --from=build /app/backend-go/config/selection.json /app/backend-go/config/selection.json
+COPY --from=build /app/backend-go/config/reporting.json /app/backend-go/config/reporting.json
+COPY --from=build /app/backend-go/config/topics.json /app/backend-go/config/topics.json
+COPY --from=build /app/backend-go/config/prompts/ /app/backend-go/config/prompts/
 COPY --from=build /out/myhot-api /app/myhot-api
 COPY --from=build /out/myhot-worker /app/myhot-worker
+COPY --from=build /out/eval-relations /app/eval-relations
+COPY --from=build /out/eval-selection /app/eval-selection
+COPY --from=build /out/eval-story-digests /app/eval-story-digests
 USER 1000:1000
 EXPOSE 3002
 CMD ["/app/myhot-api"]

@@ -10,12 +10,14 @@ import { ActiveFilters, CategoryTabs, FeedBar, SearchField } from "../features/f
 import { PillTabs } from "../components/ui/Tabs";
 import { DayList, Pagination } from "../features/feed/DayList";
 import { EmptyState } from "../components/ui/Page";
-import { RingMark } from "@aihot/site/brand/Logo.tsx";
+import { RingMark } from "../../brand/Logo.tsx";
 import { IconSearch } from "../components/icons";
 import { PhoneBar } from "../components/shell/PhoneBar";
 import { isPhone, type Screen } from "../components/shell/screens";
 import { openSearch } from "../features/search/SearchOverlay";
 import { addRecentSearch } from "../lib/local-state";
+import { userApiGet } from "../lib/user-api.server";
+import type { Catalog } from "../lib/catalog";
 
 export const handle: Screen = { tab: "featured", name: "全部" };
 
@@ -23,12 +25,13 @@ const ALL_TITLE = subjectAfter("全部", "动态");
 
 export async function loader({ request }: Route.LoaderArgs) {
   const url = new URL(request.url);
+  const catalog = await userApiGet<Catalog>(request, "/api/me/catalog");
   const q = url.searchParams.get("q")?.trim().slice(0, 200) || null;
   const tab = url.searchParams.get("tab") === "relevance" ? "relevance" : null;
   // Older deep-paging parameters (deep, anchorAt) still open a normal page.
   const page = Math.min(Math.max(Number.parseInt(url.searchParams.get("page") ?? "1", 10) || 1, 1), 50);
   const data = await loadOr404<PoolResponse>(
-    listPath("/api/site/pool", { ...filterParams(readFilters(url.searchParams)), q, tab, page: page > 1 ? page : null }),
+    listPath("/api/site/pool", { ...filterParams(readFilters(url.searchParams, catalog.categories.map(({ key }) => key))), q, tab, page: page > 1 ? page : null }),
     // The busy page keeps the search, so it can be tried again as it was.
     { request, signal: request.signal, busyRedirect: `/all/search-busy${url.search}` },
   );

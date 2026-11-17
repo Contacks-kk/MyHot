@@ -338,7 +338,7 @@ export interface SiteMeta {
   changelogVersion: string;
 }
 
-/** One entry of the site's changelog (shared/site/changelog.json), newest first. */
+/** One entry of the site's changelog (backend-go/config/changelog.json), newest first. */
 export interface ChangelogRelease {
   date: string;
   time: string;

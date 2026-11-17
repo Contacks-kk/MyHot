@@ -2,17 +2,22 @@ import { motion } from "motion/react";
 import { SITE } from "@aihot/site";
 import { NavLink, Outlet, useLocation, useNavigation, type ShouldRevalidateFunction } from "react-router";
 import type { Route } from "./+types/layout";
-import { RingMark } from "@aihot/site/brand/Logo.tsx";
+import { RingMark } from "../../../brand/Logo.tsx";
 import { NavigationProgress } from "../../components/shell/Chrome";
 import type { AdminMe, AdminNavCounts } from "@aihot/contracts/admin";
 import { Toaster } from "../../features/admin/toast";
 import { adminGet } from "../../lib/admin.server";
+import type { Catalog } from "../../lib/catalog";
 import type { AdminNavEntry } from "../../modules";
 import { webModules } from "../../site-modules";
 
 export async function loader({ request }: Route.LoaderArgs) {
-  const [me, counts] = await Promise.all([adminGet<AdminMe>(request, "/api/admin/me"), adminGet<AdminNavCounts>(request, "/api/admin/nav-counts").catch((): AdminNavCounts => ({}))]);
-  return { me, counts };
+  const [me, counts, catalog] = await Promise.all([
+    adminGet<AdminMe>(request, "/api/admin/me"),
+    adminGet<AdminNavCounts>(request, "/api/admin/nav-counts").catch((): AdminNavCounts => ({})),
+    adminGet<Catalog>(request, "/api/admin/catalog"),
+  ]);
+  return { me, counts, catalog };
 }
 
 // Counts follow every navigation and command; the identity does not change.
@@ -64,7 +69,7 @@ function NavItem({ to, label, count, tone }: { to: string; label: string; count?
 }
 
 export default function AdminLayout({ loaderData }: Route.ComponentProps) {
-  const { me, counts } = loaderData;
+  const { me, counts, catalog } = loaderData;
   const navigation = useNavigation();
   const location = useLocation();
   const groups = nav();
@@ -120,7 +125,7 @@ export default function AdminLayout({ loaderData }: Route.ComponentProps) {
           </nav>
         </div>
         <main className="min-w-0 flex-1">
-          <Outlet />
+          <Outlet context={catalog} />
         </main>
       </div>
       <Toaster />

@@ -18,7 +18,7 @@ type Entity struct {
 func LoadEntities() (map[string]Entity, error) {
 	path := os.Getenv("INDUSTRY_ENTITIES_FILE")
 	if path == "" {
-		for _, candidate := range []string{filepath.Join("shared", "industry", "entities.json"), filepath.Join("..", "shared", "industry", "entities.json"), filepath.Join("/app", "shared", "industry", "entities.json")} {
+		for _, candidate := range []string{filepath.Join("backend-go", "config", "entities.json"), filepath.Join("config", "entities.json"), filepath.Join("..", "..", "config", "entities.json"), filepath.Join("/app", "backend-go", "config", "entities.json")} {
 			if _, err := os.Stat(candidate); err == nil {
 				path = candidate
 				break
@@ -26,7 +26,7 @@ func LoadEntities() (map[string]Entity, error) {
 		}
 	}
 	if path == "" {
-		return nil, errors.New("shared/industry/entities.json not found")
+		return nil, errors.New("backend-go/config/entities.json not found")
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -48,7 +48,7 @@ type EntityEntry struct {
 func LoadEntityEntries() ([]EntityEntry, error) {
 	path := os.Getenv("INDUSTRY_ENTITIES_FILE")
 	if path == "" {
-		for _, candidate := range []string{filepath.Join("shared", "industry", "entities.json"), filepath.Join("..", "shared", "industry", "entities.json"), filepath.Join("/app", "shared", "industry", "entities.json")} {
+		for _, candidate := range []string{filepath.Join("backend-go", "config", "entities.json"), filepath.Join("config", "entities.json"), filepath.Join("..", "..", "config", "entities.json"), filepath.Join("/app", "backend-go", "config", "entities.json")} {
 			if _, err := os.Stat(candidate); err == nil {
 				path = candidate
 				break
@@ -56,7 +56,7 @@ func LoadEntityEntries() ([]EntityEntry, error) {
 		}
 	}
 	if path == "" {
-		return nil, errors.New("shared/industry/entities.json not found")
+		return nil, errors.New("backend-go/config/entities.json not found")
 	}
 	file, err := os.Open(path)
 	if err != nil {
@@ -66,7 +66,7 @@ func LoadEntityEntries() ([]EntityEntry, error) {
 	decoder := json.NewDecoder(file)
 	opening, err := decoder.Token()
 	if err != nil || opening != json.Delim('{') {
-		return nil, errors.New("shared/industry/entities.json must be an object")
+		return nil, errors.New("backend-go/config/entities.json must be an object")
 	}
 	entries := make([]EntityEntry, 0)
 	for decoder.More() {
@@ -76,7 +76,7 @@ func LoadEntityEntries() ([]EntityEntry, error) {
 		}
 		id, ok := token.(string)
 		if !ok || strings.TrimSpace(id) == "" {
-			return nil, errors.New("shared/industry/entities.json contains an invalid entity id")
+			return nil, errors.New("backend-go/config/entities.json contains an invalid entity id")
 		}
 		var entity Entity
 		if err := decoder.Decode(&entity); err != nil {
@@ -114,7 +114,7 @@ type Category struct {
 func LoadCategories() ([]Category, error) {
 	path := os.Getenv("INDUSTRY_CATEGORIES_FILE")
 	if path == "" {
-		for _, candidate := range []string{filepath.Join("shared", "industry", "categories.json"), filepath.Join("..", "shared", "industry", "categories.json"), filepath.Join("/app", "shared", "industry", "categories.json")} {
+		for _, candidate := range []string{filepath.Join("backend-go", "config", "categories.json"), filepath.Join("config", "categories.json"), filepath.Join("..", "..", "config", "categories.json"), filepath.Join("/app", "backend-go", "config", "categories.json")} {
 			if _, err := os.Stat(candidate); err == nil {
 				path = candidate
 				break
@@ -122,7 +122,7 @@ func LoadCategories() ([]Category, error) {
 		}
 	}
 	if path == "" {
-		return nil, errors.New("shared/industry/categories.json not found")
+		return nil, errors.New("backend-go/config/categories.json not found")
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -140,16 +140,16 @@ func LoadCategories() ([]Category, error) {
 		return nil, err
 	}
 	if len(categories) == 0 {
-		return nil, errors.New("shared/industry/categories.json has no categories")
+		return nil, errors.New("backend-go/config/categories.json has no categories")
 	}
 	loaded := make([]Category, 0, len(categories))
 	seen := make(map[string]struct{}, len(categories))
 	for _, category := range categories {
 		if strings.TrimSpace(category.Key) == "" {
-			return nil, errors.New("shared/industry/categories.json has an empty category key")
+			return nil, errors.New("backend-go/config/categories.json has an empty category key")
 		}
 		if _, exists := seen[category.Key]; exists {
-			return nil, errors.New("shared/industry/categories.json has duplicate category keys")
+			return nil, errors.New("backend-go/config/categories.json has duplicate category keys")
 		}
 		seen[category.Key] = struct{}{}
 		loaded = append(loaded, Category{Key: category.Key, Label: category.Label, FeedLabel: category.FeedLabel, Section: category.Section, Guide: category.Guide, Commentary: category.Commentary})

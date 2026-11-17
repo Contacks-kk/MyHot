@@ -1,6 +1,7 @@
 package translations
 
 import (
+	"aihot/backend-go/internal/promptpath"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -76,10 +77,10 @@ type PromptFiles struct {
 }
 
 func LoadPromptFiles() (PromptFiles, error) {
-	if configured := strings.TrimSpace(os.Getenv("INDUSTRY_PROMPT_DIR")); configured != "" {
+	if configured := promptpath.Configured(); configured != "" {
 		return readPromptFiles(configured)
 	}
-	for _, candidate := range []string{filepath.Join("shared", "industry", "prompts"), filepath.Join("..", "shared", "industry", "prompts"), filepath.Join("/app", "shared", "industry", "prompts")} {
+	for _, candidate := range []string{filepath.Join("backend-go", "config", "prompts"), filepath.Join("config", "prompts"), filepath.Join("..", "..", "config", "prompts"), filepath.Join("..", "backend-go", "config", "prompts"), filepath.Join("/app", "backend-go", "config", "prompts")} {
 		files, err := readPromptFiles(candidate)
 		if err == nil {
 			return files, nil

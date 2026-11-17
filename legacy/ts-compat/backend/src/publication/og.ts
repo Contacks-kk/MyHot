@@ -1,6 +1,6 @@
 // Share images only need public title/summary metadata. Keep the same page visibility rule without
 // loading bodies, translations, related stories or signed media that never appear on these cards.
-import { CATEGORY_LABELS, type CategoryKey } from '@aihot/contracts/taxonomy';
+import { CATEGORY_LABELS, type CategoryKey } from '@aihot/backend/publication/category-contract';
 import { beijingDate } from '@aihot/contracts/time';
 import { ITEM_COPY, withSubject } from '@aihot/site';
 import type { OgCard } from '../media/og.ts';

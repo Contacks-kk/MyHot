@@ -39,7 +39,7 @@ type Capability struct {
 func LoadCatalog() (Catalog, error) {
 	path := strings.TrimSpace(os.Getenv("MODEL_CATALOG_FILE"))
 	if path == "" {
-		for _, candidate := range []string{filepath.Join("shared", "site", "model-catalog.json"), filepath.Join("..", "shared", "site", "model-catalog.json"), filepath.Join("/app", "shared", "site", "model-catalog.json")} {
+		for _, candidate := range []string{filepath.Join("backend-go", "config", "model-catalog.json"), filepath.Join("config", "model-catalog.json"), filepath.Join("..", "..", "config", "model-catalog.json"), filepath.Join("/app", "backend-go", "config", "model-catalog.json")} {
 			if _, err := os.Stat(candidate); err == nil {
 				path = candidate
 				break
@@ -47,7 +47,7 @@ func LoadCatalog() (Catalog, error) {
 		}
 	}
 	if path == "" {
-		return Catalog{}, errors.New("shared/site/model-catalog.json not found")
+		return Catalog{}, errors.New("backend-go/config/model-catalog.json not found")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -72,7 +72,7 @@ func LoadCatalog() (Catalog, error) {
 		}
 		key, ok := token.(string)
 		if !ok {
-			return Catalog{}, errors.New("shared/site/model-catalog.json has an invalid preset key")
+			return Catalog{}, errors.New("backend-go/config/model-catalog.json has an invalid preset key")
 		}
 		catalog.PresetOrder = append(catalog.PresetOrder, key)
 		var preset Preset
@@ -82,7 +82,7 @@ func LoadCatalog() (Catalog, error) {
 		catalog.Presets[key] = preset
 	}
 	if len(catalog.Capabilities) == 0 {
-		return Catalog{}, errors.New("shared/site/model-catalog.json has no capabilities")
+		return Catalog{}, errors.New("backend-go/config/model-catalog.json has no capabilities")
 	}
 	if catalog.Presets == nil {
 		catalog.Presets = map[string]Preset{}
@@ -90,19 +90,19 @@ func LoadCatalog() (Catalog, error) {
 	seen := make(map[string]struct{}, len(catalog.Capabilities))
 	for _, capability := range catalog.Capabilities {
 		if strings.TrimSpace(capability.Key) == "" || strings.TrimSpace(capability.Env) == "" || len(capability.Purposes) == 0 {
-			return Catalog{}, errors.New("shared/site/model-catalog.json has an incomplete capability")
+			return Catalog{}, errors.New("backend-go/config/model-catalog.json has an incomplete capability")
 		}
 		if _, ok := seen[capability.Key]; ok {
-			return Catalog{}, errors.New("shared/site/model-catalog.json has duplicate capability keys")
+			return Catalog{}, errors.New("backend-go/config/model-catalog.json has duplicate capability keys")
 		}
 		seen[capability.Key] = struct{}{}
 		if !catalog.validModel(capability.Default) {
-			return Catalog{}, errors.New("shared/site/model-catalog.json references an unknown default model")
+			return Catalog{}, errors.New("backend-go/config/model-catalog.json references an unknown default model")
 		}
 	}
 	for key, value := range catalog.Defaults {
 		if _, ok := seen[key]; !ok || !catalog.validModel(value) {
-			return Catalog{}, errors.New("shared/site/model-catalog.json has an invalid capability default")
+			return Catalog{}, errors.New("backend-go/config/model-catalog.json has an invalid capability default")
 		}
 	}
 	return catalog, nil

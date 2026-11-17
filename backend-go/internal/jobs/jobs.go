@@ -12,6 +12,7 @@ import (
 
 	"aihot/backend-go/internal/admindeliveries"
 	"aihot/backend-go/internal/adminmodels"
+	"aihot/backend-go/internal/adminselectbench"
 	"aihot/backend-go/internal/articlebody"
 	backupdomain "aihot/backend-go/internal/backup"
 	"aihot/backend-go/internal/collector"
@@ -711,12 +712,66 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 		},
 		SiteName: cfg.SiteName, SiteURL: cfg.SiteURL, CategoryLabels: contentCategoryLabels,
 	}, admindeliveries.HTTPWebhookSender{}, admindeliveries.HTTPShareImageWarmer{
-		URL: cfg.WebOGPrewarmURL, Secret: cfg.WebOGPrewarmSecret,
+		CategoryLabels: contentCategoryLabels,
+		URL:            cfg.WebOGPrewarmURL, Secret: cfg.WebOGPrewarmSecret,
 	})
 	selectedNotifyWorker := &SelectedNotifyWorker{Service: contentDeliveryService}
 	receiptRecoveryService := receiptrecovery.NewService(receiptrecovery.NewRepository(orm))
 	receiptRecoveryWorker := &ReceiptRecoveryWorker{Service: receiptRecoveryService, DB: orm}
 	workers := river.NewWorkers()
+	if cfg.ModelCallsEnabled {
+		prompts, err := editorial.LoadPrompts(cfg.SiteName)
+		if err != nil {
+			return nil, err
+		}
+		vocabulary, err := editorial.LoadVocabulary()
+		if err != nil {
+			return nil, err
+		}
+		selection, err := editorial.LoadSelectionRules()
+		if err != nil {
+			return nil, err
+		}
+		categories, err := interests.LoadCategories()
+		if err != nil {
+			return nil, err
+		}
+		entityEntries, err := interests.LoadEntityEntries()
+		if err != nil {
+			return nil, err
+		}
+		selectionAnalysis, err := editorial.NewAnalysisService(sharedModelClient, prompts, vocabulary, categories, entityEntries, selection, nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		selectionEvaluation := editorial.NewSelectionEvaluationService(
+			selectionAnalysis,
+			receipts.NewRepository(orm),
+			append([]string{"default"}, modelCatalog.PresetOrder...),
+		)
+		river.AddWorker(workers, &SelectionEvaluationWorker{
+			Service:  selectionEvaluation,
+			Models:   sharedModelClient,
+			Importer: adminselectbench.NewService(adminselectbench.NewRepository(orm)),
+			DB:       orm,
+			Enabled:  true,
+		})
+		evaluation := grouping.NewRelationEvaluationService(
+			grouping.NewJudgeService(sharedModelClient, prompts),
+			grouping.NewRepository(orm),
+			append([]string{"default"}, modelCatalog.PresetOrder...),
+		)
+		river.AddWorker(workers, &RelationEvaluationWorker{Service: evaluation, Models: sharedModelClient, DB: orm})
+		digestWorker := &StoryDigestEvaluationWorker{Enabled: cfg.StoryDigestEnabled, Models: sharedModelClient, DB: orm, Usage: receipts.NewRepository(orm)}
+		if cfg.StoryDigestEnabled {
+			digestPrompts, err := storydigest.LoadPrompts()
+			if err != nil {
+				return nil, err
+			}
+			digestWorker.Service = storydigest.NewEvaluationService(sharedModelClient, prompts, digestPrompts, cfg.SiteName, append([]string{"default"}, modelCatalog.PresetOrder...))
+		}
+		river.AddWorker(workers, digestWorker)
+	}
 	var storyDigestScanWorker *StoryDigestScanWorker
 	var sharedPipelineScanWorker *SharedPipelineScanWorker
 	var sourceRepublishScanWorker *SourceRepublishScanWorker
@@ -867,6 +922,9 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 		}, &river.PeriodicJobOpts{ID: "myhot-backup-scan", RunOnStart: true}))
 	}
 	queues := map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: cfg.UserJobMaxWorkers}}
+	if cfg.ModelCallsEnabled {
+		queues["evaluations"] = river.QueueConfig{MaxWorkers: 1}
+	}
 	if cfg.GoMediaPrepareEnabled {
 		queues["media"] = river.QueueConfig{MaxWorkers: 1}
 	}

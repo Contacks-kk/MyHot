@@ -95,7 +95,7 @@ type file struct {
 func LoadCatalog(entities map[string]interests.Entity) ([]Group, []Definition, error) {
 	path := os.Getenv("INDUSTRY_TOPICS_FILE")
 	if path == "" {
-		for _, candidate := range []string{filepath.Join("shared", "industry", "topics.json"), filepath.Join("..", "shared", "industry", "topics.json"), filepath.Join("/app", "shared", "industry", "topics.json")} {
+		for _, candidate := range []string{filepath.Join("backend-go", "config", "topics.json"), filepath.Join("config", "topics.json"), filepath.Join("..", "..", "config", "topics.json"), filepath.Join("/app", "backend-go", "config", "topics.json")} {
 			if _, err := os.Stat(candidate); err == nil {
 				path = candidate
 				break
@@ -103,7 +103,7 @@ func LoadCatalog(entities map[string]interests.Entity) ([]Group, []Definition, e
 		}
 	}
 	if path == "" {
-		return nil, nil, errors.New("shared/industry/topics.json not found")
+		return nil, nil, errors.New("backend-go/config/topics.json not found")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -114,15 +114,15 @@ func LoadCatalog(entities map[string]interests.Entity) ([]Group, []Definition, e
 		return nil, nil, err
 	}
 	if len(catalog.Groups) == 0 || len(catalog.Topics) == 0 {
-		return nil, nil, errors.New("shared/industry/topics.json has no groups or topics")
+		return nil, nil, errors.New("backend-go/config/topics.json has no groups or topics")
 	}
 	groups := make(map[string]struct{}, len(catalog.Groups))
 	for _, group := range catalog.Groups {
 		if group.Key == "" || group.Name == "" {
-			return nil, nil, errors.New("shared/industry/topics.json has an incomplete group")
+			return nil, nil, errors.New("backend-go/config/topics.json has an incomplete group")
 		}
 		if _, exists := groups[group.Key]; exists {
-			return nil, nil, errors.New("shared/industry/topics.json has a duplicate group")
+			return nil, nil, errors.New("backend-go/config/topics.json has a duplicate group")
 		}
 		groups[group.Key] = struct{}{}
 	}
@@ -130,13 +130,13 @@ func LoadCatalog(entities map[string]interests.Entity) ([]Group, []Definition, e
 	topics := make([]Definition, 0, len(catalog.Topics))
 	for position, raw := range catalog.Topics {
 		if raw.Slug == "" || raw.Name == "" || raw.Definition == "" {
-			return nil, nil, errors.New("shared/industry/topics.json has an incomplete topic")
+			return nil, nil, errors.New("backend-go/config/topics.json has an incomplete topic")
 		}
 		if _, exists := seen[raw.Slug]; exists {
-			return nil, nil, errors.New("shared/industry/topics.json has a duplicate topic slug")
+			return nil, nil, errors.New("backend-go/config/topics.json has a duplicate topic slug")
 		}
 		if _, exists := groups[raw.Group]; !exists {
-			return nil, nil, errors.New("shared/industry/topics.json topic references an unknown group")
+			return nil, nil, errors.New("backend-go/config/topics.json topic references an unknown group")
 		}
 		seen[raw.Slug] = struct{}{}
 		tags := append([]string(nil), raw.Tags...)

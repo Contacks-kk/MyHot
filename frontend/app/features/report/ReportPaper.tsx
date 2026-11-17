@@ -19,6 +19,7 @@ import { Nameplate } from "./Nameplate";
 import { IssueDots } from "./IssueDots";
 import { monthDay } from "../../lib/format";
 import { EDITION, KIND_LABEL, MOTTO, dateLine, dateMark, headline, metricItems, neighbourLabel, reportPath, shortDay } from "./format";
+import { useUserCatalog } from "../../lib/catalog";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 const keyOf = (c: ReportCitation) => c.itemId ?? c.title;
@@ -28,6 +29,7 @@ const LINK = "inline-flex min-h-7 items-center gap-0.5 font-medium transition-co
 const before = (phrase: string, noun: string) => phrase.slice(0, -noun.length);
 
 function Masthead({ report, index }: { report: ReportDetail; index: ReportNavigationEntry[] }) {
+  const catalog = useUserCatalog();
   const mark = dateMark(report.kind, report.key);
   const label = KIND_LABEL[report.kind];
   return (
@@ -64,7 +66,7 @@ function Masthead({ report, index }: { report: ReportDetail; index: ReportNaviga
       </div>
 
       <div className="flex flex-wrap items-baseline gap-x-8 gap-y-1.5 border-y border-line-strong py-3">
-        {metricItems(report.metrics).map((m) => (
+        {metricItems(report.metrics, catalog.releaseUnit).map((m) => (
           <span key={m.unit} className="inline-flex items-baseline gap-1.5 whitespace-nowrap">
             <span className="num text-[22px] font-bold leading-none tracking-[-0.02em] text-ink @[880px]:text-[24px]">{m.value}</span>
             <span className="text-[12px] text-ink-4">{m.unit}</span>

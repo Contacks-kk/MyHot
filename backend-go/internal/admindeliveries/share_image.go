@@ -22,14 +22,15 @@ type shareImageSource struct {
 }
 
 type shareImageItem struct {
-	ID         string           `json:"id"`
-	Title      string           `json:"title"`
-	Summary    *string          `json:"summary"`
-	TimelineAt string           `json:"timelineAt"`
-	Category   *string          `json:"category"`
-	Score      *int             `json:"score"`
-	Selected   bool             `json:"selected"`
-	Source     shareImageSource `json:"source"`
+	ID            string           `json:"id"`
+	Title         string           `json:"title"`
+	Summary       *string          `json:"summary"`
+	TimelineAt    string           `json:"timelineAt"`
+	Category      *string          `json:"category"`
+	CategoryLabel string           `json:"categoryLabel,omitempty"`
+	Score         *int             `json:"score"`
+	Selected      bool             `json:"selected"`
+	Source        shareImageSource `json:"source"`
 }
 
 type shareImageRequest struct {
@@ -40,9 +41,10 @@ type shareImageRequest struct {
 // HTTPShareImageWarmer asks the Web presentation process to render the article's Open Graph image.
 // The card data is signed so this private rendering endpoint cannot be used by public callers.
 type HTTPShareImageWarmer struct {
-	URL    string
-	Secret string
-	Client *http.Client
+	URL            string
+	Secret         string
+	Client         *http.Client
+	CategoryLabels map[string]string
 }
 
 func (w HTTPShareImageWarmer) Warm(ctx context.Context, content SelectedContent) error {
@@ -52,6 +54,9 @@ func (w HTTPShareImageWarmer) Warm(ctx context.Context, content SelectedContent)
 	item := shareImageItem{ID: content.ArticleID, Title: content.Title, Summary: content.Summary,
 		TimelineAt: content.TimelineAt.In(beijingLocation()).Format(time.RFC3339Nano), Category: content.Category,
 		Selected: content.Selected, Source: shareImageSource{Name: publication.PublicSourceName(content.SourceName)}}
+	if content.Category != nil {
+		item.CategoryLabel = w.CategoryLabels[*content.Category]
+	}
 	if content.Selected && content.Score != nil {
 		score := int(math.Round(*content.Score))
 		item.Score = &score

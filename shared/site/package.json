@@ -7,9 +7,6 @@
     ".": "./site.ts",
     "./models": "./models.ts",
     "./modules": "./modules/index.ts",
-    "./modules/server": "./modules/server.ts",
-    "./modules/web": "./modules/web.ts",
-    "./pages/*": "./pages/*",
-    "./brand/*": "./brand/*"
+    "./modules/server": "./modules/server.ts"
   }
 }

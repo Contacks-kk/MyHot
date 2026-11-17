@@ -1,5 +1,5 @@
 import { POLICY, SITE } from "@aihot/site";
-import copy from "@aihot/site/pages/privacy.md?raw";
+import copy from "../content/privacy.md?raw";
 import { privatePageHeaders } from "../lib/api.server";
 import { pageMeta } from "../lib/seo";
 import { prepareCopy } from "../lib/site-copy";

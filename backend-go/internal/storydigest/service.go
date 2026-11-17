@@ -1,6 +1,7 @@
 package storydigest
 
 import (
+	"aihot/backend-go/internal/promptpath"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -108,11 +109,11 @@ type Result struct {
 }
 
 func LoadPrompts() (Prompts, error) {
-	directory := strings.TrimSpace(os.Getenv("INDUSTRY_PROMPT_DIR"))
+	directory := promptpath.Configured()
 	if directory != "" {
 		return readPrompts(directory)
 	}
-	for _, candidate := range []string{filepath.Join("shared", "industry", "prompts"), filepath.Join("..", "shared", "industry", "prompts"), filepath.Join("/app", "shared", "industry", "prompts")} {
+	for _, candidate := range []string{filepath.Join("backend-go", "config", "prompts"), filepath.Join("config", "prompts"), filepath.Join("..", "..", "config", "prompts"), filepath.Join("..", "backend-go", "config", "prompts"), filepath.Join("/app", "backend-go", "config", "prompts")} {
 		prompts, err := readPrompts(candidate)
 		if err == nil {
 			return prompts, nil

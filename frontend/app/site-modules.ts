@@ -1,7 +1,8 @@
-// The site's modules on the web (shared/site/modules/web.ts). Shared engine files read them where they draw them,
+// The site's modules on the web. Shared engine files read them where they draw them,
 // not when they are imported, so a module's code may import any engine file.
-import { WEB_MODULES } from "@aihot/site/modules/web";
 import type { Part, WebModule } from "./modules";
+
+const WEB_MODULES: readonly WebModule[] = [];
 
 export function webModules(): readonly WebModule[] {
   return WEB_MODULES;

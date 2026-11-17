@@ -1,14 +1,23 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLoaderData } from "react-router";
 import type { Route } from "./+types/home";
 import type { Screen } from "../components/shell/screens";
 import type { MediaView } from "@aihot/contracts/site";
 import { SITE } from "@aihot/site";
-import { IconArrowUpRight, IconBolt, IconPlug } from "../components/icons";
+import {
+  IconBolt,
+  IconChevronRight,
+  IconClose,
+  IconGrid,
+  IconHeart,
+  IconHistory,
+  IconPlug,
+  IconRss,
+} from "../components/icons";
 import { MediaThumbs } from "../features/feed/parts";
 import { userApiGet, userApiMe } from "../lib/user-api.server";
-import { postJSON } from "../features/account/common";
 import { SpiderLanding } from "../features/home/SpiderLanding";
+import { ThemeSwitch } from "../components/shell/ThemeSwitch";
 import { useLocalePreference } from "../lib/local-state";
 import { getDict } from "../lib/i18n";
 
@@ -156,72 +165,208 @@ function ResultList({ items }: { items: Card[] }) {
 /** Render the personal workspace or introduction page. */
 export default function Home() {
   const data = useLoaderData<typeof loader>();
-  const [message, setMessage] = useState("");
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [showFiltered, setShowFiltered] = useState(false);
   const locale = useLocalePreference();
   const dict = getDict(locale);
   const isEn = locale === "en";
 
+  // Handle escape key to close navigation drawer
+  useEffect(() => {
+    if (!drawerOpen) {
+      return;
+    }
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setDrawerOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [drawerOpen]);
+
   if (!data.user) {
     return <SpiderLanding registrationEnabled={data.registrationEnabled} />;
   }
 
-  async function logout() {
-    try {
-      await postJSON("/api/auth/logout", {}, data.csrfToken);
-      window.location.assign("/");
-    } catch (e) {
-      setMessage(e instanceof Error ? e.message : isEn ? "Logout failed" : "退出失败");
-    }
-  }
-
   return (
     <div className="pb-10">
-      <header className="mb-7 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <p className="mono text-[10px] uppercase tracking-[.16em] text-ink-4">MY PERSONAL BRIEFING</p>
-          <h1 className="editorial-title mt-1 text-[32px] font-semibold tracking-tight text-ink">
-            {dict.nav.featured}
-          </h1>
-          <p className="mt-1 text-[12px] text-ink-4">{data.user.email}</p>
+      <header className="mb-7 pt-5 sm:pt-6 lg:pt-0">
+        {/* 桌面端头部 */}
+        <div className="hidden lg:flex items-start justify-between gap-4">
+          <div>
+            <p className="mono text-[10px] uppercase tracking-[.16em] text-ink-4">
+              MY PERSONAL BRIEFING
+            </p>
+            <h1 className="editorial-title mt-1 text-[32px] font-semibold tracking-tight text-ink">
+              {dict.nav.featured}
+            </h1>
+            <p className="mt-1 text-[12px] text-ink-4">{data.user.email}</p>
+          </div>
         </div>
-        <button
-          className="rounded-full border border-line-strong px-3.5 py-2 text-[12px] text-ink-3 hover:bg-surface"
-          onClick={logout}
-        >
-          {dict.action.logout}
-        </button>
+
+        {/* 移动端头部（左侧为品牌标与抽屉柜按钮，右侧为“我的热点”标题与用户邮箱） */}
+        <div className="lg:hidden">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="mono text-[10px] uppercase tracking-[.16em] text-ink-4">
+                MY PERSONAL BRIEFING
+              </p>
+              <div className="mt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDrawerOpen(true);
+                  }}
+                  aria-expanded={drawerOpen}
+                  aria-label={isEn ? "Open navigation drawer" : "打开功能导航抽屉"}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-line-strong bg-surface px-3 py-1.5 text-[12.5px] font-medium text-ink shadow-sm transition-all hover:border-accent hover:text-accent active:scale-95"
+                >
+                  <IconGrid size={14} className="text-accent" />
+                  <span>{isEn ? "Menu" : "功能导航"}</span>
+                  <IconChevronRight size={13} className="text-ink-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="text-right">
+              <h1 className="editorial-title text-[24px] font-semibold tracking-tight text-ink">
+                {dict.nav.featured}
+              </h1>
+              <p className="mt-1 text-[11px] text-ink-4">{data.user.email}</p>
+            </div>
+          </div>
+        </div>
       </header>
 
-      <div className="mb-6 grid gap-3 sm:grid-cols-2">
-        <Link to="/model" className="card flex items-center gap-3 p-4 transition-colors hover:border-accent/40">
-          <span className="flex size-9 items-center justify-center rounded-full bg-accent-soft text-accent">
-            <IconPlug size={17} />
-          </span>
-          <span>
-            <span className="block text-[13px] font-semibold text-ink">{dict.nav.model}</span>
-            <span className="mt-0.5 block text-[11px] text-ink-4">
-              {data.modelConfigured
-                ? isEn ? "Configured · Click to manage" : "已配置，点击管理"
-                : isEn ? "Add your own OpenAI-compatible model" : "添加自己的 OpenAI 兼容模型"}
-            </span>
-          </span>
-          <IconArrowUpRight size={15} className="ml-auto text-ink-4" />
-        </Link>
-        <Link to="/interests" className="card flex items-center gap-3 p-4 transition-colors hover:border-accent/40">
-          <span className="flex size-9 items-center justify-center rounded-full bg-accent-soft text-accent">
-            <IconBolt size={17} />
-          </span>
-          <span>
-            <span className="block text-[13px] font-semibold text-ink">{dict.nav.interests}</span>
-            <span className="mt-0.5 block text-[11px] text-ink-4">
-              {data.interestsConfigured
-                ? isEn ? "Configured · Affects future articles" : "已设置，调整只影响新文章"
-                : isEn ? "Choose companies and keywords" : "选择公司实体和关键词"}
-            </span>
-          </span>
-          <IconArrowUpRight size={15} className="ml-auto text-ink-4" />
-        </Link>
+      {/* 移动端侧滑抽屉柜（Drawer Cabinet：点击从左向右滑出） */}
+      <div
+        className={`fixed inset-0 z-50 transition-opacity duration-300 lg:hidden ${
+          drawerOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+        }`}
+        aria-hidden={!drawerOpen}
+      >
+        {/* 背景遮罩 */}
+        <div
+          className="absolute inset-0 bg-black/40 backdrop-blur-[2px]"
+          onClick={() => {
+            setDrawerOpen(false);
+          }}
+        />
+
+        {/* 抽屉面板（从左侧向右滑入） */}
+        <aside
+          className={`absolute inset-y-0 left-0 flex w-[280px] max-w-[82vw] flex-col border-r border-line bg-surface shadow-2xl transition-transform duration-300 ease-out ${
+            drawerOpen ? "translate-x-0" : "-translate-x-full"
+          }`}
+        >
+          {/* 抽屉顶栏 */}
+          <div className="flex h-14 items-center justify-between border-b border-line px-4">
+            <div className="flex items-center gap-2">
+              <IconGrid size={16} className="text-accent" />
+              <span className="text-[14px] font-semibold text-ink">{isEn ? "Menu" : "功能导航"}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setDrawerOpen(false);
+              }}
+              aria-label={isEn ? "Close menu" : "关闭菜单"}
+              className="flex size-8 items-center justify-center rounded-full text-ink-3 transition-colors hover:bg-bg-sunk hover:text-ink"
+            >
+              <IconClose size={17} />
+            </button>
+          </div>
+
+          {/* 抽屉内部导航列表（模型配置、关注项、我的信源、历史归档、关于MyHOT） */}
+          <nav className="scrollbar-thin flex-1 overflow-y-auto px-3 py-4" aria-label="快捷导航抽屉">
+            <div className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink-4">
+              {dict.nav.workspace}
+            </div>
+            <div className="flex flex-col gap-1">
+              <Link
+                to="/model"
+                onClick={() => {
+                  setDrawerOpen(false);
+                }}
+                className="flex h-10 items-center gap-2.5 rounded-control px-2.5 text-[13.5px] font-medium text-ink-3 transition-colors hover:bg-bg-sunk hover:text-ink"
+              >
+                <span className="flex w-5 justify-center text-accent">
+                  <IconPlug size={17} />
+                </span>
+                <span>{dict.nav.model}</span>
+              </Link>
+              <Link
+                to="/interests"
+                onClick={() => {
+                  setDrawerOpen(false);
+                }}
+                className="flex h-10 items-center gap-2.5 rounded-control px-2.5 text-[13.5px] font-medium text-ink-3 transition-colors hover:bg-bg-sunk hover:text-ink"
+              >
+                <span className="flex w-5 justify-center text-accent">
+                  <IconGrid size={17} />
+                </span>
+                <span>{dict.nav.interests}</span>
+              </Link>
+              <Link
+                to="/sources"
+                onClick={() => {
+                  setDrawerOpen(false);
+                }}
+                className="flex h-10 items-center gap-2.5 rounded-control px-2.5 text-[13.5px] font-medium text-ink-3 transition-colors hover:bg-bg-sunk hover:text-ink"
+              >
+                <span className="flex w-5 justify-center text-accent">
+                  <IconRss size={17} />
+                </span>
+                <span>{dict.nav.sources}</span>
+              </Link>
+            </div>
+
+            <div className="mt-4 border-t border-line/60 px-2 pb-1.5 pt-3 text-[11px] font-semibold uppercase tracking-wider text-ink-4">
+              {dict.nav.historyAndAbout}
+            </div>
+            <div className="flex flex-col gap-1">
+              <Link
+                to="/history"
+                onClick={() => {
+                  setDrawerOpen(false);
+                }}
+                className="flex h-10 items-center gap-2.5 rounded-control px-2.5 text-[13.5px] font-medium text-ink-3 transition-colors hover:bg-bg-sunk hover:text-ink"
+              >
+                <span className="flex w-5 justify-center text-accent">
+                  <IconHistory size={17} />
+                </span>
+                <span>{dict.nav.history}</span>
+              </Link>
+              <Link
+                to="/about"
+                onClick={() => {
+                  setDrawerOpen(false);
+                }}
+                className="flex h-10 items-center gap-2.5 rounded-control px-2.5 text-[13.5px] font-medium text-ink-3 transition-colors hover:bg-bg-sunk hover:text-ink"
+              >
+                <span className="flex w-5 justify-center text-accent">
+                  <IconHeart size={17} />
+                </span>
+                <span>{dict.nav.about}</span>
+              </Link>
+            </div>
+          </nav>
+
+          {/* 抽屉底栏：外观主题切换按钮 */}
+          <div className="border-t border-line bg-surface/60 px-4 py-3.5">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[13px] font-medium text-ink-3">
+                {dict.shell.appearance}
+              </span>
+              <ThemeSwitch className="w-[112px]" />
+            </div>
+          </div>
+        </aside>
       </div>
 
       {(!data.modelConfigured || !data.interestsConfigured) && (
@@ -341,8 +486,6 @@ export default function Home() {
         </div>
         <ResultList items={data.feed.slice(0, 10)} />
       </section>
-
-      {message && <p role="alert" className="mt-4 text-[12px] text-hot">{message}</p>}
     </div>
   );
 }

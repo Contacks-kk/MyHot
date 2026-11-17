@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router";
 import { SITE } from "@aihot/site";
-import { Wordmark } from "@aihot/site/brand/Logo.tsx";
+import { Wordmark } from "../../../brand/Logo.tsx";
 
 export function AccountFrame({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return (

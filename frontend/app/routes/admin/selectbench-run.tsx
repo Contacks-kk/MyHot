@@ -1,7 +1,7 @@
 import { SITE } from "@aihot/site";
 import { Fragment, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
-import { CATEGORY_LABELS } from "@aihot/contracts/taxonomy";
+import { useAdminCatalog } from "../../lib/catalog";
 import type { Route } from "./+types/selectbench-run";
 import type { AdminSelectBenchCases, AdminSelectBenchDecision } from "@aihot/contracts/admin";
 import { adminGet } from "../../lib/admin.server";
@@ -30,6 +30,8 @@ function verdict(d: AdminSelectBenchDecision | undefined, gold: string) {
 }
 
 export default function SelectBenchRun({ loaderData: d }: Route.ComponentProps) {
+  const catalog = useAdminCatalog();
+  const categoryLabels = Object.fromEntries(catalog.categories.map(({ key, label }) => [key, label]));
   const [sp] = useSearchParams();
   const navigate = useNavigate();
   const [open, setOpen] = useState<string | null>(null);
@@ -111,7 +113,7 @@ export default function SelectBenchRun({ loaderData: d }: Route.ComponentProps) 
                               const x = r.by_model[m];
                               return (
                                 <div key={m} className="rounded-control bg-surface p-3 ring-1 ring-line">
-                                  <div className="mb-1 flex items-center justify-between text-[12px] text-ink-3"><span className="font-medium text-ink-2">{m}</span>{x?.category && <span>{CATEGORY_LABELS[x.category as keyof typeof CATEGORY_LABELS] ?? x.category}</span>}</div>
+                                  <div className="mb-1 flex items-center justify-between text-[12px] text-ink-3"><span className="font-medium text-ink-2">{m}</span>{x?.category && <span>{categoryLabels[x.category] ?? x.category}</span>}</div>
                                   <div className="text-[12.5px] leading-relaxed text-ink-2">{x?.error ?? x?.reason ?? "（没有理由）"}</div>
                                   <div className="mt-1 text-[11.5px] text-ink-4">相关性 {x?.relevance ?? "—"}{x?.receiptId ? ` · 回执 #${x.receiptId}` : ""}</div>
                                 </div>

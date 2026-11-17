@@ -3,9 +3,8 @@
     "**/*.ts",
     "**/*.tsx",
     ".react-router/types/**/*",
-    "../shared/modules/*/web.tsx",
-    "../shared/modules/*/web/**/*",
-    "../shared/site/**/*.tsx"
+    "modules/*/web.tsx",
+    "modules/*/web/**/*",
   ],
   "compilerOptions": {
     "lib": [

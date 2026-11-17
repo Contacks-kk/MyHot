@@ -46,6 +46,7 @@ type RuntimeCatalogs struct {
 	CategoryKeys       []string
 	CategoryLabels     map[string]string
 	CategoryFeedLabels map[string]string
+	ReleaseUnit        *string
 	ReportCorrection   admincontent.ReportCorrectionConfig
 	Publication        interests.PublicationSettings
 	Models             adminmodels.Catalog
@@ -57,7 +58,7 @@ type RuntimeCatalogs struct {
 func New(cfg config.Config, db *pgxpool.Pool, orm *gorm.DB, entities map[string]interests.Entity, catalogs ...RuntimeCatalogs) *Server {
 	changelogPath := cfg.SiteChangelogPath
 	if changelogPath == "" {
-		changelogPath = "shared/site/changelog.json"
+		changelogPath = "backend-go/config/changelog.json"
 	}
 	server := &Server{Config: cfg, ContactDir: cfg.SiteContactDir, Entities: entities, limiter: newRateLimiter(), Health: health.NewService(health.NewRepository(orm)), ConnectionTestKind: jobs.ConnectionTestArgs{}.Kind()}
 	imageService := media.NewService(media.Config{
@@ -95,13 +96,26 @@ func New(cfg config.Config, db *pgxpool.Pool, orm *gorm.DB, entities map[string]
 	var topicEntries []interests.CatalogTopic
 	if len(catalogs) > 0 {
 		for _, group := range catalogs[0].TopicGroups {
-			topicGroups = append(topicGroups, interests.CatalogTopicGroup{Key: group.Key, Name: group.Name, Blurb: group.Blurb})
+			topicGroups = append(topicGroups, interests.CatalogTopicGroup{
+				Key:   group.Key,
+				Name:  group.Name,
+				Blurb: group.Blurb,
+			})
 		}
 		for _, topic := range catalogs[0].Topics {
-			topicEntries = append(topicEntries, interests.CatalogTopic{Slug: topic.Slug, Name: topic.Name, Group: topic.Group, Definition: topic.Definition})
+			topicEntries = append(topicEntries, interests.CatalogTopic{
+				Slug:       topic.Slug,
+				Name:       topic.Name,
+				Group:      topic.Group,
+				Definition: topic.Definition,
+			})
 		}
 	}
-	server.Catalog = interests.NewCatalogService(categoryKeys, server.CategoryLabels, feedLabels, publicationSettings, topicGroups, topicEntries)
+	var releaseUnit *string
+	if len(catalogs) > 0 {
+		releaseUnit = catalogs[0].ReleaseUnit
+	}
+	server.Catalog = interests.NewCatalogService(categoryKeys, server.CategoryLabels, feedLabels, publicationSettings, topicGroups, topicEntries, releaseUnit)
 	server.CategoryKeys = make(map[string]struct{}, len(categoryKeys))
 	for _, key := range categoryKeys {
 		server.CategoryKeys[key] = struct{}{}

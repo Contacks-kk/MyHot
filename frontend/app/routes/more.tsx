@@ -2,7 +2,8 @@ import { useState, type FormEvent } from "react";
 import { useLoaderData, Link } from "react-router";
 import type { Route } from "./+types/more";
 import type { Screen } from "../components/shell/screens";
-import { deleteJSON, fieldClass, FormMessage, labelClass } from "../features/account/common";
+import { deleteJSON, fieldClass, FormMessage, labelClass, postJSON } from "../features/account/common";
+import { IconLogout } from "../components/icons";
 import { userApiGet, type UserSession } from "../lib/user-api.server";
 import { LocaleSwitch } from "../components/shell/LocaleSwitch";
 import { useLocalePreference } from "../lib/local-state";
@@ -27,6 +28,17 @@ export default function MorePage() {
   const locale = useLocalePreference();
   const dict = getDict(locale);
 
+  /** Submit user logout request and redirect to home. */
+  async function handleLogout() {
+    // Submit logout request to backend
+    try {
+      await postJSON("/api/auth/logout", {}, user.csrfToken);
+      window.location.assign("/");
+    } catch {
+      window.location.assign("/");
+    }
+  }
+
   return (
     <section className="mx-auto max-w-[720px] pb-10">
       <h1 className="text-[25px] font-semibold tracking-tight text-ink">{dict.account.title}</h1>
@@ -45,6 +57,17 @@ export default function MorePage() {
             <span aria-hidden>›</span>
           </Link>
         ))}
+      </div>
+
+      <div className="mt-5">
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="flex h-11 w-full items-center justify-center gap-2 rounded-control border border-line bg-surface text-[14px] font-medium text-ink-2 shadow-sm transition-colors hover:bg-bg-sunk hover:text-hot"
+        >
+          <IconLogout size={16} />
+          <span>{dict.action.logout}</span>
+        </button>
       </div>
       <section className="mt-8 rounded-card border border-line bg-surface p-5">
         <h2 className="text-[15px] font-semibold text-ink">{dict.action.deleteAccount}</h2>

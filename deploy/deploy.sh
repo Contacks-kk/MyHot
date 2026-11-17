@@ -207,7 +207,12 @@ RELEASE="$STAGING/source"
 [[ ! -e "$RELEASE/.env" && ! -L "$RELEASE/.env" ]]
 for required in .dockerignore package.json package-lock.json deploy/compose.yaml \
   deploy/Dockerfile.setup deploy/Dockerfile.web backend-go/Dockerfile \
-  shared/site/package.json shared/industry/package.json shared/contracts/package.json \
+  backend-go/config/prompts/selection-score.md backend-go/config/prompts/story-digest.md \
+  backend-go/config/prompts/report-period.md backend-go/config/prompts/translate-body.md \
+  frontend/brand/Logo.tsx frontend/brand/logo.svg \
+  backend-go/config/model-catalog.json backend-go/config/publication.json backend-go/config/changelog.json backend-go/config/public/openapi-v1.json \
+  backend-go/config/topics.json backend-go/config/selection.json backend-go/config/reporting.json backend-go/config/entities.json backend-go/config/vocabulary.json backend-go/config/categories.json \
+  frontend/packages/site/package.json shared/industry/package.json frontend/packages/contracts/package.json \
   tooling/package.json legacy/ts-compat/api/package.json legacy/ts-compat/backend/package.json; do
   [[ -f "$RELEASE/$required" ]] || { printf 'Missing build file: %s\n' "$required" >&2; exit 1; }
 done

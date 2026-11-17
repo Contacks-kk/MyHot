@@ -1,6 +1,7 @@
 package reports
 
 import (
+	"aihot/backend-go/internal/promptpath"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -27,7 +28,7 @@ type ReportingConfig struct {
 func LoadReportingConfig() (ReportingConfig, error) {
 	path := strings.TrimSpace(os.Getenv("INDUSTRY_REPORTING_FILE"))
 	if path == "" {
-		for _, candidate := range []string{filepath.Join("shared", "industry", "reporting.json"), filepath.Join("..", "shared", "industry", "reporting.json"), filepath.Join("/app", "shared", "industry", "reporting.json")} {
+		for _, candidate := range []string{filepath.Join("backend-go", "config", "reporting.json"), filepath.Join("config", "reporting.json"), filepath.Join("..", "..", "config", "reporting.json"), filepath.Join("/app", "backend-go", "config", "reporting.json")} {
 			if _, err := os.Stat(candidate); err == nil {
 				path = candidate
 				break
@@ -35,7 +36,7 @@ func LoadReportingConfig() (ReportingConfig, error) {
 		}
 	}
 	if path == "" {
-		return ReportingConfig{}, errors.New("shared/industry/reporting.json not found")
+		return ReportingConfig{}, errors.New("backend-go/config/reporting.json not found")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -49,7 +50,7 @@ func LoadReportingConfig() (ReportingConfig, error) {
 		config.PlainTerms = []string{}
 	}
 	if config.Release != nil && (config.Release.Category == "" || config.Release.Tag == "") {
-		return ReportingConfig{}, errors.New("shared/industry/reporting.json release needs category and tag")
+		return ReportingConfig{}, errors.New("backend-go/config/reporting.json release needs category and tag")
 	}
 	return config, nil
 }
@@ -63,11 +64,11 @@ type PromptFiles struct {
 }
 
 func LoadPromptFiles() (PromptFiles, error) {
-	configured := strings.TrimSpace(os.Getenv("INDUSTRY_PROMPT_DIR"))
+	configured := promptpath.Configured()
 	if configured != "" {
 		return readPromptFiles(configured)
 	}
-	for _, candidate := range []string{filepath.Join("shared", "industry", "prompts"), filepath.Join("..", "shared", "industry", "prompts"), filepath.Join("/app", "shared", "industry", "prompts")} {
+	for _, candidate := range []string{filepath.Join("backend-go", "config", "prompts"), filepath.Join("config", "prompts"), filepath.Join("..", "..", "config", "prompts"), filepath.Join("..", "backend-go", "config", "prompts"), filepath.Join("/app", "backend-go", "config", "prompts")} {
 		files, err := readPromptFiles(candidate)
 		if err == nil {
 			return files, nil

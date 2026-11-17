@@ -6,7 +6,7 @@ import { PUBLIC_CATEGORIES } from "@aihot/site";
 
 type Category = (typeof CATEGORIES)[number];
 
-export type CategoryKey = Category["key"];
+export type CategoryKey = string;
 export const CATEGORY_KEYS = CATEGORIES.map((c) => c.key) as unknown as readonly [CategoryKey, ...CategoryKey[]];
 
 /** Website tab labels. */
@@ -16,7 +16,7 @@ const MERGE: Partial<Record<string, string>> = PUBLIC_CATEGORIES.merge;
 const FEED_LABELS: Partial<Record<string, string>> = PUBLIC_CATEGORIES.feedLabels;
 
 /** The categories the public API, RSS and MCP know: a merged category is published as the one it joins. */
-export type PublicApiCategoryKey = Exclude<CategoryKey, keyof typeof PUBLIC_CATEGORIES.merge>;
+export type PublicApiCategoryKey = string;
 export const PUBLIC_API_CATEGORY_KEYS = CATEGORIES.filter((c) => !Object.hasOwn(MERGE, c.key)).map((c) => c.key) as unknown as readonly [PublicApiCategoryKey, ...PublicApiCategoryKey[]];
 
 export function toPublicApiCategory(category: string | null): PublicApiCategoryKey | null {
@@ -35,19 +35,6 @@ export function isCategoryKey(value: unknown): value is CategoryKey {
   return typeof value === "string" && (CATEGORY_KEYS as readonly string[]).includes(value);
 }
 
-export const CHANNEL_KEYS = ["all", "news", "x", "firstParty"] as const;
-export type ChannelKey = (typeof CHANNEL_KEYS)[number];
 
-export const CHANNEL_LABELS: Record<ChannelKey, string> = {
-  all: "全部",
-  news: "资讯",
-  x: "X",
-  firstParty: "一手",
-};
-
-export function isChannelKey(value: unknown): value is ChannelKey {
-  return typeof value === "string" && (CHANNEL_KEYS as readonly string[]).includes(value);
-}
-
-/** Article ids. Also the local-data import validation pattern. */
-export const ARTICLE_ID_PATTERN = /^[a-zA-Z0-9_-]{1,80}$/;
+export { CHANNEL_KEYS, CHANNEL_LABELS, isChannelKey, ARTICLE_ID_PATTERN } from "@aihot/contracts/taxonomy";
+export type { ChannelKey } from "@aihot/contracts/taxonomy";

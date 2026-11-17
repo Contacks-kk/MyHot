@@ -25,6 +25,7 @@ type Catalog struct {
 	Categories  []CatalogCategory   `json:"categories"`
 	TopicGroups []CatalogTopicGroup `json:"topicGroups"`
 	Topics      []CatalogTopic      `json:"topics"`
+	ReleaseUnit *string             `json:"releaseUnit,omitempty"`
 }
 
 type CatalogService struct {
@@ -32,7 +33,7 @@ type CatalogService struct {
 }
 
 /** NewCatalogService prepares the display-only catalog from runtime configuration. */
-func NewCatalogService(keys []string, labels, feedLabels map[string]string, publication PublicationSettings, groups []CatalogTopicGroup, topics []CatalogTopic) *CatalogService {
+func NewCatalogService(keys []string, labels, feedLabels map[string]string, publication PublicationSettings, groups []CatalogTopicGroup, topics []CatalogTopic, releaseUnit ...*string) *CatalogService {
 	categories := make([]CatalogCategory, 0, len(keys))
 	for _, key := range keys {
 		publicKey := key
@@ -53,11 +54,16 @@ func NewCatalogService(keys []string, labels, feedLabels map[string]string, publ
 			FeedLabel: feedLabel,
 		})
 	}
+	var unit *string
+	if len(releaseUnit) > 0 {
+		unit = releaseUnit[0]
+	}
 	return &CatalogService{catalog: Catalog{
 		Subject:     publication.Subject,
 		Categories:  categories,
 		TopicGroups: append([]CatalogTopicGroup{}, groups...),
 		Topics:      append([]CatalogTopic{}, topics...),
+		ReleaseUnit: unit,
 	}}
 }
 
