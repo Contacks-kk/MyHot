@@ -40,6 +40,7 @@ import (
 	"aihot/backend-go/internal/retention"
 	"aihot/backend-go/internal/sourcehealth"
 	"aihot/backend-go/internal/sourceicons"
+	"aihot/backend-go/internal/sourcenaming"
 	"aihot/backend-go/internal/sourceschedule"
 	"aihot/backend-go/internal/storydigest"
 	"aihot/backend-go/internal/storylinks"
@@ -812,7 +813,17 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 	river.AddWorker(workers, sourceScanWorker)
 	var sourceWorker *SourceWorker
 	if cfg.CollectorEnabled {
-		sourceWorker = &SourceWorker{Service: collectorService, DB: orm, Enabled: true}
+		if cfg.ModelCallsEnabled {
+			naming := sourcenaming.NewService(sourcenaming.NewRepository(orm), receiptService, cfg, chat)
+			sourceScanWorker.Naming = naming
+			river.AddWorker(workers, &SourceNamingWorker{Service: naming})
+		}
+		sourceWorker = &SourceWorker{
+			Service: collectorService,
+			Naming:  sourceScanWorker.Naming,
+			DB:      orm,
+			Enabled: true,
+		}
 		river.AddWorker(workers, sourceWorker)
 	}
 
@@ -957,6 +968,9 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 
 	// rss_source队列每实例并发2，将worker和周期任务传入River
 	queues["rss_sources"] = river.QueueConfig{MaxWorkers: 2}
+	if sourceScanWorker.Naming != nil {
+		queues["source_naming"] = river.QueueConfig{MaxWorkers: 1}
+	}
 	client, err := river.NewClient(driver, &river.Config{Queues: queues, Workers: workers, JobTimeout: 75 * time.Second, RescueStuckJobsAfter: retention.StuckRunGrace, PeriodicJobs: periodicJobs})
 	if err != nil {
 		return nil, err

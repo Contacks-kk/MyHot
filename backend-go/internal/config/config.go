@@ -44,6 +44,9 @@ type Config struct {
 	WebOGPrewarmURL             string
 	WebOGPrewarmSecret          string
 	ModelCallsEnabled           bool
+	SourceNamingBaseURL         string
+	SourceNamingModel           string
+	SourceNamingAPIKey          string
 	AlertQuietMinutes           int
 	UserJobMaxWorkers           int
 	UserDailyModelCallLimit     int
@@ -203,6 +206,9 @@ func Load() (Config, error) {
 		WebOGPrewarmURL:             env("WEB_OG_PREWARM_URL", "http://127.0.0.1:3000/_internal/og/prewarm"),
 		WebOGPrewarmSecret:          strings.TrimSpace(os.Getenv("WEB_OG_PREWARM_SECRET")),
 		ModelCallsEnabled:           envBool("MODEL_CALLS_ENABLED", false),
+		SourceNamingBaseURL:         env("SOURCE_NAMING_BASE_URL", ""),
+		SourceNamingModel:           env("SOURCE_NAMING_MODEL", ""),
+		SourceNamingAPIKey:          env("SOURCE_NAMING_API_KEY", ""),
 		AlertQuietMinutes:           envIntAllowAny("ALERT_QUIET_MINUTES", 360),
 		UserJobMaxWorkers:           envInt("USER_JOB_MAX_WORKERS", 4),
 		UserDailyModelCallLimit:     envInt("USER_DAILY_MODEL_CALL_LIMIT", 100),

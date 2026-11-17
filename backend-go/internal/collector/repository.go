@@ -9,6 +9,7 @@ import (
 
 	"aihot/backend-go/internal/config"
 	"aihot/backend-go/internal/model"
+	"aihot/backend-go/internal/sourcenaming"
 	"aihot/backend-go/internal/sourceschedule"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"gorm.io/gorm"
@@ -212,16 +213,16 @@ func (r *Repository) FinishFailure(ctx context.Context, run *sourceRun, found, c
 		"found_count": found,
 		"new_count":   created,
 		"error":       message,
-	})
+	}, nil)
 }
 
 /** FinishSuccess records a validated upstream response and advances the current schedule. */
-func (r *Repository) FinishSuccess(ctx context.Context, run *sourceRun, found, created int, cursorUpdates map[string]string, notModified bool) error {
+func (r *Repository) FinishSuccess(ctx context.Context, run *sourceRun, found, created int, cursorUpdates map[string]string, notModified bool, userID int64) error {
 	cursor := gorm.Expr("COALESCE(cursor,'{}'::jsonb)||jsonb_build_object('goCollectedAt',now())")
 	if notModified {
 		cursor = gorm.Expr("COALESCE(cursor,'{}'::jsonb)||jsonb_build_object('rssETag',coalesce(?,cursor->>'rssETag'),'rssLastModified',coalesce(?,cursor->>'rssLastModified'))", nullable(cursorUpdates["rssETag"]), nullable(cursorUpdates["rssLastModified"]))
 	} else if len(cursorUpdates) > 0 {
-		cursor = gorm.Expr("COALESCE(cursor,'{}'::jsonb)||jsonb_build_object('goCollectedAt',now(),'rssETag',NULLIF(?,''),'rssLastModified',NULLIF(?,''),'rssURL',?::text)", cursorUpdates["rssETag"], cursorUpdates["rssLastModified"], cursorUpdates["rssURL"])
+		cursor = gorm.Expr("COALESCE(cursor,'{}'::jsonb)||jsonb_build_object('goCollectedAt',now(),'rssETag',NULLIF(?,''),'rssLastModified',NULLIF(?,''),'rssURL',?::text,'rssTitle',?::text)", cursorUpdates["rssETag"], cursorUpdates["rssLastModified"], cursorUpdates["rssURL"], cursorUpdates["rssTitle"])
 	}
 	updates := map[string]any{
 		"fail_count":    0,
@@ -238,11 +239,13 @@ func (r *Repository) FinishSuccess(ctx context.Context, run *sourceRun, found, c
 		"finished_at": gorm.Expr("now()"),
 		"found_count": found,
 		"new_count":   created,
+	}, func(tx *gorm.DB) error {
+		return sourcenaming.RecordCollection(tx, run.Source.ID, userID)
 	})
 }
 
 /** finishRun saves both records against the plan committed by subscription changes. */
-func (r *Repository) finishRun(ctx context.Context, run *sourceRun, sourceUpdates, runUpdates map[string]any) error {
+func (r *Repository) finishRun(ctx context.Context, run *sourceRun, sourceUpdates, runUpdates map[string]any, after func(*gorm.DB) error) error {
 	return r.orm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := sourceschedule.Lock(tx, run.Source.ID); err != nil {
 			return err
@@ -250,7 +253,13 @@ func (r *Repository) finishRun(ctx context.Context, run *sourceRun, sourceUpdate
 		if err := tx.Model(&model.Source{}).Where("id = ?", run.Source.ID).Updates(sourceUpdates).Error; err != nil {
 			return err
 		}
-		return tx.Model(&model.FetchRun{}).Where("id = ?", run.RunID).Updates(runUpdates).Error
+		if err := tx.Model(&model.FetchRun{}).Where("id = ?", run.RunID).Updates(runUpdates).Error; err != nil {
+			return err
+		}
+		if after != nil {
+			return after(tx)
+		}
+		return nil
 	})
 }
 

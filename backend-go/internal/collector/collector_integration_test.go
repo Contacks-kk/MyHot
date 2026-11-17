@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"aihot/backend-go/internal/config"
 	"aihot/backend-go/internal/materials"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"gorm.io/driver/postgres"
@@ -57,7 +58,7 @@ func collectorORM(t *testing.T) *gorm.DB {
 }
 
 func testCollectorService(orm *gorm.DB, pool *pgxpool.Pool, client HTTPDoer) *Service {
-	return NewService(NewRepository(orm, pool), client, materials.NewService(materials.NewRepository(orm)))
+	return NewService(NewRepository(orm, pool, config.SourceSchedule{}), client, materials.NewService(materials.NewRepository(orm)))
 }
 
 func addCollectorSubscription(t *testing.T, pool *pgxpool.Pool, sourceIDs ...string) int64 {
@@ -74,6 +75,64 @@ func addCollectorSubscription(t *testing.T, pool *pgxpool.Pool, sourceIDs ...str
 		}
 	}
 	return userID
+}
+
+/** TestSuccessfulCollectionStartsNaming verifies that only real fetch success supplies an actor. */
+func TestSuccessfulCollectionStartsNaming(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		status    int
+		manual    bool
+		wantReady bool
+	}{
+		{name: "manual 304", status: http.StatusNotModified, manual: true, wantReady: true},
+		{name: "scheduled success", status: http.StatusOK, wantReady: true},
+		{name: "fetch failure", status: http.StatusBadGateway, manual: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := collectorPool(t)
+			orm := collectorORM(t)
+			ctx := context.Background()
+			id := fmt.Sprintf("collector_naming_%d", time.Now().UnixNano())
+			const address = "https://example.invalid/feed"
+			if _, err := pool.Exec(ctx, `INSERT INTO sources(id,name,kind,config,cursor,next_fetch_at) VALUES
+				($1,'个人RSS','rss',jsonb_build_object('feedUrl',$2::text),jsonb_build_object('rssURL',$2::text,'rssETag','v1','rssTitle','Saved channel'),now())`, id, address); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM sources WHERE id=$1`, id) })
+			userID := addCollectorSubscription(t, pool, id)
+			if _, err := pool.Exec(ctx, `UPDATE user_accounts SET verified_at=now() WHERE id=$1`, userID); err != nil {
+				t.Fatal(err)
+			}
+			service := testCollectorService(orm, pool, fakeDoer(func(req *http.Request) (*http.Response, error) {
+				if tc.status == http.StatusNotModified && req.Header.Get("If-None-Match") != "v1" {
+					t.Fatalf("conditional request omitted the stored ETag")
+				}
+				body := `<rss version="2.0"><channel><title>Current channel</title><link>https://example.invalid</link><description>Feed</description></channel></rss>`
+				return &http.Response{StatusCode: tc.status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
+			}))
+			var actor int64
+			if tc.manual {
+				actor = userID
+			}
+			collected, err := service.CollectSourceJob(ctx, id, tc.manual, actor)
+			if collected != tc.wantReady || (err == nil) != tc.wantReady {
+				t.Fatalf("collected=%t, err=%v", collected, err)
+			}
+			var status, title string
+			var gotActor int64
+			if err := pool.QueryRow(ctx, `SELECT coalesce(n.status,''),coalesce(n.user_id,0),coalesce(s.cursor->>'rssTitle','')
+				FROM sources s LEFT JOIN source_naming n ON n.source_id=s.id WHERE s.id=$1`, id).Scan(&status, &gotActor, &title); err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantReady && (status != "ready" || gotActor != actor) || !tc.wantReady && status != "" {
+				t.Fatalf("naming status=%q, actor=%d", status, gotActor)
+			}
+			if tc.status == http.StatusNotModified && title != "Saved channel" {
+				t.Fatalf("304 lost naming evidence: %q", title)
+			}
+		})
+	}
 }
 
 func TestDueSourceIDsRequiresActiveSubscriptionAndOnlyCollectsRSS(t *testing.T) {
@@ -105,7 +164,7 @@ func TestDueSourceIDsRequiresActiveSubscriptionAndOnlyCollectsRSS(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	due, err := NewRepository(tx, pool).DueSourceIDs(context.Background())
+	due, err := NewRepository(tx, pool, config.SourceSchedule{}).DueSourceIDs(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -497,7 +556,7 @@ func TestXCoverageAndPaidReceiptCompleteInOneTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM receipts WHERE id=$1`, receiptID) })
-	repository := NewRepository(orm, pool)
+	repository := NewRepository(orm, pool, config.SourceSchedule{})
 	run, started, err := repository.BeginSourceRun(ctx, sourceID, true)
 	if err != nil || !started {
 		t.Fatalf("begin X fetch run = %v, %v", started, err)

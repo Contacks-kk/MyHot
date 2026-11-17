@@ -14,6 +14,8 @@ type Subscription = {
   sourceId: string;
   kind?: string;
   name: string;
+  nameInherited: boolean;
+  updatedExisting?: boolean;
   url: string;
   itemSelector?: string;
   titleSelector?: string;
@@ -103,6 +105,7 @@ type SourceKindTab = "explore" | "rss" | "web_list" | "ingest";
 const emptyForm = {
   kind: "rss" as "rss" | "web_list",
   name: "",
+  nameInherited: false,
   url: "",
   itemSelector: "",
   titleSelector: "",
@@ -242,7 +245,7 @@ export default function SourcesRoute() {
   /** 打开一键关注配置弹窗 */
   function beginQuickSubscribe(item: ExploreItem) {
     setQuickTarget(item);
-    setQuickName(item.name);
+    setQuickName("");
     setQuickInterval(60);
     setQuickError("");
   }
@@ -266,7 +269,7 @@ export default function SourcesRoute() {
         },
         body: JSON.stringify({
           sourceId: quickTarget.sourceId,
-          name: quickName.trim() || quickTarget.name,
+          name: quickName.trim(),
           intervalMinutes: quickInterval,
           reuseWindowMinutes: 10,
         }),
@@ -326,6 +329,7 @@ export default function SourcesRoute() {
     setForm({
       kind,
       name: source.name,
+      nameInherited: source.nameInherited ?? false,
       url: source.url,
       itemSelector: source.itemSelector || "",
       titleSelector: source.titleSelector || "",
@@ -437,12 +441,14 @@ export default function SourcesRoute() {
       const payload = {
         kind: form.kind,
         name: form.name.trim(),
+        nameInherited: editing ? form.nameInherited : undefined,
         url: form.url.trim(),
         itemSelector: form.kind === "web_list" ? form.itemSelector.trim() : "",
         titleSelector: form.kind === "web_list" ? form.titleSelector.trim() : "",
         intervalMinutes: form.intervalMinutes,
         reuseWindowMinutes: form.reuseWindowMinutes,
         enabled: form.enabled,
+        filterMode: form.filterMode,
       };
       const response = await fetch(editing ? `/api/me/sources/${editing}` : "/api/me/sources", {
         method: editing ? "PUT" : "POST",
@@ -457,8 +463,10 @@ export default function SourcesRoute() {
         throw new Error(body.error || (locale === "en" ? "Failed to save source" : "保存信息源失败"));
       }
       setSources(rows => editing ? rows.map(row => row.id === body.id ? body : row) : [body, ...rows.filter(row => row.id !== body.id)]);
-      setMessage(locale === "en" ? "Source settings saved." : "信息源设置已保存。新文章会按你的关注项筛选；符合条件的近期内容可能被其他订阅者提前抓取。");
+      const updated = editing !== null || body.updatedExisting;
+      setMessage(updated ? (locale === "en" ? "Source settings updated." : "设置已更新。") : (locale === "en" ? "Subscribed." : "已关注。"));
       setEditing(body.id);
+      setForm(prev => ({ ...prev, name: body.name, nameInherited: body.nameInherited }));
       setDiscoverResult(null);
       setDiscoverNotice("");
     } catch (e) {
@@ -521,10 +529,15 @@ export default function SourcesRoute() {
     try {
       const body = {
         name: source.name,
+        nameInherited: source.nameInherited,
+        kind: source.kind,
         url: source.url,
+        itemSelector: source.itemSelector,
+        titleSelector: source.titleSelector,
         intervalMinutes: source.intervalMinutes,
         reuseWindowMinutes: source.reuseWindowMinutes,
         enabled: !source.enabled,
+        filterMode: source.filterMode,
       };
       const response = await fetch(`/api/me/sources/${source.id}`, {
         method: "PATCH",
@@ -557,7 +570,11 @@ export default function SourcesRoute() {
     try {
       const body = {
         name: source.name,
+        nameInherited: source.nameInherited,
+        kind: source.kind,
         url: source.url,
+        itemSelector: source.itemSelector,
+        titleSelector: source.titleSelector,
         intervalMinutes: source.intervalMinutes,
         reuseWindowMinutes: source.reuseWindowMinutes,
         enabled: source.enabled,
@@ -940,17 +957,30 @@ export default function SourcesRoute() {
           )}
 
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            <label className="text-[12px] font-medium text-ink-2">
-              {locale === "en" ? "Display Name" : "显示名称"}
-              <input
-                className={`${fieldClass} mt-1.5`}
-                required
-                maxLength={200}
-                value={form.name}
-                onChange={e => setForm({ ...form, name: e.target.value })}
-                placeholder={activeTab === "web_list" ? (locale === "en" ? "e.g. OpenAI News" : "例如：OpenAI 官方动态") : (locale === "en" ? "e.g. Tech Blog" : "例如：技术博客")}
-              />
-            </label>
+            <div>
+              <label className="block text-[12px] font-medium text-ink-2">
+                {locale === "en" ? "My source name" : "我的备注名"}
+                <input
+                  className={`${fieldClass} mt-1.5`}
+                  required={!form.nameInherited}
+                  disabled={form.nameInherited}
+                  maxLength={200}
+                  value={form.name}
+                  onChange={e => setForm({ ...form, name: e.target.value })}
+                  placeholder={activeTab === "web_list" ? (locale === "en" ? "e.g. OpenAI News" : "例如：OpenAI 官方动态") : (locale === "en" ? "e.g. Tech Blog" : "例如：技术博客")}
+                />
+              </label>
+              {editing !== null && (
+                <label className="mt-2 flex items-center gap-2 text-[12px] text-ink-3">
+                  <input
+                    type="checkbox"
+                    checked={form.nameInherited}
+                    onChange={e => setForm({ ...form, nameInherited: e.target.checked })}
+                  />
+                  {locale === "en" ? "Use shared source name" : "使用共享信源名"}
+                </label>
+              )}
+            </div>
 
             <div className="sm:col-span-1">
               <label className="text-[12px] font-medium text-ink-2 block">
@@ -1643,14 +1673,13 @@ export default function SourcesRoute() {
 
             <div className="mt-4 space-y-3.5">
               <label className="text-[12px] font-medium text-ink-2 block">
-                我的自定义备注名
+                {locale === "en" ? "My source name (optional)" : "我的备注名（选填）"}
                 <input
                   className={`${fieldClass} mt-1`}
-                  required
                   maxLength={200}
                   value={quickName}
                   onChange={e => setQuickName(e.target.value)}
-                  placeholder="例如：科技要闻、36氪"
+                  placeholder={quickTarget.name}
                 />
               </label>
 

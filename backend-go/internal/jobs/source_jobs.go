@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 	_ "time/tzdata"
 
 	"aihot/backend-go/internal/collector"
 	"aihot/backend-go/internal/mpcollector"
 	"aihot/backend-go/internal/sourceicons"
+	"aihot/backend-go/internal/sourcenaming"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -46,6 +48,7 @@ func (SourceIconsArgs) Kind() string { return "myhot_source_icons" }
 type SourceArgs struct {
 	SourceID string `json:"sourceId" river:"unique"`
 	Force    bool   `json:"force,omitempty"`
+	UserID   int64  `json:"userId,omitempty"`
 }
 
 func (SourceArgs) Kind() string { return "myhot_collect_source" }
@@ -60,12 +63,14 @@ func (XShardArgs) Kind() string { return "myhot_collect_x_shard" }
 type SourceScanWorker struct {
 	river.WorkerDefaults[SourceScanArgs]
 	Service *collector.Service
+	Naming  *sourcenaming.Service
 	Client  *river.Client[pgx.Tx]
 	Enabled bool
 }
 type SourceWorker struct {
 	river.WorkerDefaults[SourceArgs]
 	Service *collector.Service
+	Naming  *sourcenaming.Service
 	Client  *river.Client[pgx.Tx]
 	DB      *gorm.DB
 	Enabled bool
@@ -169,11 +174,27 @@ func ManualSourceFetchArgs(sourceID, sourceKind string) (river.JobArgs, *river.I
 	return nil, nil, fmt.Errorf("manual fetch is not available for source kind %q", sourceKind)
 }
 
-func InsertManualSourceFetch(ctx context.Context, pool *pgxpool.Pool, sourceID, sourceKind string) (int64, error) {
+/** InsertManualSourceFetch queues collection with the actor who requested it. */
+func InsertManualSourceFetch(ctx context.Context, pool *pgxpool.Pool, sourceID, sourceKind string, userID int64) (int64, error) {
 	args, options, err := ManualSourceFetchArgs(sourceID, sourceKind)
 	if err != nil {
 		return 0, err
 	}
+	if source, ok := args.(SourceArgs); ok {
+		source.UserID = userID
+		args = source
+	}
+	return insertSourceFetch(ctx, pool, args, options)
+}
+
+/** InsertInitialSourceFetch queues a new source under the regular scheduling policy. */
+func InsertInitialSourceFetch(ctx context.Context, pool *pgxpool.Pool, sourceID string) error {
+	_, err := insertSourceFetch(ctx, pool, SourceArgs{SourceID: sourceID}, sourceInsertOpts())
+	return err
+}
+
+/** insertSourceFetch submits a collection job and returns its status handle. */
+func insertSourceFetch(ctx context.Context, pool *pgxpool.Pool, args river.JobArgs, options *river.InsertOpts) (int64, error) {
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{})
 	if err != nil {
 		return 0, err
@@ -192,6 +213,9 @@ func InsertManualSourceFetch(ctx context.Context, pool *pgxpool.Pool, sourceID, 
 func (w *SourceScanWorker) Work(ctx context.Context, _ *river.Job[SourceScanArgs]) error {
 	if !w.Enabled {
 		return nil
+	}
+	if err := enqueueSourceNames(ctx, w.Naming, w.Client, ""); err != nil {
+		log.Printf("source naming scan failed: %v", err)
 	}
 
 	// 查询DB，筛选需要执行抓取的id
@@ -234,13 +258,13 @@ func (w *SourceWorker) Work(ctx context.Context, job *river.Job[SourceArgs]) err
 		return river.JobSnooze(5 * time.Minute)
 	}
 
-	var err error
-	if job.Args.Force {
-		err = finishSourceWork(w.Service.CollectSourceNow(ctx, job.Args.SourceID))
-	} else {
-		// 自主抓取
-		err = finishSourceWork(w.Service.CollectSource(ctx, job.Args.SourceID))
+	collected, err := w.Service.CollectSourceJob(ctx, job.Args.SourceID, job.Args.Force, job.Args.UserID)
+	if collected {
+		if enqueueErr := enqueueSourceNames(ctx, w.Naming, w.Client, job.Args.SourceID); enqueueErr != nil {
+			log.Printf("source naming deferred to scan source_id=%q: %v", job.Args.SourceID, enqueueErr)
+		}
 	}
+	err = finishSourceWork(err)
 
 	// 抓取成功后检查是否需要自动打标
 	if err == nil && w.Client != nil && w.DB != nil {

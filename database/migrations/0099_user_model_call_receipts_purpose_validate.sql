@@ -1,0 +1,1 @@
+ALTER TABLE user_model_call_receipts VALIDATE CONSTRAINT user_model_call_receipts_purpose_v2_check;

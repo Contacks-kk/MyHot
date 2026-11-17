@@ -21,14 +21,21 @@ const (
 
 /** parseRSS parses RSS, Atom, or Sitemap XML feeds into normalized items with non-downloading image metadata. */
 func parseRSS(data []byte, base string) ([]item, error) {
+	items, _, err := parseRSSWithTitle(data, base)
+	return items, err
+}
+
+/** parseRSSWithTitle parses a feed and retains its channel title. */
+func parseRSSWithTitle(data []byte, base string) ([]item, string, error) {
 	// Detect and parse Sitemap XML when applicable
 	if isSitemapXML(data) {
-		return parseSitemap(data, base)
+		items, err := parseSitemap(data, base)
+		return items, "", err
 	}
 
 	feed, err := gofeed.NewParser().Parse(bytes.NewReader(data))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	items := []item{}
@@ -62,7 +69,7 @@ func parseRSS(data []byte, base string) ([]item, error) {
 		})
 	}
 
-	return items, nil
+	return items, strings.TrimSpace(feed.Title), nil
 }
 
 /** extractRSSMedia collects, deduplicates, filters, and caps image metadata from one RSS entry without downloading pixels. */

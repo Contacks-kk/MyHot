@@ -143,13 +143,15 @@ func (s *Service) DueSourceIDs(ctx context.Context) ([]string, error) {
 }
 
 func (s *Service) CollectSource(ctx context.Context, id string) error {
-	return s.collectSource(ctx, id, false)
+	_, err := s.CollectSourceJob(ctx, id, false, 0)
+	return err
 }
 
 // CollectSourceNow bypasses the enabled and due-time gates for an administrator's
 // explicit fetch. It still uses the same per-source advisory lock and run record.
 func (s *Service) CollectSourceNow(ctx context.Context, id string) error {
-	return s.collectSource(ctx, id, true)
+	_, err := s.CollectSourceJob(ctx, id, true, 0)
+	return err
 }
 
 const (
@@ -171,21 +173,21 @@ func firstImportBackfillReason(src source, published *time.Time, now time.Time, 
 	return "first-import"
 }
 
-// collectSource 抓取流程入口，设置11分钟上下文超时
-func (s *Service) collectSource(ctx context.Context, id string, force bool) error {
+/** CollectSourceJob reports real RSS or web-list success and records who triggered it. */
+func (s *Service) CollectSourceJob(ctx context.Context, id string, force bool, userID int64) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 11*time.Minute)
 	defer cancel()
 	run, sourceFound, err := s.Repository.BeginSourceRun(ctx, id, force)
 	if err != nil || !sourceFound {
-		return err
+		return false, err
 	}
 	defer s.Repository.ReleaseSource(run)
 	if run.Reused {
-		return nil
+		return false, nil
 	}
 	src := run.Source
 	if src.Kind == "x_search" {
-		return s.collectXSource(ctx, run)
+		return false, s.collectXSource(ctx, run)
 	}
 	var items []item
 	var fetchErr error
@@ -256,12 +258,13 @@ func (s *Service) collectSource(ctx context.Context, id string, force bool) erro
 			message = "source adapter is unsupported by Go collector; configure RSS, CSS/Markdown list or ordinary JSON"
 		}
 		if err := s.Repository.FinishFailure(finishCtx, run, found, created, message); err != nil {
-			return err
+			return false, err
 		}
 		log.Printf("source collection failed source_id=%q source_kind=%q stage=%s class=%s", src.ID, src.Kind, failureStage, failureClass)
-		return fmt.Errorf("%w: %s", ErrFetchRecorded, message)
+		return false, fmt.Errorf("%w: %s", ErrFetchRecorded, message)
 	}
-	return s.Repository.FinishSuccess(finishCtx, run, found, created, cursorUpdates, notModified)
+	err = s.Repository.FinishSuccess(finishCtx, run, found, created, cursorUpdates, notModified, userID)
+	return err == nil && (src.Kind == "rss" || src.Kind == "web_list"), err
 }
 
 func (s *Service) storeItem(ctx context.Context, run *sourceRun, candidate item) (bool, error) {
@@ -453,10 +456,11 @@ func (s *Service) fetchRSS(ctx context.Context, src source) ([]item, map[string]
 		}
 		return nil, updates, true, nil
 	}
-	items, err := parseRSS(body, address)
+	items, title, err := parseRSSWithTitle(body, address)
 	if err != nil {
 		return nil, nil, false, &sourceFetchError{class: "rss_parse", err: err}
 	}
+	updates["rssTitle"] = truncate(plain(title), 200)
 	return items, updates, false, err
 }
 

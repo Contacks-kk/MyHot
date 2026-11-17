@@ -150,7 +150,7 @@ func (r *Repository) Hot(ctx context.Context, userID int64) ([]Card, error) {
 /** Article returns one personal result belonging to the requesting user. */
 func (r *Repository) Article(ctx context.Context, userID int64, articleID string) (ArticleDetail, error) {
 	var item ArticleDetail
-	result := r.db.WithContext(ctx).Raw(`SELECT r.article_id,r.relevance_score::float8 AS score,r.title,r.summary,r.reason,a.url,s.name AS source,a.published_at,r.created_at,a.media,a.title AS original_title,a.author FROM user_article_results r JOIN articles a ON a.id=r.article_id JOIN sources s ON s.id=a.source_id WHERE r.user_id=? AND r.article_id=?`, userID, articleID).Scan(&item)
+	result := r.db.WithContext(ctx).Raw(`SELECT r.article_id,r.relevance_score::float8 AS score,r.title,r.summary,r.reason,a.url,coalesce(sub.name,s.name) AS source,a.published_at,r.created_at,a.media,a.title AS original_title,a.author FROM user_article_results r JOIN articles a ON a.id=r.article_id JOIN sources s ON s.id=a.source_id LEFT JOIN user_source_subscriptions sub ON sub.user_id=r.user_id AND sub.source_id=s.id WHERE r.user_id=? AND r.article_id=?`, userID, articleID).Scan(&item)
 	if result.Error != nil {
 		return ArticleDetail{}, result.Error
 	}
@@ -295,4 +295,4 @@ func (r *Repository) Funnel(ctx context.Context, userID int64) (FunnelView, erro
 	}, nil
 }
 
-const personalSelect = `SELECT r.article_id,r.relevance_score::float8 AS score,r.title,r.summary,r.reason,a.url,s.name AS source,a.published_at,r.created_at,a.media FROM user_article_results r JOIN articles a ON a.id=r.article_id JOIN sources s ON s.id=a.source_id`
+const personalSelect = `SELECT r.article_id,r.relevance_score::float8 AS score,r.title,r.summary,r.reason,a.url,coalesce(sub.name,s.name) AS source,a.published_at,r.created_at,a.media FROM user_article_results r JOIN articles a ON a.id=r.article_id JOIN sources s ON s.id=a.source_id LEFT JOIN user_source_subscriptions sub ON sub.user_id=r.user_id AND sub.source_id=s.id`

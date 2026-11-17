@@ -153,8 +153,11 @@ func New(cfg config.Config, db *pgxpool.Pool, orm *gorm.DB, entities map[string]
 	server.UserSources = usersources.NewService(orm, cfg.SourceSchedule)
 	server.UserSources.SetMaterials(materialService)
 	server.UserSources.SetCollectorEnabled(cfg.CollectorEnabled)
-	server.UserSources.SetEnqueuer(func(ctx context.Context, sourceID, sourceKind string) (int64, error) {
-		return jobs.InsertManualSourceFetch(ctx, db, sourceID, sourceKind)
+	server.UserSources.SetEnqueuer(func(ctx context.Context, sourceID, sourceKind string, userID int64) (int64, error) {
+		return jobs.InsertManualSourceFetch(ctx, db, sourceID, sourceKind, userID)
+	})
+	server.UserSources.SetInitialEnqueuer(func(ctx context.Context, sourceID string) error {
+		return jobs.InsertInitialSourceFetch(ctx, db, sourceID)
 	})
 	server.FeedDiscovery = feeddiscovery.NewService()
 	server.AdminSelectBench = adminselectbench.NewService(adminselectbench.NewRepository(orm))

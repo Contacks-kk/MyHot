@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"aihot/backend-go/internal/config"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -55,19 +56,32 @@ func TestSubscriptionsShareSourceButKeepUserSettingsSeparate(t *testing.T) {
 			_ = db.WithContext(ctx).Exec(`DELETE FROM sources WHERE id=?`, id).Error
 		}
 	})
-	service := NewService(db)
+	service := NewService(db, config.SourceSchedule{})
+	queued := make(chan string, 4)
+	service.SetCollectorEnabled(true)
+	service.SetInitialEnqueuer(func(_ context.Context, sourceID string) error {
+		queued <- sourceID
+		return nil
+	})
 	sharedURL := "https://example.invalid/" + prefix + ".xml"
-	a, err := service.Create(ctx, ids[0], Input{Name: "My feed", URL: sharedURL, IntervalMinutes: 60, ReuseWindowMinutes: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sourceIDs = append(sourceIDs, a.SourceID)
-	b, err := service.Create(ctx, ids[1], Input{Name: "Another label", URL: sharedURL, IntervalMinutes: 30, ReuseWindowMinutes: 5})
-	if err != nil {
-		t.Fatal(err)
+	var a, b Subscription
+	var firstErr, secondErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a, firstErr = service.Create(ctx, ids[0], Input{Name: "My feed", URL: sharedURL, IntervalMinutes: 60, ReuseWindowMinutes: 10})
+	}()
+	b, secondErr = service.Create(ctx, ids[1], Input{Name: "Another label", URL: sharedURL, IntervalMinutes: 30, ReuseWindowMinutes: 5})
+	<-done
+	sourceIDs = append(sourceIDs, a.SourceID, b.SourceID)
+	if firstErr != nil || secondErr != nil {
+		t.Fatalf("concurrent creation failed: %v, %v", firstErr, secondErr)
 	}
 	if a.SourceID != b.SourceID || a.ID == b.ID {
 		t.Fatalf("subscriptions did not share the source row independently: a=%#v b=%#v", a, b)
+	}
+	if len(queued) != 1 || <-queued != a.SourceID {
+		t.Fatal("expected one initial fetch for the shared source")
 	}
 	var coldA, coldB bool
 	if err := db.WithContext(ctx).Raw(`SELECT cold_start_pending FROM user_source_subscriptions WHERE id=?`, a.ID).Row().Scan(&coldA); err != nil || !coldA {
@@ -79,8 +93,20 @@ func TestSubscriptionsShareSourceButKeepUserSettingsSeparate(t *testing.T) {
 	if err := db.WithContext(ctx).Exec(`UPDATE user_source_subscriptions SET cold_start_pending=false WHERE id IN (?,?)`, a.ID, b.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if a.Name != "My feed" || b.Name != "Another label" || a.EffectiveIntervalMinutes != 30 || a.EffectiveReuseWindowMinutes != 5 {
-		t.Fatalf("user labels/effective cadence were not isolated and aggregated: a=%#v b=%#v", a, b)
+	var activatedAt time.Time
+	if err := db.WithContext(ctx).Raw(`SELECT activated_at FROM user_source_subscriptions WHERE id=?`, a.ID).Row().Scan(&activatedAt); err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := service.Create(ctx, ids[0], Input{Name: "My feed", URL: sharedURL})
+	if err != nil || repeated.ID != a.ID || !repeated.UpdatedExisting || repeated.NameInherited {
+		t.Fatalf("repeat create failed: %#v, %v", repeated, err)
+	}
+	var repeatedAt time.Time
+	if err := db.WithContext(ctx).Raw(`SELECT activated_at,cold_start_pending FROM user_source_subscriptions WHERE id=?`, a.ID).Row().Scan(&repeatedAt, &coldA); err != nil || coldA || !repeatedAt.Equal(activatedAt) {
+		t.Fatalf("repeat create reset activation or cold start: %v %t %v", repeatedAt, coldA, err)
+	}
+	if a.Name != "My feed" || b.Name != "Another label" {
+		t.Fatalf("user labels were not isolated: a=%#v b=%#v", a, b)
 	}
 	list, err := service.List(ctx, ids[0])
 	if err != nil || len(list) != 1 || list[0].Name != "My feed" {
@@ -141,7 +167,7 @@ func TestSubscriptionReusesCanonicalizedLegacyRSSSource(t *testing.T) {
 		_ = db.WithContext(ctx).Exec(`DELETE FROM user_accounts WHERE id=?`, userID).Error
 		_ = db.WithContext(ctx).Exec(`DELETE FROM sources WHERE id=?`, sourceID).Error
 	})
-	service := NewService(db)
+	service := NewService(db, config.SourceSchedule{})
 	got, err := service.Create(ctx, userID, Input{Name: "Reused archive", URL: "https://example.invalid/feed?a=1&b=2"})
 	if err != nil {
 		t.Fatal(err)

@@ -42,9 +42,9 @@ func TestRSSConditionalRequestFallsBackToLastModifiedAndURLChangesInvalidateIt(t
 				}
 				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Last-Modified": []string{test.expectedValue}}, Body: io.NopCloser(strings.NewReader(feed))}, nil
 			}), nil)
-			items, _, unchanged, err := service.fetchRSS(context.Background(), source{Kind: "rss", Config: settings{"feedUrl": test.url}, Cursor: settings{"rssURL": test.cursorURL, "rssLastModified": "Wed, 01 Oct 2025 00:00:00 GMT"}})
-			if err != nil || unchanged || len(items) != 0 {
-				t.Fatalf("RSS result %#v unchanged=%t err=%v", items, unchanged, err)
+			items, metadata, unchanged, err := service.fetchRSS(context.Background(), source{Kind: "rss", Config: settings{"feedUrl": test.url}, Cursor: settings{"rssURL": test.cursorURL, "rssLastModified": "Wed, 01 Oct 2025 00:00:00 GMT"}})
+			if err != nil || unchanged || len(items) != 0 || metadata["rssTitle"] != "Feed" {
+				t.Fatalf("RSS result %#v metadata=%#v unchanged=%t err=%v", items, metadata, unchanged, err)
 			}
 		})
 	}

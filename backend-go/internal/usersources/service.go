@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"aihot/backend-go/internal/config"
 	"aihot/backend-go/internal/materials"
 	"aihot/backend-go/internal/model"
+	"aihot/backend-go/internal/sourcenaming"
 	"aihot/backend-go/internal/sourceschedule"
 
 	"gorm.io/gorm"
@@ -32,7 +34,8 @@ type MaterialWriter interface {
 type Service struct {
 	db             *gorm.DB
 	materials      MaterialWriter
-	enqueue        func(context.Context, string, string) (int64, error)
+	enqueue        func(context.Context, string, string, int64) (int64, error)
+	enqueueInitial func(context.Context, string) error
 	collectEnabled bool
 	schedule       config.SourceSchedule
 }
@@ -51,8 +54,25 @@ func (s *Service) SetMaterials(materials MaterialWriter) {
 }
 
 /** SetEnqueuer configures the background job enqueuer function. */
-func (s *Service) SetEnqueuer(enqueue func(context.Context, string, string) (int64, error)) {
+func (s *Service) SetEnqueuer(enqueue func(context.Context, string, string, int64) (int64, error)) {
 	s.enqueue = enqueue
+}
+
+/** SetInitialEnqueuer connects new sources to the regular collection queue. */
+func (s *Service) SetInitialEnqueuer(enqueue func(context.Context, string) error) {
+	s.enqueueInitial = enqueue
+}
+
+/** enqueueNewSource accelerates the first collection, with the normal scan as recovery. */
+func (s *Service) enqueueNewSource(ctx context.Context, sourceID string) {
+	if sourceID == "" || !s.collectEnabled || s.enqueueInitial == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	if err := s.enqueueInitial(ctx, sourceID); err != nil {
+		log.Printf("initial source collection deferred to scan source_id=%q: %v", sourceID, err)
+	}
 }
 
 /** SetCollectorEnabled updates collector enabled status flag. */
@@ -63,6 +83,7 @@ func (s *Service) SetCollectorEnabled(enabled bool) {
 type Input struct {
 	Kind               string `json:"kind,omitempty"`
 	Name               string `json:"name"`
+	NameInherited      *bool  `json:"nameInherited,omitempty"`
 	URL                string `json:"url"`
 	ItemSelector       string `json:"itemSelector,omitempty"`
 	TitleSelector      string `json:"titleSelector,omitempty"`
@@ -77,6 +98,8 @@ type Subscription struct {
 	SourceID                    string          `json:"sourceId"`
 	Kind                        string          `json:"kind"`
 	Name                        string          `json:"name"`
+	NameInherited               bool            `json:"nameInherited"`
+	UpdatedExisting             bool            `gorm:"-" json:"updatedExisting,omitempty"`
 	URL                         string          `json:"url"`
 	ItemSelector                string          `json:"itemSelector,omitempty"`
 	TitleSelector               string          `json:"titleSelector,omitempty"`
@@ -163,7 +186,7 @@ type SubscribeExistingInput struct {
 	ReuseWindowMinutes int    `json:"reuseWindowMinutes"`
 }
 
-const subscriptionSelect = `SELECT sub.id,sub.source_id,src.kind,sub.name,
+const subscriptionSelect = `SELECT sub.id,sub.source_id,src.kind,sub.name,sub.name_inherited,
 	coalesce(src.config->>'feedUrl',src.config->>'url','') AS url,
 	coalesce(src.config->>'itemSelector','') AS item_selector,
 	coalesce(src.config->>'titleSelector','') AS title_selector,
@@ -301,6 +324,9 @@ func (s *Service) Explore(ctx context.Context, userID int64, query string, limit
 	if rows == nil {
 		rows = []ExploreItem{}
 	}
+	for i := range rows {
+		rows[i].Name = sourcenaming.LegacyDisplayName(rows[i].Kind, rows[i].Name, rows[i].SourceID, rows[i].URL)
+	}
 
 	return rows, err
 }
@@ -346,6 +372,7 @@ func (s *Service) Preview(ctx context.Context, userID int64, sourceID string) (S
 	if item.SourceID == "" {
 		return SourcePreview{}, ErrNotFound
 	}
+	item.Name = sourcenaming.LegacyDisplayName(item.Kind, item.Name, item.SourceID, item.URL)
 
 	// 读取该信源最近收录的 10 篇文章公开导读
 	var articles []PreviewArticleItem
@@ -391,9 +418,8 @@ func (s *Service) SubscribeExisting(ctx context.Context, userID int64, input Sub
 
 	var id int64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// 验证公共信源是否存在
-		var defaultName string
-		err := tx.Raw(`SELECT name FROM sources WHERE id = ? AND kind IN ('rss', 'web_list')`, sourceID).Row().Scan(&defaultName)
+		// Serialize default-name reads with the worker publishing a new shared name.
+		defaultName, err := sharedDisplayName(tx, sourceID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -403,7 +429,11 @@ func (s *Service) SubscribeExisting(ctx context.Context, userID int64, input Sub
 		}
 
 		name := strings.TrimSpace(input.Name)
-		if name == "" {
+		if utf8.RuneCountInString(name) > 200 || input.IntervalMinutes > 1440 || input.ReuseWindowMinutes > 1440 {
+			return ErrInvalid
+		}
+		inherited := name == ""
+		if inherited {
 			name = defaultName
 		}
 
@@ -413,11 +443,14 @@ func (s *Service) SubscribeExisting(ctx context.Context, userID int64, input Sub
 		}
 
 		// 插入或更新用户订阅
-		if err := tx.Raw(`INSERT INTO user_source_subscriptions(user_id, source_id, name, filter_mode, interval_minutes, reuse_window_minutes, cold_start_pending)
-			VALUES(?, ?, ?, ?, ?, ?, false)
+		if err := tx.Raw(`INSERT INTO user_source_subscriptions AS sub(user_id, source_id, name, name_inherited, filter_mode, interval_minutes, reuse_window_minutes, cold_start_pending)
+			VALUES(?, ?, ?, ?, ?, ?, ?, false)
 			ON CONFLICT(user_id, source_id)
-			DO UPDATE SET name = excluded.name, filter_mode = excluded.filter_mode, enabled = true, interval_minutes = excluded.interval_minutes, reuse_window_minutes = excluded.reuse_window_minutes, activated_at = now(), updated_at = now()
-			RETURNING id`, userID, sourceID, name, filterMode, input.IntervalMinutes, input.ReuseWindowMinutes).Row().Scan(&id); err != nil {
+			DO UPDATE SET name = CASE WHEN excluded.name_inherited AND NOT sub.name_inherited THEN sub.name ELSE excluded.name END,
+			name_inherited = sub.name_inherited AND excluded.name_inherited, filter_mode = excluded.filter_mode,
+			enabled = true, interval_minutes = excluded.interval_minutes, reuse_window_minutes = excluded.reuse_window_minutes,
+			activated_at = CASE WHEN sub.enabled THEN sub.activated_at ELSE now() END, updated_at = now()
+			RETURNING id`, userID, sourceID, name, inherited, filterMode, input.IntervalMinutes, input.ReuseWindowMinutes).Row().Scan(&id); err != nil {
 			return err
 		}
 
@@ -434,14 +467,26 @@ func (s *Service) SubscribeExisting(ctx context.Context, userID int64, input Sub
 /** Create registers a new user source subscription. */
 func (s *Service) Create(ctx context.Context, userID int64, input Input) (Subscription, error) {
 	input = withDefaults(input)
+	input.NameInherited = nil
 	if err := validate(input); err != nil {
 		return Subscription{}, err
 	}
 
 	var id int64
+	var newSource string
+	var updatedExisting bool
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		sourceID, err := resolveSource(tx, input)
+		sourceID, created, err := resolveSource(tx, input, userID)
 		if err != nil {
+			return err
+		}
+		if created {
+			newSource = sourceID
+		}
+		if err := sourceschedule.Lock(tx, sourceID); err != nil {
+			return err
+		}
+		if err := tx.Raw(`SELECT EXISTS(SELECT 1 FROM user_source_subscriptions WHERE user_id=? AND source_id=?)`, userID, sourceID).Row().Scan(&updatedExisting); err != nil {
 			return err
 		}
 
@@ -450,7 +495,11 @@ func (s *Service) Create(ctx context.Context, userID int64, input Input) (Subscr
 			filterMode = "label"
 		}
 
-		if err := tx.Raw(`INSERT INTO user_source_subscriptions(user_id,source_id,name,filter_mode,interval_minutes,reuse_window_minutes,cold_start_pending) VALUES(?,?,?,?,?,?,true) ON CONFLICT(user_id,source_id) DO UPDATE SET name=excluded.name,filter_mode=excluded.filter_mode,enabled=true,interval_minutes=excluded.interval_minutes,reuse_window_minutes=excluded.reuse_window_minutes,cold_start_pending=true,activated_at=now(),updated_at=now() RETURNING id`, userID, sourceID, strings.TrimSpace(input.Name), filterMode, input.IntervalMinutes, input.ReuseWindowMinutes).Row().Scan(&id); err != nil {
+		if err := tx.Raw(`INSERT INTO user_source_subscriptions AS sub(user_id,source_id,name,filter_mode,interval_minutes,reuse_window_minutes,cold_start_pending)
+			VALUES(?,?,?,?,?,?,true) ON CONFLICT(user_id,source_id) DO UPDATE SET name=excluded.name,name_inherited=false,
+			filter_mode=excluded.filter_mode,enabled=true,interval_minutes=excluded.interval_minutes,reuse_window_minutes=excluded.reuse_window_minutes,
+			activated_at=CASE WHEN sub.enabled THEN sub.activated_at ELSE now() END,updated_at=now() RETURNING id`,
+			userID, sourceID, strings.TrimSpace(input.Name), filterMode, input.IntervalMinutes, input.ReuseWindowMinutes).Row().Scan(&id); err != nil {
 			return err
 		}
 
@@ -460,7 +509,10 @@ func (s *Service) Create(ctx context.Context, userID int64, input Input) (Subscr
 		return Subscription{}, err
 	}
 
-	return s.Get(ctx, userID, id)
+	s.enqueueNewSource(ctx, newSource)
+	result, err := s.Get(ctx, userID, id)
+	result.UpdatedExisting = updatedExisting
+	return result, err
 }
 
 /** withDefaults fills in reasonable default intervals if not specified. */
@@ -490,16 +542,38 @@ func (s *Service) Update(ctx context.Context, userID, id int64, input Input) (Su
 		return Subscription{}, err
 	}
 
-	var oldSource string
+	var createdSource string
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Raw(`SELECT source_id FROM user_source_subscriptions WHERE user_id=? AND id=? FOR UPDATE`, userID, id).Row().Scan(&oldSource); errors.Is(err, sql.ErrNoRows) {
+		var oldSource string
+		if err := tx.Raw(`SELECT source_id FROM user_source_subscriptions WHERE user_id=? AND id=?`, userID, id).Row().Scan(&oldSource); errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		} else if err != nil {
 			return err
 		}
 
-		newSource, err := resolveSource(tx, input)
+		newSource, created, err := resolveSource(tx, input, userID)
 		if err != nil {
+			return err
+		}
+		if created {
+			createdSource = newSource
+		}
+
+		// Lock both plans in the same order when concurrent edits move between them.
+		if err := sourceschedule.Lock(tx, min(oldSource, newSource)); err != nil {
+			return err
+		}
+		if oldSource != newSource {
+			if err := sourceschedule.Lock(tx, max(oldSource, newSource)); err != nil {
+				return err
+			}
+		}
+
+		var previousName string
+		var previousInherited bool
+		if err := tx.Raw(`SELECT name,name_inherited FROM user_source_subscriptions WHERE user_id=? AND id=? AND source_id=? FOR UPDATE`, userID, id, oldSource).Row().Scan(&previousName, &previousInherited); errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		} else if err != nil {
 			return err
 		}
 
@@ -522,7 +596,19 @@ func (s *Service) Update(ctx context.Context, userID, id int64, input Input) (Su
 			filterMode = "label"
 		}
 
-		if err := tx.Exec(`UPDATE user_source_subscriptions SET source_id=?,name=?,filter_mode=?,enabled=?,interval_minutes=?,reuse_window_minutes=?,cold_start_pending=CASE WHEN source_id<>? THEN true ELSE cold_start_pending END,activated_at=CASE WHEN enabled<>? OR source_id<>? THEN now() ELSE activated_at END,updated_at=now() WHERE user_id=? AND id=?`, newSource, strings.TrimSpace(input.Name), filterMode, enabled, input.IntervalMinutes, input.ReuseWindowMinutes, newSource, enabled, newSource, userID, id).Error; err != nil {
+		name := strings.TrimSpace(input.Name)
+		inherited := previousInherited && name == previousName
+		if input.NameInherited != nil {
+			inherited = *input.NameInherited
+		}
+		if inherited {
+			name, err = sharedDisplayName(tx, newSource)
+			if err != nil {
+				return err
+			}
+		}
+
+		if err := tx.Exec(`UPDATE user_source_subscriptions SET source_id=?,name=?,name_inherited=?,filter_mode=?,enabled=?,interval_minutes=?,reuse_window_minutes=?,cold_start_pending=CASE WHEN source_id<>? THEN true ELSE cold_start_pending END,activated_at=CASE WHEN enabled<>? OR source_id<>? THEN now() ELSE activated_at END,updated_at=now() WHERE user_id=? AND id=?`, newSource, name, inherited, filterMode, enabled, input.IntervalMinutes, input.ReuseWindowMinutes, newSource, enabled, newSource, userID, id).Error; err != nil {
 			return err
 		}
 
@@ -540,17 +626,23 @@ func (s *Service) Update(ctx context.Context, userID, id int64, input Input) (Su
 		return Subscription{}, err
 	}
 
+	s.enqueueNewSource(ctx, createdSource)
 	return s.Get(ctx, userID, id)
 }
 
 /** SetEnabled pauses or resumes a source subscription. */
 func (s *Service) SetEnabled(ctx context.Context, userID, id int64, enabled bool) (Subscription, error) {
-	var sourceID string
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Raw(`UPDATE user_source_subscriptions SET enabled=?,activated_at=CASE WHEN ? THEN now() ELSE activated_at END,updated_at=now() WHERE user_id=? AND id=? RETURNING source_id`, enabled, enabled, userID, id).Row().Scan(&sourceID); errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
-		} else if err != nil {
+		sourceID, err := lockSubscriptionSource(tx, userID, id)
+		if err != nil {
 			return err
+		}
+		result := tx.Exec(`UPDATE user_source_subscriptions SET enabled=?,activated_at=CASE WHEN ? AND NOT enabled THEN now() ELSE activated_at END,updated_at=now() WHERE user_id=? AND id=? AND source_id=?`, enabled, enabled, userID, id, sourceID)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrNotFound
 		}
 
 		return sourceschedule.Recompute(tx, sourceID, s.schedule)
@@ -562,14 +654,30 @@ func (s *Service) SetEnabled(ctx context.Context, userID, id int64, enabled bool
 	return s.Get(ctx, userID, id)
 }
 
+/** lockSubscriptionSource orders source locks before subscription changes. */
+func lockSubscriptionSource(tx *gorm.DB, userID, id int64) (string, error) {
+	var sourceID string
+	if err := tx.Raw(`SELECT source_id FROM user_source_subscriptions WHERE user_id=? AND id=?`, userID, id).Row().Scan(&sourceID); errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	} else if err != nil {
+		return "", err
+	}
+	return sourceID, sourceschedule.Lock(tx, sourceID)
+}
+
 /** Delete removes a user source subscription while keeping historical data intact. */
 func (s *Service) Delete(ctx context.Context, userID, id int64) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var sourceID string
-		if err := tx.Raw(`DELETE FROM user_source_subscriptions WHERE user_id=? AND id=? RETURNING source_id`, userID, id).Row().Scan(&sourceID); errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
-		} else if err != nil {
+		sourceID, err := lockSubscriptionSource(tx, userID, id)
+		if err != nil {
 			return err
+		}
+		result := tx.Exec(`DELETE FROM user_source_subscriptions WHERE user_id=? AND id=? AND source_id=?`, userID, id, sourceID)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrNotFound
 		}
 
 		return sourceschedule.Recompute(tx, sourceID, s.schedule)
@@ -596,7 +704,7 @@ func (s *Service) EnqueueFetch(ctx context.Context, userID, id int64) (FetchRequ
 		return FetchRequest{Status: "disabled"}, errors.New("采集功能当前已关闭")
 	}
 
-	jobID, err := s.enqueue(ctx, row.SourceID, row.Kind)
+	jobID, err := s.enqueue(ctx, row.SourceID, row.Kind, userID)
 	if err != nil {
 		return FetchRequest{}, err
 	}
@@ -757,7 +865,7 @@ func (s *Service) IngestDirect(ctx context.Context, userID int64, input IngestIn
 /** validate checks input parameters for validity. */
 func validate(in Input) error {
 	name := strings.TrimSpace(in.Name)
-	if name == "" || utf8.RuneCountInString(name) > 200 || in.IntervalMinutes < 1 || in.IntervalMinutes > 1440 || in.ReuseWindowMinutes < 1 || in.ReuseWindowMinutes > 1440 || len(in.URL) > 2048 {
+	if (name == "" && (in.NameInherited == nil || !*in.NameInherited)) || utf8.RuneCountInString(name) > 200 || in.IntervalMinutes < 1 || in.IntervalMinutes > 1440 || in.ReuseWindowMinutes < 1 || in.ReuseWindowMinutes > 1440 || len(in.URL) > 2048 {
 		return ErrInvalid
 	}
 
@@ -778,21 +886,21 @@ func validate(in Input) error {
 }
 
 /** resolveSource resolves or creates a source based on input kind (rss or web_list). */
-func resolveSource(tx *gorm.DB, input Input) (string, error) {
+func resolveSource(tx *gorm.DB, input Input, userID int64) (string, bool, error) {
 	kind := input.Kind
 	if kind == "" {
 		kind = "rss"
 	}
 
 	if kind == "web_list" {
-		return resolveWebListSource(tx, input)
+		return resolveWebListSource(tx, input, userID)
 	}
 
-	return resolveRSSSource(tx, input.URL)
+	return resolveRSSSource(tx, input.URL, userID)
 }
 
 /** resolveWebListSource resolves or inserts a web_list source. */
-func resolveWebListSource(tx *gorm.DB, input Input) (string, error) {
+func resolveWebListSource(tx *gorm.DB, input Input, userID int64) (string, bool, error) {
 	rawURL := strings.TrimSpace(input.URL)
 	itemSelector := strings.TrimSpace(input.ItemSelector)
 	titleSelector := strings.TrimSpace(input.TitleSelector)
@@ -800,16 +908,16 @@ func resolveWebListSource(tx *gorm.DB, input Input) (string, error) {
 	identity := identityFor("web_list:" + rawURL + ":" + itemSelector + ":" + titleSelector)
 
 	if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext('myhot:source-identity'),hashtext(?))`, identity).Error; err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	var id string
-	err := tx.Raw(`SELECT id FROM sources WHERE kind='web_list' AND collector_identity=? FOR UPDATE`, identity).Row().Scan(&id)
+	err := tx.Raw(`SELECT id FROM sources WHERE kind='web_list' AND collector_identity=?`, identity).Row().Scan(&id)
 	if err == nil {
-		return id, nil
+		return id, false, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return "", err
+		return "", false, err
 	}
 
 	id = "web-" + identity[:32]
@@ -821,36 +929,23 @@ func resolveWebListSource(tx *gorm.DB, input Input) (string, error) {
 	}
 	configBytes, _ := json.Marshal(configMap)
 
-	name := strings.TrimSpace(input.Name)
-	if name == "" {
-		name = "网页列表"
-	}
-
-	if err := tx.Exec(`INSERT INTO sources(id,name,kind,config,participation_mode,interval_minutes,reuse_window_minutes,site_fulltext,syndicate_fulltext,enabled,health,next_fetch_at,collector_identity) VALUES(?,?,'web_list',?::jsonb,'isolated',60,10,false,false,false,'paused',now(),?) ON CONFLICT DO NOTHING`, id, name, string(configBytes), identity).Error; err != nil {
-		return "", err
-	}
-
-	if err := tx.Raw(`SELECT id FROM sources WHERE collector_identity=?`, identity).Row().Scan(&id); err != nil {
-		return "", err
-	}
-
-	return id, nil
+	return insertNamedSource(tx, id, "web_list", rawURL, identity, configBytes, userID)
 }
 
 /** resolveRSSSource resolves or inserts a standard RSS/Atom source. */
-func resolveRSSSource(tx *gorm.DB, raw string) (string, error) {
+func resolveRSSSource(tx *gorm.DB, raw string, userID int64) (string, bool, error) {
 	identity := identityFor(raw)
 	if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext('myhot:rss-identity'),hashtext(?))`, identity).Error; err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	var id string
-	err := tx.Raw(`SELECT id FROM sources WHERE kind='rss' AND collector_identity=? FOR UPDATE`, identity).Row().Scan(&id)
+	err := tx.Raw(`SELECT id FROM sources WHERE kind='rss' AND collector_identity=?`, identity).Row().Scan(&id)
 	if err == nil {
-		return id, nil
+		return id, false, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return "", err
+		return "", false, err
 	}
 
 	var legacy []struct {
@@ -858,7 +953,7 @@ func resolveRSSSource(tx *gorm.DB, raw string) (string, error) {
 		Config []byte `gorm:"column:config"`
 	}
 	if err := tx.Raw(`SELECT id,config FROM sources WHERE kind='rss' AND collector_identity IS NULL ORDER BY id`).Scan(&legacy).Error; err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	for _, row := range legacy {
@@ -880,10 +975,10 @@ func resolveRSSSource(tx *gorm.DB, raw string) (string, error) {
 
 	if id != "" {
 		if err := tx.Exec(`UPDATE sources SET collector_identity=?,participation_mode='isolated' WHERE id=?`, identity, id).Error; err != nil {
-			return "", err
+			return "", false, err
 		}
 
-		return id, nil
+		return id, false, nil
 	}
 
 	id = "rss-" + identity[:32]
@@ -891,15 +986,31 @@ func resolveRSSSource(tx *gorm.DB, raw string) (string, error) {
 		"feedUrl": strings.TrimSpace(raw),
 	})
 
-	if err := tx.Exec(`INSERT INTO sources(id,name,kind,config,participation_mode,interval_minutes,reuse_window_minutes,site_fulltext,syndicate_fulltext,enabled,health,next_fetch_at,collector_identity) VALUES(?,?,'rss',?::jsonb,'isolated',60,10,false,false,false,'paused',now(),?) ON CONFLICT DO NOTHING`, id, "个人 RSS", string(config), identity).Error; err != nil {
-		return "", err
-	}
+	return insertNamedSource(tx, id, "rss", raw, identity, config, userID)
+}
 
-	if err := tx.Raw(`SELECT id FROM sources WHERE collector_identity=?`, identity).Row().Scan(&id); err != nil {
-		return "", err
+/** insertNamedSource creates a shared source and records who requested its first fetch. */
+func insertNamedSource(tx *gorm.DB, id, kind, address, identity string, config []byte, userID int64) (string, bool, error) {
+	name, err := sourcenaming.ReserveName(tx, id, sourcenaming.Provisional(id, address), "")
+	if err != nil {
+		return "", false, err
 	}
+	if err := tx.Exec(`INSERT INTO sources(id,name,kind,config,participation_mode,interval_minutes,reuse_window_minutes,site_fulltext,syndicate_fulltext,enabled,health,next_fetch_at,collector_identity)
+		VALUES(?,?,?,?::jsonb,'isolated',60,10,false,false,false,'paused',now(),?)`, id, name, kind, string(config), identity).Error; err != nil {
+		return "", false, err
+	}
+	if err := sourcenaming.Register(tx, id, userID); err != nil {
+		return "", false, err
+	}
+	return id, true, nil
+}
 
-	return id, nil
+/** sharedDisplayName reads the shared name while preventing concurrent inheritance updates. */
+func sharedDisplayName(tx *gorm.DB, id string) (string, error) {
+	var kind, name, address string
+	err := tx.Raw(`SELECT kind,name,coalesce(config->>'feedUrl',config->>'url','')
+		FROM sources WHERE id=? AND kind IN ('rss','web_list') FOR NO KEY UPDATE`, id).Row().Scan(&kind, &name, &address)
+	return sourcenaming.LegacyDisplayName(kind, name, id, address), err
 }
 
 /** identityFor generates a deterministic SHA-256 identity string for a URL or key. */

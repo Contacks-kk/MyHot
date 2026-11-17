@@ -15,6 +15,9 @@ import (
 	"aihot/backend-go/internal/modelconfig"
 	"aihot/backend-go/internal/personal"
 	"aihot/backend-go/internal/provider"
+	"aihot/backend-go/internal/receipts"
+	"aihot/backend-go/internal/sourcenaming"
+	"aihot/backend-go/internal/usersources"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
@@ -58,6 +61,115 @@ func localTestORM(t *testing.T) *gorm.DB {
 	sqlDB.SetMaxIdleConns(1)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	return orm
+}
+
+/** TestSourceNamingKeepsPersonalAliasesAndUsesTheCorrectModel covers both model owners. */
+func TestSourceNamingKeepsPersonalAliasesAndUsesTheCorrectModel(t *testing.T) {
+	f := fixture(t)
+	ctx := context.Background()
+	subscriptions := usersources.NewService(f.orm, config.SourceSchedule{})
+	created, err := subscriptions.Create(ctx, f.users[0], usersources.Input{
+		Name: "Private alias",
+		URL:  "https://naming.example.invalid/news/" + f.prefix + ".xml?token=secret-value",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	followed, err := subscriptions.SubscribeExisting(ctx, f.users[1], usersources.SubscribeExistingInput{SourceID: created.SourceID})
+	if err != nil || !followed.NameInherited || followed.Name == created.Name || strings.Contains(followed.Name, "secret-value") {
+		t.Fatalf("default subscription=%#v, err=%v", followed, err)
+	}
+	t.Cleanup(func() {
+		_, _ = f.pool.Exec(ctx, `DELETE FROM user_source_subscriptions WHERE source_id=$1`, created.SourceID)
+		_, _ = f.pool.Exec(ctx, `DELETE FROM sources WHERE id=$1`, created.SourceID)
+		_, _ = f.pool.Exec(ctx, `DELETE FROM receipts WHERE purpose='source_naming' AND subject=$1`, f.source)
+	})
+	if err := f.orm.Transaction(func(tx *gorm.DB) error {
+		if err := sourcenaming.RecordCollection(tx, created.SourceID, f.users[1]); err != nil {
+			return err
+		}
+		if err := tx.Exec(`UPDATE sources SET name='个人 RSS' WHERE id=?`, f.source).Error; err != nil {
+			return err
+		}
+		return sourcenaming.RecordCollection(tx, f.source, 0)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var userCalls, fallbackCalls atomic.Int32
+	const canonical = "Naming test news"
+	chat := func(_ context.Context, cfg provider.Config, prompt string) (provider.Completion, error) {
+		if strings.Contains(prompt, "secret-value") || strings.Contains(prompt, "Private alias") {
+			return provider.Completion{}, fmt.Errorf("private value in naming evidence")
+		}
+		if cfg.Model == "model-0" {
+			userCalls.Add(1)
+		} else if cfg.Model == "developer-model" {
+			fallbackCalls.Add(1)
+		} else {
+			return provider.Completion{}, fmt.Errorf("unexpected model %q", cfg.Model)
+		}
+		return provider.Completion{Text: `{"name":"` + canonical + `"}`}, nil
+	}
+	repository := sourcenaming.NewRepository(f.orm)
+	paid := receipts.NewService(receipts.NewRepository(f.orm))
+	withoutFallback := sourcenaming.NewService(repository, paid, f.cfg, chat)
+	if ids, err := withoutFallback.ReadyIDs(ctx, f.source); err != nil || len(ids) != 0 {
+		t.Fatalf("legacy automatic source became ready without fallback: %v, %v", ids, err)
+	}
+	if err := withoutFallback.Name(ctx, f.source); err != nil {
+		t.Fatal(err)
+	}
+
+	f.cfg.SourceNamingBaseURL = "https://fallback.example.invalid/v1"
+	f.cfg.SourceNamingModel = "developer-model"
+	f.cfg.SourceNamingAPIKey = "fixture-key"
+	service := sourcenaming.NewService(repository, paid, f.cfg, chat)
+	if ids, err := service.ReadyIDs(ctx, f.source); err != nil || len(ids) != 1 {
+		t.Fatalf("configured legacy fallback not ready: %v, %v", ids, err)
+	}
+	results := make(chan error, 3)
+	for _, id := range []string{created.SourceID, f.source, created.SourceID} {
+		go func() { results <- service.Name(ctx, id) }()
+	}
+	for range 3 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if userCalls.Load() != 1 || fallbackCalls.Load() != 1 {
+		t.Fatalf("model calls user=%d fallback=%d", userCalls.Load(), fallbackCalls.Load())
+	}
+	var shared, legacy string
+	if err := f.pool.QueryRow(ctx, `SELECT a.name,b.name FROM sources a CROSS JOIN sources b WHERE a.id=$1 AND b.id=$2`, created.SourceID, f.source).Scan(&shared, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if shared == legacy || !strings.HasPrefix(shared, canonical) || !strings.HasPrefix(legacy, canonical) {
+		t.Fatalf("shared names collided: %q / %q", shared, legacy)
+	}
+	if own, err := subscriptions.Get(ctx, f.users[0], created.ID); err != nil || own.Name != "Private alias" || own.NameInherited {
+		t.Fatalf("private name changed: %#v, %v", own, err)
+	}
+	if inherited, err := subscriptions.Get(ctx, f.users[1], followed.ID); err != nil || inherited.Name != shared || !inherited.NameInherited {
+		t.Fatalf("inherited name did not update: %#v, %v", inherited, err)
+	}
+	inheritName := true
+	restored, err := subscriptions.Update(ctx, f.users[0], created.ID, usersources.Input{
+		NameInherited:      &inheritName,
+		URL:                created.URL,
+		IntervalMinutes:    created.IntervalMinutes,
+		ReuseWindowMinutes: created.ReuseWindowMinutes,
+	})
+	if err != nil || restored.Name != shared || !restored.NameInherited {
+		t.Fatalf("restore shared name=%#v, err=%v", restored, err)
+	}
+	var receiptOwner int64
+	if err := f.pool.QueryRow(ctx, `SELECT user_id FROM user_model_call_receipts WHERE logical_key=$1 AND purpose='source_naming' AND status='completed'`, "source_naming:"+created.SourceID).Scan(&receiptOwner); err != nil || receiptOwner != f.users[0] {
+		t.Fatalf("personal receipt owner=%d, err=%v", receiptOwner, err)
+	}
+	var platformStatus string
+	if err := f.pool.QueryRow(ctx, `SELECT status FROM receipts WHERE subject=$1 AND purpose='source_naming'`, f.source).Scan(&platformStatus); err != nil || platformStatus != "completed" {
+		t.Fatalf("platform receipt=%q, err=%v", platformStatus, err)
+	}
 }
 
 type workerFixture struct {
