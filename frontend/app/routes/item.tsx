@@ -1,3 +1,4 @@
+import { BackLink } from "../components/ui/BackLink";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Await, isRouteErrorResponse, Link, useAsyncError, useLoaderData, useNavigate, useRevalidator } from "react-router";
 import type { Route } from "./+types/item";
@@ -21,7 +22,7 @@ import { ArticleBody } from "../features/item/ArticleBody";
 import { ActionsSheet, ReaderToolbar, type ActionRow } from "../features/item/ReaderTools";
 import { OutlineSheet, scrollToAnchor } from "../components/ui/OutlineSheet";
 import { takePreview } from "../features/item/preview";
-import { IconArrowLeft, IconCopy, IconDownload, IconExternal, IconImage, IconMenu, IconMore, IconShare } from "../components/icons";
+import { IconCopy, IconDownload, IconExternal, IconImage, IconMenu, IconMore, IconShare } from "../components/icons";
 import { BarButton, PhoneBar } from "../components/shell/PhoneBar";
 import { isPhone, type Screen } from "../components/shell/screens";
 
@@ -293,11 +294,7 @@ function ItemView({ item }: { item: SiteItemDetail }) {
     if (window.history.state?.idx > 0) navigate(-1);
     else navigate(item.selected ? "/" : "/all");
   };
-  const backButton = (
-    <button type="button" onClick={back} className="-ml-1.5 inline-flex h-8 items-center gap-1.5 rounded-full px-1.5 text-[13px] text-ink-3 transition-colors hover:text-ink">
-      <IconArrowLeft size={16} /> 返回
-    </button>
-  );
+  const backButton = <BackLink to={item.selected ? "/" : "/all"} label="返回" />;
   const moreMenu = (
     <Menu label="更多操作" trigger={<IconMenu size={17} />}>
       {(close) => (

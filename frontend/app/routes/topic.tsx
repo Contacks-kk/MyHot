@@ -1,3 +1,4 @@
+import { BackLink } from "../components/ui/BackLink";
 import { REPORTS, SITE } from "@aihot/site";
 import { Link, redirect, useLoaderData } from "react-router";
 import type { Route } from "./+types/topic";
@@ -7,7 +8,6 @@ import { breadcrumbLd, pageMeta, titled, topicLd } from "../lib/seo";
 import { DayList, Pagination } from "../features/feed/DayList";
 import { BrandMark } from "../components/BrandMark";
 import { EmptyState } from "../components/ui/Page";
-import { IconArrowLeft } from "../components/icons";
 import { beijingDate } from "@aihot/contracts/time";
 import { monthDay, monthDayTime } from "../lib/format";
 import { PhoneBar } from "../components/shell/PhoneBar";
@@ -93,9 +93,7 @@ export default function TopicRoute() {
   return (
     <div className="pb-6">
       <PhoneBar back={{ to: "/topics", label: "全部主题" }} title={topic.name} />
-      <Link to="/topics" className="hidden items-center gap-1.5 py-2 text-[13px] text-ink-3 transition-colors hover:text-accent lg:inline-flex">
-        <IconArrowLeft size={14} /> 返回全部主题
-      </Link>
+      <div className="hidden lg:block py-1"><BackLink to="/topics" label="全部主题" /></div>
       <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2 pb-5 pt-3 lg:pt-1">
         <div className="min-w-0 max-w-[760px]">
           <p className="text-[12px] font-semibold tracking-[0.08em] text-accent">{topic.groupName}</p>

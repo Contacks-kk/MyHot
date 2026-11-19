@@ -1,3 +1,4 @@
+import { BackLink } from "../components/ui/BackLink";
 import type { MediaView } from "@aihot/contracts/site";
 import type { Screen } from "../components/shell/screens";
 import { Link, useLoaderData } from "react-router";
@@ -48,9 +49,7 @@ export default function UserHot() {
 
   return (
     <section className="pb-10">
-      <Link to="/" className="text-[12px] text-ink-4 hover:text-accent">
-        {dict.action.backToFeed}
-      </Link>
+      <BackLink to="/" label={dict.action.backToFeed} />
       <p className="mono mt-5 text-[10px] uppercase tracking-[.16em] text-ink-4">
         {dict.article.last48Hours}
       </p>

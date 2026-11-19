@@ -1,3 +1,4 @@
+import { BackLink } from "../components/ui/BackLink";
 import { Link, useRouteLoaderData } from "react-router";
 import { SITE } from "@aihot/site";
 import type { Route } from "./+types/about";
@@ -24,11 +25,7 @@ export default function AboutPage() {
 
   const content = (
     <article className="mx-auto max-w-[760px]">
-      {!hasShell && (
-        <Link to="/" className="text-[13px] font-medium text-accent">
-          ← MyHOT
-        </Link>
-      )}
+      <div className="pb-2"><BackLink to="/" label={hasShell ? "我的热点" : "MyHOT"} /></div>
       <h1 className={`${hasShell ? "" : "mt-8 "}text-[34px] font-semibold tracking-tight text-ink`}>
         为你关注的变化，留出每天的阅读时间。
       </h1>

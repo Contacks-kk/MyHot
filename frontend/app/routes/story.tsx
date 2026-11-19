@@ -1,3 +1,4 @@
+import { BackLink } from "../components/ui/BackLink";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useLoaderData, useLocation } from "react-router";
 import type { Route } from "./+types/story";
@@ -13,7 +14,7 @@ import { isReload } from "../lib/restore";
 import { Badge, SelectedBadge } from "../components/ui/Badge";
 import { PillTabs } from "../components/ui/Tabs";
 import { Select } from "../components/ui/Controls";
-import { IconArrowLeft, IconChevronRight, IconClock, IconDoc, IconUsers } from "../components/icons";
+import { IconChevronRight, IconClock, IconDoc, IconUsers } from "../components/icons";
 import { PhoneBar } from "../components/shell/PhoneBar";
 import type { Screen } from "../components/shell/screens";
 
@@ -211,9 +212,7 @@ export default function StoryPage() {
     <div className="mx-auto max-w-[var(--page-max-reading)] pb-10">
       <PhoneBar back={{ to: "/hot", label: "热点" }} title={story.title} />
       <nav aria-label="位置" className="hidden items-center gap-2.5 pb-5 pt-4 text-[12px] text-ink-4 lg:flex">
-        <Link to="/hot" className="inline-flex items-center gap-1.5 transition-colors hover:text-ink">
-          <IconArrowLeft size={15} /> 热点榜
-        </Link>
+        <BackLink to="/hot" label="热点榜" />
         <span className="h-3 w-px bg-line-strong" aria-hidden="true" />
         <span>事件详情</span>
       </nav>

@@ -1,3 +1,4 @@
+import { BackLink } from "../components/ui/BackLink";
 import { useState, useEffect } from "react";
 import type { MediaView } from "@aihot/contracts/site";
 import { Link, useLoaderData } from "react-router";
@@ -130,9 +131,7 @@ export default function UserArticle() {
       <ArticleLayout
         left={
           <>
-            <Link to="/hot" className="inline-flex text-[13px] text-ink-3 transition-colors hover:text-accent">
-              {dict.action.backToHot}
-            </Link>
+            <BackLink to="/hot" label={dict.action.backToHot} />
             <RailSection title={dict.article.source}>{sourceDetails}</RailSection>
           </>
         }
@@ -150,9 +149,7 @@ export default function UserArticle() {
           </>
         }
       >
-        <Link to="/hot" className="inline-flex text-[13px] text-ink-3 hover:text-accent 2xl:hidden">
-          {dict.action.backToHot}
-        </Link>
+        <div className="2xl:hidden"><BackLink to="/hot" label={dict.action.backToHot} /></div>
         <article className="pt-7 2xl:pt-0">
           <h1 className="break-words text-[30px] font-bold leading-[1.3] tracking-[-0.025em] text-ink sm:text-[40px] lg:text-[44px]">
             {primaryTitle}

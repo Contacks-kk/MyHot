@@ -1,3 +1,4 @@
+import { BackLink } from "../components/ui/BackLink";
 import { useState, useEffect, type FormEvent } from "react";
 import { Link, useLoaderData } from "react-router";
 import type { Route } from "./+types/sources";
@@ -702,9 +703,7 @@ export default function SourcesRoute() {
 
   return (
     <main className="mx-auto max-w-[900px] pb-12">
-      <Link to="/" className="text-[12px] text-ink-4 hover:text-accent">
-        ← {locale === "en" ? "My Hot" : "我的热点"}
-      </Link>
+      <BackLink to="/" label={locale === "en" ? "My Hot" : "我的热点"} />
 
       <div className="mt-3 flex flex-wrap items-end justify-between gap-3">
         <div>

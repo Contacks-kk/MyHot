@@ -1,3 +1,4 @@
+import { BackLink } from "../components/ui/BackLink";
 import { useEffect, useState } from "react";
 import { data, Link, useLoaderData, useNavigate, useRevalidator } from "react-router";
 import type { Screen } from "../components/shell/screens";
@@ -190,7 +191,7 @@ export default function UserDaily() {
   return (
     <div className="report-shell lg:-mx-7 lg:-mb-[72px] lg:-mt-6 lg:flex lg:min-h-dvh">
       <aside className="border-b border-line px-1 pb-5 lg:sticky lg:top-0 lg:h-dvh lg:w-[280px] lg:shrink-0 lg:overflow-y-auto lg:border-b-0 lg:border-r lg:px-5 lg:pt-8">
-        <Link to="/" className="text-[12px] text-ink-4 hover:text-accent">← 我的热点</Link>
+        <BackLink to="/" label="我的热点" />
         <div className="mt-6 border-b border-line-strong pb-3 text-[12px] font-semibold tracking-[0.2em] text-ink">往期日报</div>
         <nav aria-label="往期日报" className="mt-2 flex gap-2 overflow-x-auto lg:block lg:space-y-1 lg:overflow-visible">
           {reports.map((item) => {

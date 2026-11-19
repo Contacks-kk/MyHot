@@ -1,3 +1,4 @@
+import { BackLink } from "../../components/ui/BackLink";
 import type { ReactNode } from "react";
 import { Link } from "react-router";
 import type { CopyDocument, RenderedCopy } from "../../lib/markdown";
@@ -66,13 +67,7 @@ export function CopyPage({
       <main className="mx-auto max-w-[var(--page-max-reading)] px-2 sm:px-6 lg:px-12">
         {/* 桌面端返回链接 */}
         <div className="hidden pt-6 lg:block">
-          <Link
-            to="/more"
-            className="inline-flex items-center gap-1.5 text-[13px] text-ink-3 transition-colors hover:text-accent"
-          >
-            <IconChevronLeft size={16} />
-            <span>返回我的账号</span>
-          </Link>
+          <BackLink to="/more" label="我的账号" />
         </div>
 
         <ArticleLayout

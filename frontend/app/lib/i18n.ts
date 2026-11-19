@@ -104,8 +104,8 @@ export const TRANSLATIONS: Record<Locale, TranslationDict> = {
       language: "语言",
     },
     action: {
-      backToHot: "← 返回热点榜",
-      backToFeed: "← 我的热点",
+      backToHot: "返回热点榜",
+      backToFeed: "我的热点",
       readOriginal: "阅读原文 ↗",
       openOriginal: "打开原文 ↗",
       logout: "退出登录",
@@ -183,8 +183,8 @@ export const TRANSLATIONS: Record<Locale, TranslationDict> = {
       language: "Language",
     },
     action: {
-      backToHot: "← Back to Hotlist",
-      backToFeed: "← Back to Feed",
+      backToHot: "Back to Hotlist",
+      backToFeed: "Back to Feed",
       readOriginal: "Read Original ↗",
       openOriginal: "Open Original ↗",
       logout: "Log out",
