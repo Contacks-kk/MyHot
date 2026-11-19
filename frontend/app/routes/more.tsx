@@ -1,3 +1,4 @@
+import { LogoutDialog } from "../components/shell/LogoutDialog";
 import { useState, type FormEvent } from "react";
 import { useLoaderData, Link } from "react-router";
 import type { Route } from "./+types/more";
@@ -5,7 +6,6 @@ import type { Screen } from "../components/shell/screens";
 import { deleteJSON, fieldClass, FormMessage, labelClass, postJSON } from "../features/account/common";
 import { IconLogout } from "../components/icons";
 import { userApiGet, type UserSession } from "../lib/user-api.server";
-import { LocaleSwitch } from "../components/shell/LocaleSwitch";
 import { useLocalePreference } from "../lib/local-state";
 import { getDict } from "../lib/i18n";
 
@@ -22,20 +22,26 @@ export const headers: Route.HeadersFunction = () => ({
 /** Load the authenticated user's session details including email and CSRF token. */
 export const loader = ({ request }: Route.LoaderArgs) => userApiGet<UserSession>(request, "/api/me");
 
-/** Render the account overview, language settings, policy links, and account deletion form. */
+/** Render the account overview, policy links, and account deletion form. */
 export default function MorePage() {
   const user = useLoaderData<typeof loader>();
   const locale = useLocalePreference();
   const dict = getDict(locale);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const [logoutBusy, setLogoutBusy] = useState(false);
 
   /** Submit user logout request and redirect to home. */
   async function handleLogout() {
+    setLogoutBusy(true);
+
     // Submit logout request to backend
     try {
       await postJSON("/api/auth/logout", {}, user.csrfToken);
       window.location.assign("/");
     } catch {
       window.location.assign("/");
+    } finally {
+      setLogoutBusy(false);
     }
   }
 
@@ -44,10 +50,6 @@ export default function MorePage() {
       <h1 className="text-[25px] font-semibold tracking-tight text-ink">{dict.account.title}</h1>
       <p className="mt-2 text-[13px] text-ink-4">{user.email}</p>
       <div className="card mt-6 divide-y divide-line text-[14px] text-ink-2">
-        <div className="flex items-center justify-between px-5 py-4">
-          <span className="font-medium text-ink">{dict.shell.language}</span>
-          <LocaleSwitch className="w-[104px]" />
-        </div>
         {[
           ["/terms", dict.account.terms],
           ["/privacy", dict.account.privacy],
@@ -62,13 +64,21 @@ export default function MorePage() {
       <div className="mt-5">
         <button
           type="button"
-          onClick={handleLogout}
+          onClick={() => setLogoutConfirmOpen(true)}
           className="flex h-11 w-full items-center justify-center gap-2 rounded-control border border-line bg-surface text-[14px] font-medium text-ink-2 shadow-sm transition-colors hover:bg-bg-sunk hover:text-hot"
         >
           <IconLogout size={16} />
           <span>{dict.action.logout}</span>
         </button>
       </div>
+
+      <LogoutDialog
+        open={logoutConfirmOpen}
+        onClose={() => setLogoutConfirmOpen(false)}
+        onConfirm={handleLogout}
+        busy={logoutBusy}
+        locale={locale}
+      />
       <section className="mt-8 rounded-card border border-line bg-surface p-5">
         <h2 className="text-[15px] font-semibold text-ink">{dict.action.deleteAccount}</h2>
         <p className="mt-1.5 text-[12px] leading-relaxed text-ink-4">

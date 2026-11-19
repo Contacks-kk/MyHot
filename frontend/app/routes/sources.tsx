@@ -151,13 +151,20 @@ export default function SourcesRoute() {
   const [quickBusy, setQuickBusy] = useState(false);
   const [quickError, setQuickError] = useState("");
 
-  // 自定义手动表单状态
-  const [editing, setEditing] = useState<number | null>(null);
+  // 自定义手动表单状态（用于顶部添加信源）
   const [form, setForm] = useState<FormValue>(emptyForm);
   const [showAdvancedWeb, setShowAdvancedWeb] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+
+  // 信源卡片内就地编辑状态（避免划到页面顶部）
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editForm, setEditForm] = useState<FormValue>(emptyForm);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState("");
+  const [editMessage, setEditMessage] = useState("");
+  const [editShowAdvancedWeb, setEditShowAdvancedWeb] = useState(false);
   const [fetching, setFetching] = useState<number | null>(null);
   const [fetchResults, setFetchResults] = useState<Record<number, FetchResult>>({});
 
@@ -323,11 +330,11 @@ export default function SourcesRoute() {
     }
   }
 
+  /** Open inline configuration editor within the selected source card. */
   function beginEdit(source: Subscription) {
-    setEditing(source.id);
+    setEditingId(source.id);
     const kind = source.kind === "web_list" ? "web_list" : "rss";
-    setActiveTab(kind);
-    setForm({
+    setEditForm({
       kind,
       name: source.name,
       nameInherited: source.nameInherited ?? false,
@@ -339,15 +346,25 @@ export default function SourcesRoute() {
       enabled: source.enabled,
       filterMode: source.filterMode ?? "label",
     });
-    setShowAdvancedWeb(Boolean(source.itemSelector || source.titleSelector));
-    setDiscoverResult(null);
-    setDiscoverNotice("");
-    setError("");
-    setMessage("");
+    setEditShowAdvancedWeb(Boolean(source.itemSelector || source.titleSelector));
+    setEditError("");
+    setEditMessage("");
+
+    // Ensure the card details panel is expanded
+    setExpandedSourceId(source.id);
   }
 
+  /** Cancel inline configuration editor and revert to view details. */
+  function cancelEdit() {
+    setEditingId(null);
+    setEditForm(emptyForm);
+    setEditError("");
+    setEditMessage("");
+    setEditShowAdvancedWeb(false);
+  }
+
+  /** Reset top add-source form to initial state. */
   function reset() {
-    setEditing(null);
     setForm(emptyForm);
     setShowAdvancedWeb(false);
     setDiscoverResult(null);
@@ -356,10 +373,8 @@ export default function SourcesRoute() {
     setMessage("");
   }
 
+  /** Switch between source acquisition tabs. */
   function switchTab(tab: SourceKindTab) {
-    if (editing) {
-      reset();
-    }
     setActiveTab(tab);
     setForm(prev => ({
       ...prev,
@@ -430,6 +445,7 @@ export default function SourcesRoute() {
     );
   }
 
+  /** Submit new subscription from the top form. */
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if ((form.intervalMinutes <= 30 || form.reuseWindowMinutes <= 5) && !window.confirm(locale === "en" ? "High frequency increases server load. Confirm?" : "这会加大服务器压力，确定要这么做吗？")) {
@@ -438,11 +454,12 @@ export default function SourcesRoute() {
     setBusy(true);
     setError("");
     setMessage("");
+
+    // Submit new source subscription to backend
     try {
       const payload = {
         kind: form.kind,
         name: form.name.trim(),
-        nameInherited: editing ? form.nameInherited : undefined,
         url: form.url.trim(),
         itemSelector: form.kind === "web_list" ? form.itemSelector.trim() : "",
         titleSelector: form.kind === "web_list" ? form.titleSelector.trim() : "",
@@ -451,29 +468,87 @@ export default function SourcesRoute() {
         enabled: form.enabled,
         filterMode: form.filterMode,
       };
-      const response = await fetch(editing ? `/api/me/sources/${editing}` : "/api/me/sources", {
-        method: editing ? "PUT" : "POST",
+
+      const response = await fetch("/api/me/sources", {
+        method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-CSRF-Token": initial.csrfToken,
         },
         body: JSON.stringify(payload),
       });
+
       const body = await response.json() as Subscription & { error?: string };
       if (!response.ok) {
         throw new Error(body.error || (locale === "en" ? "Failed to save source" : "保存信息源失败"));
       }
-      setSources(rows => editing ? rows.map(row => row.id === body.id ? body : row) : [body, ...rows.filter(row => row.id !== body.id)]);
-      const updated = editing !== null || body.updatedExisting;
-      setMessage(updated ? (locale === "en" ? "Source settings updated." : "设置已更新。") : (locale === "en" ? "Subscribed." : "已关注。"));
-      setEditing(body.id);
-      setForm(prev => ({ ...prev, name: body.name, nameInherited: body.nameInherited }));
+
+      setSources(rows => [body, ...rows.filter(row => row.id !== body.id)]);
+      setMessage(locale === "en" ? "Subscribed." : "已关注。");
+      setForm(emptyForm);
       setDiscoverResult(null);
       setDiscoverNotice("");
     } catch (e) {
       setError(e instanceof Error ? e.message : (locale === "en" ? "Failed to save source" : "保存信息源失败"));
     } finally {
       setBusy(false);
+    }
+  }
+
+  /** Submit modified configuration for the inline-edited source card. */
+  async function saveInline(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editingId) {
+      return;
+    }
+
+    if ((editForm.intervalMinutes <= 30 || editForm.reuseWindowMinutes <= 5) && !window.confirm(locale === "en" ? "High frequency increases server load. Confirm?" : "这会加大服务器压力，确定要这么做吗？")) {
+      return;
+    }
+
+    setEditBusy(true);
+    setEditError("");
+    setEditMessage("");
+
+    // Submit modified source payload to Go API
+    try {
+      const payload = {
+        kind: editForm.kind,
+        name: editForm.name.trim(),
+        nameInherited: editForm.nameInherited,
+        url: editForm.url.trim(),
+        itemSelector: editForm.kind === "web_list" ? editForm.itemSelector.trim() : "",
+        titleSelector: editForm.kind === "web_list" ? editForm.titleSelector.trim() : "",
+        intervalMinutes: editForm.intervalMinutes,
+        reuseWindowMinutes: editForm.reuseWindowMinutes,
+        enabled: editForm.enabled,
+        filterMode: editForm.filterMode,
+      };
+
+      const response = await fetch(`/api/me/sources/${editingId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": initial.csrfToken,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const body = await response.json() as Subscription & { error?: string };
+      if (!response.ok) {
+        throw new Error(body.error || (locale === "en" ? "Failed to save source" : "保存信息源失败"));
+      }
+
+      // Update source row in state
+      setSources(rows => rows.map(row => row.id === body.id ? body : row));
+
+      // Close inline editor and show feedback
+      setEditingId(null);
+      setMessage(locale === "en" ? "Source settings updated." : "信源配置已更新。");
+    } catch (e) {
+      setEditError(e instanceof Error ? e.message : (locale === "en" ? "Failed to save source" : "保存信息源失败"));
+    } finally {
+      setEditBusy(false);
     }
   }
 
@@ -553,8 +628,8 @@ export default function SourcesRoute() {
         throw new Error(result.error || (locale === "en" ? "Failed to update subscription" : "更新订阅失败"));
       }
       setSources(rows => rows.map(row => row.id === result.id ? result : row));
-      if (editing === result.id) {
-        setForm({ ...form, enabled: result.enabled });
+      if (editingId === result.id) {
+        setEditForm(prev => ({ ...prev, enabled: result.enabled }));
       }
       setMessage(result.enabled ? (locale === "en" ? "Subscription resumed." : "订阅已恢复。") : (locale === "en" ? "Subscription paused." : "订阅已暂停。"));
     } catch (e) {
@@ -594,8 +669,8 @@ export default function SourcesRoute() {
         throw new Error(result.error || (locale === "en" ? "Failed to update filter mode" : "更新过滤策略失败"));
       }
       setSources(rows => rows.map(row => row.id === result.id ? { ...row, filterMode: result.filterMode } : row));
-      if (editing === result.id) {
-        setForm(prev => ({ ...prev, filterMode: result.filterMode ?? "label" }));
+      if (editingId === result.id) {
+        setEditForm(prev => ({ ...prev, filterMode: result.filterMode ?? "label" }));
       }
       setMessage(result.filterMode === "all" ? (locale === "en" ? "Switched to Full Tracking." : "已切换为全量跟踪。") : (locale === "en" ? "Switched to Label Filter." : "已切换为按标签过滤。"));
     } catch (e) {
@@ -622,8 +697,8 @@ export default function SourcesRoute() {
         throw new Error(locale === "en" ? "Failed to delete subscription" : "删除订阅失败");
       }
       setSources(rows => rows.filter(row => row.id !== source.id));
-      if (editing === source.id) {
-        reset();
+      if (editingId === source.id) {
+        cancelEdit();
       }
 
       if (expandedSourceId === source.id) {
@@ -934,17 +1009,10 @@ export default function SourcesRoute() {
         <form onSubmit={save} className="card mt-6 p-5 sm:p-6">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-[15px] font-semibold text-ink">
-              {editing
-                ? (locale === "en" ? "Edit Source" : "编辑信源")
-                : activeTab === "web_list"
+              {activeTab === "web_list"
                 ? (locale === "en" ? "Add Web List Crawler" : "添加网页列表抓取（普通网页）")
                 : (locale === "en" ? "Add RSS / Atom" : "添加 RSS / Atom 订阅")}
             </h2>
-            {editing && (
-              <button type="button" onClick={reset} className="text-[12px] text-ink-4 hover:text-accent">
-                {locale === "en" ? "New Subscription" : "新建订阅"}
-              </button>
-            )}
           </div>
 
           {activeTab === "web_list" && (
@@ -969,16 +1037,7 @@ export default function SourcesRoute() {
                   placeholder={activeTab === "web_list" ? (locale === "en" ? "e.g. OpenAI News" : "例如：OpenAI 官方动态") : (locale === "en" ? "e.g. Tech Blog" : "例如：技术博客")}
                 />
               </label>
-              {editing !== null && (
-                <label className="mt-2 flex items-center gap-2 text-[12px] text-ink-3">
-                  <input
-                    type="checkbox"
-                    checked={form.nameInherited}
-                    onChange={e => setForm({ ...form, nameInherited: e.target.checked })}
-                  />
-                  {locale === "en" ? "Use shared source name" : "使用共享信源名"}
-                </label>
-              )}
+
             </div>
 
             <div className="sm:col-span-1">
@@ -1118,34 +1177,15 @@ export default function SourcesRoute() {
               />
             </label>
 
-            {editing && (
-              <label className="sm:col-span-2 flex items-center gap-2 text-[12px] text-ink-2">
-                <input
-                  type="checkbox"
-                  checked={form.enabled}
-                  onChange={e => setForm({ ...form, enabled: e.target.checked })}
-                />
-                {locale === "en" ? "Enable this subscription" : "启用此订阅"}
-              </label>
-            )}
           </div>
 
           <div className="mt-5 flex justify-end gap-3">
-            {editing && (
-              <button
-                type="button"
-                onClick={reset}
-                className="rounded-full border border-line px-4 py-2 text-[12px] font-semibold text-ink-3 hover:border-accent"
-              >
-                {locale === "en" ? "Cancel" : "取消"}
-              </button>
-            )}
             <button
               type="submit"
               disabled={busy}
-              className="rounded-full bg-accent px-5 py-2 text-[13px] font-semibold text-accent-contrast hover:bg-accent-ink disabled:opacity-50"
+              className="rounded-full bg-accent px-5 py-2 text-[13px] font-semibold text-accent-contrast hover:bg-accent-ink disabled:opacity-50 transition-colors"
             >
-              {busy ? (locale === "en" ? "Saving..." : "保存中…") : editing ? (locale === "en" ? "Save Changes" : "保存修改") : (locale === "en" ? "Add Source" : "保存信源")}
+              {busy ? (locale === "en" ? "Saving..." : "保存中…") : (locale === "en" ? "Add Source" : "保存信源")}
             </button>
           </div>
         </form>
@@ -1353,160 +1393,358 @@ export default function SourcesRoute() {
                     </p>
                   </div>
 
-                  {/* 展开的信源详细信息面板 */}
+                  {/* 展开的信源详细信息面板 / 卡片内就地编辑表单 */}
                   {isExpanded && (
                     <div className="mt-4 rounded-control border border-line/70 bg-bg-sunk/40 p-4 text-[12px] space-y-3">
-                      <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-line/60">
-                        <div className="min-w-0 flex-1">
-                          <span className="text-[11px] font-medium text-ink-4 block">
-                            {locale === "en" ? "Source URL" : "信源完整地址"}
-                          </span>
-                          <span className="mono mt-0.5 block break-all text-[11.5px] text-ink-2 select-all">
-                            {source.url}
-                          </span>
-                        </div>
-
-                        <div className="flex shrink-0 items-center gap-2">
-                          <a
-                            href={source.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-[11px] font-semibold text-accent-contrast hover:bg-accent-ink transition-colors"
-                          >
-                            <span>{locale === "en" ? "Visit Website" : "访问信源网页"}</span>
-                            <span>↗</span>
-                          </a>
-
-                          {!isIngest && (
+                      {editingId === source.id ? (
+                        <form
+                          onSubmit={saveInline}
+                          className="rounded-control border border-accent/40 bg-surface/90 p-4 sm:p-5 space-y-4 shadow-xs"
+                        >
+                          <div className="flex items-center justify-between border-b border-line pb-3">
+                            <h4 className="text-[14px] font-semibold text-ink flex items-center gap-2">
+                              <span>{locale === "en" ? "Edit Source Configuration" : "编辑信源配置"}</span>
+                              <span className="text-[12px] font-normal text-ink-3">({source.name})</span>
+                            </h4>
                             <button
                               type="button"
-                              onClick={() => openPreview(source.sourceId)}
-                              className="inline-flex items-center gap-1 rounded-full border border-line bg-surface px-3 py-1 text-[11px] font-medium text-ink-2 hover:border-accent hover:text-accent transition-colors"
+                              onClick={cancelEdit}
+                              className="text-[12px] text-ink-4 hover:text-accent transition-colors"
                             >
-                              <span>{locale === "en" ? "Browse Ingested" : "查看收录历史"}</span>
-                              <span>↗</span>
+                              {locale === "en" ? "Cancel" : "取消"}
                             </button>
-                          )}
-                        </div>
-                      </div>
-
-                      {!isIngest && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11.5px] text-ink-3">
-                          <div className="flex items-center justify-between rounded bg-surface/80 px-2.5 py-1.5 border border-line/40">
-                            <span className="text-ink-4">{locale === "en" ? "Your Fetch Interval" : "你的抓取频率"}</span>
-                            <span className="font-medium text-ink">{locale === "en" ? `Every ${source.intervalMinutes}m` : `每 ${source.intervalMinutes} 分钟`}</span>
                           </div>
 
-                          <div className="flex items-center justify-between rounded bg-surface/80 px-2.5 py-1.5 border border-line/40">
-                            <span className="text-ink-4">{locale === "en" ? "Reuse Window" : "结果复用窗口"}</span>
-                            <span className="font-medium text-ink">{locale === "en" ? `${source.reuseWindowMinutes}m` : `${source.reuseWindowMinutes} 分钟`}</span>
-                          </div>
-
-                          <div className="flex items-center justify-between rounded bg-surface/80 px-2.5 py-1.5 border border-line/40">
-                            <span className="text-ink-4">{locale === "en" ? "Cluster Effective Interval" : "集群聚合有效周期"}</span>
-                            <span className="font-medium text-ink">{locale === "en" ? `Every ${source.effectiveIntervalMinutes}m` : `每 ${source.effectiveIntervalMinutes} 分钟`}</span>
-                          </div>
-
-                          <div className="flex items-center justify-between rounded bg-surface/80 px-2.5 py-1.5 border border-line/40">
-                            <span className="text-ink-4">{locale === "en" ? "Health Status" : "健康状态"}</span>
-                            <span className={`font-medium ${source.health === "ok" ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}`}>
-                              {source.health === "ok" ? (locale === "en" ? "Healthy" : "正常运行") : source.health}
-                            </span>
-                          </div>
-                        </div>
-                      )}
-
-                      {isWebList && (source.itemSelector || source.titleSelector) && (
-                        <div className="rounded bg-surface/80 p-2.5 border border-line/40 text-[11px] space-y-1">
-                          {source.itemSelector && (
+                          <div className="grid gap-4 sm:grid-cols-2">
                             <div>
-                              <span className="text-ink-4">{locale === "en" ? "Item Selector: " : "条目选择器："}</span>
-                              <code className="mono text-ink-2">{source.itemSelector}</code>
+                              <label className="block text-[12px] font-medium text-ink-2">
+                                {locale === "en" ? "My source name" : "我的备注名"}
+                                <input
+                                  className={`${fieldClass} mt-1.5`}
+                                  required={!editForm.nameInherited}
+                                  disabled={editForm.nameInherited}
+                                  maxLength={200}
+                                  value={editForm.name}
+                                  onChange={(e) => {
+                                    setEditForm({ ...editForm, name: e.target.value });
+                                  }}
+                                  placeholder={locale === "en" ? "Source Name" : "信源备注名"}
+                                />
+                              </label>
+                              <label className="mt-2 flex items-center gap-2 text-[12px] text-ink-3">
+                                <input
+                                  type="checkbox"
+                                  className="accent-accent"
+                                  checked={editForm.nameInherited}
+                                  onChange={(e) => {
+                                    setEditForm({ ...editForm, nameInherited: e.target.checked });
+                                  }}
+                                />
+                                {locale === "en" ? "Use shared source name" : "使用共享信源名"}
+                              </label>
+                            </div>
+
+                            <div>
+                              <label className="text-[12px] font-medium text-ink-2 block">
+                                {source.kind === "web_list"
+                                  ? locale === "en"
+                                    ? "Web Page List URL"
+                                    : "网页列表地址（HTML 页面）"
+                                  : locale === "en"
+                                  ? "RSS / Feed URL"
+                                  : "信源地址（RSS / Atom / 网站）"}
+                                <input
+                                  className={`${fieldClass} mt-1.5`}
+                                  required
+                                  type="url"
+                                  maxLength={2048}
+                                  value={editForm.url}
+                                  onChange={(e) => {
+                                    setEditForm({ ...editForm, url: e.target.value });
+                                  }}
+                                />
+                              </label>
+                            </div>
+
+                            {/* Optional CSS Selectors for Web List */}
+                            {source.kind === "web_list" && (
+                              <div className="sm:col-span-2 mt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditShowAdvancedWeb(!editShowAdvancedWeb);
+                                  }}
+                                  className="text-[12px] font-medium text-accent hover:underline flex items-center gap-1"
+                                >
+                                  <span>
+                                    {editShowAdvancedWeb
+                                      ? locale === "en"
+                                        ? "Hide Advanced CSS Selectors"
+                                        : "收起高级 CSS 选择器配置"
+                                      : locale === "en"
+                                      ? "⚙️ Advanced: Custom CSS Selectors (Optional)"
+                                      : "⚙️ 高级配置：自定义 CSS 选择器（可选，默认智能提取）"}
+                                  </span>
+                                </button>
+
+                                {editShowAdvancedWeb && (
+                                  <div className="mt-3 rounded-control border border-line bg-surface p-3.5 grid gap-3 sm:grid-cols-2">
+                                    <label className="text-[11.5px] text-ink-2">
+                                      {locale === "en" ? "Item Selector" : "文章列表项选择器（Item Selector）"}
+                                      <input
+                                        className={`${fieldClass} mt-1`}
+                                        value={editForm.itemSelector}
+                                        onChange={(e) => {
+                                          setEditForm({ ...editForm, itemSelector: e.target.value });
+                                        }}
+                                        placeholder="例如：article, .news-item, li.post"
+                                      />
+                                    </label>
+                                    <label className="text-[11.5px] text-ink-2">
+                                      {locale === "en" ? "Title Selector" : "文章标题选择器（Title Selector）"}
+                                      <input
+                                        className={`${fieldClass} mt-1`}
+                                        value={editForm.titleSelector}
+                                        onChange={(e) => {
+                                          setEditForm({ ...editForm, titleSelector: e.target.value });
+                                        }}
+                                        placeholder="例如：h2 a, .title a, a"
+                                      />
+                                    </label>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            <label className="text-[12px] font-medium text-ink-2">
+                              {locale === "en" ? "Interval (Minutes)" : "抓取间隔（分钟）"}
+                              <input
+                                className={`${fieldClass} mt-1.5`}
+                                type="number"
+                                min={1}
+                                max={1440}
+                                required
+                                value={editForm.intervalMinutes}
+                                onChange={(e) => {
+                                  setEditForm({ ...editForm, intervalMinutes: Number(e.target.value) });
+                                }}
+                              />
+                            </label>
+
+                            <label className="text-[12px] font-medium text-ink-2">
+                              {locale === "en" ? "Reuse Window (Minutes)" : "复用窗口（分钟）"}
+                              <input
+                                className={`${fieldClass} mt-1.5`}
+                                type="number"
+                                min={1}
+                                max={1440}
+                                required
+                                value={editForm.reuseWindowMinutes}
+                                onChange={(e) => {
+                                  setEditForm({ ...editForm, reuseWindowMinutes: Number(e.target.value) });
+                                }}
+                              />
+                            </label>
+
+                            <label className="sm:col-span-2 flex items-center gap-2 text-[12px] text-ink-2">
+                              <input
+                                type="checkbox"
+                                className="accent-accent"
+                                checked={editForm.enabled}
+                                onChange={(e) => {
+                                  setEditForm({ ...editForm, enabled: e.target.checked });
+                                }}
+                              />
+                              {locale === "en" ? "Enable this subscription" : "启用此订阅"}
+                            </label>
+                          </div>
+
+                          {editError && (
+                            <FormMessage error>{editError}</FormMessage>
+                          )}
+                          {editMessage && (
+                            <FormMessage>{editMessage}</FormMessage>
+                          )}
+
+                          <div className="flex justify-end gap-3 pt-3 border-t border-line">
+                            <button
+                              type="button"
+                              disabled={editBusy}
+                              onClick={cancelEdit}
+                              className="rounded-full border border-line px-4 py-1.5 text-[12px] font-semibold text-ink-3 hover:border-accent transition-colors disabled:opacity-50"
+                            >
+                              {locale === "en" ? "Cancel" : "取消"}
+                            </button>
+                            <button
+                              type="submit"
+                              disabled={editBusy}
+                              className="rounded-full bg-accent px-5 py-1.5 text-[12px] font-semibold text-accent-contrast hover:bg-accent-ink transition-colors disabled:opacity-50"
+                            >
+                              {editBusy
+                                ? locale === "en"
+                                  ? "Saving..."
+                                  : "保存中…"
+                                : locale === "en"
+                                ? "Save Changes"
+                                : "保存修改"}
+                            </button>
+                          </div>
+                        </form>
+                      ) : (
+                        <>
+                          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-line/60">
+                            <div className="min-w-0 flex-1">
+                              <span className="text-[11px] font-medium text-ink-4 block">
+                                {locale === "en" ? "Source URL" : "信源完整地址"}
+                              </span>
+                              <span className="mono mt-0.5 block break-all text-[11.5px] text-ink-2 select-all">
+                                {source.url}
+                              </span>
+                            </div>
+
+                            <div className="flex shrink-0 items-center gap-2">
+                              <a
+                                href={source.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-[11px] font-semibold text-accent-contrast hover:bg-accent-ink transition-colors"
+                              >
+                                <span>{locale === "en" ? "Visit Website" : "访问信源网页"}</span>
+                                <span>↗</span>
+                              </a>
+
+                              {!isIngest && (
+                                <button
+                                  type="button"
+                                  onClick={() => openPreview(source.sourceId)}
+                                  className="inline-flex items-center gap-1 rounded-full border border-line bg-surface px-3 py-1 text-[11px] font-medium text-ink-2 hover:border-accent hover:text-accent transition-colors"
+                                >
+                                  <span>{locale === "en" ? "Browse Ingested" : "查看收录历史"}</span>
+                                  <span>↗</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {!isIngest && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11.5px] text-ink-3">
+                              <div className="flex items-center justify-between rounded bg-surface/80 px-2.5 py-1.5 border border-line/40">
+                                <span className="text-ink-4">{locale === "en" ? "Your Fetch Interval" : "你的抓取频率"}</span>
+                                <span className="font-medium text-ink">{locale === "en" ? `Every ${source.intervalMinutes}m` : `每 ${source.intervalMinutes} 分钟`}</span>
+                              </div>
+
+                              <div className="flex items-center justify-between rounded bg-surface/80 px-2.5 py-1.5 border border-line/40">
+                                <span className="text-ink-4">{locale === "en" ? "Reuse Window" : "结果复用窗口"}</span>
+                                <span className="font-medium text-ink">{locale === "en" ? `${source.reuseWindowMinutes}m` : `${source.reuseWindowMinutes} 分钟`}</span>
+                              </div>
+
+                              <div className="flex items-center justify-between rounded bg-surface/80 px-2.5 py-1.5 border border-line/40">
+                                <span className="text-ink-4">{locale === "en" ? "Cluster Effective Interval" : "集群聚合有效周期"}</span>
+                                <span className="font-medium text-ink">{locale === "en" ? `Every ${source.effectiveIntervalMinutes}m` : `每 ${source.effectiveIntervalMinutes} 分钟`}</span>
+                              </div>
+
+                              <div className="flex items-center justify-between rounded bg-surface/80 px-2.5 py-1.5 border border-line/40">
+                                <span className="text-ink-4">{locale === "en" ? "Health Status" : "健康状态"}</span>
+                                <span className={`font-medium ${source.health === "ok" ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}`}>
+                                  {source.health === "ok" ? (locale === "en" ? "Healthy" : "正常运行") : source.health}
+                                </span>
+                              </div>
                             </div>
                           )}
-                          {source.titleSelector && (
-                            <div>
-                              <span className="text-ink-4">{locale === "en" ? "Title Selector: " : "标题选择器："}</span>
-                              <code className="mono text-ink-2">{source.titleSelector}</code>
+
+                          {isWebList && (source.itemSelector || source.titleSelector) && (
+                            <div className="rounded bg-surface/80 p-2.5 border border-line/40 text-[11px] space-y-1">
+                              {source.itemSelector && (
+                                <div>
+                                  <span className="text-ink-4">{locale === "en" ? "Item Selector: " : "条目选择器："}</span>
+                                  <code className="mono text-ink-2">{source.itemSelector}</code>
+                                </div>
+                              )}
+                              {source.titleSelector && (
+                                <div>
+                                  <span className="text-ink-4">{locale === "en" ? "Title Selector: " : "标题选择器："}</span>
+                                  <code className="mono text-ink-2">{source.titleSelector}</code>
+                                </div>
+                              )}
                             </div>
                           )}
-                        </div>
+
+                          {/* 信源操作按钮工具栏 */}
+                          <div className="flex flex-wrap items-center justify-between gap-2.5 pt-3 border-t border-line/60">
+                            <div className="flex flex-wrap items-center gap-2">
+                              {!isIngest && (
+                                <button
+                                  type="button"
+                                  disabled={busy || fetching === source.id}
+                                  onClick={() => void testFetch(source)}
+                                  className="h-8 rounded-full bg-accent px-3.5 text-[11px] font-semibold text-accent-contrast hover:bg-accent-ink transition-colors disabled:opacity-50"
+                                >
+                                  {fetching === source.id
+                                    ? (locale === "en" ? "Testing..." : "正在测试…")
+                                    : (locale === "en" ? "Test Fetch" : "测试抓取")}
+                                </button>
+                              )}
+
+                              {!isIngest && (
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() => beginEdit(source)}
+                                  className="h-8 rounded-full border border-line bg-surface px-3.5 text-[11px] font-medium text-ink-2 hover:border-accent/40 hover:text-accent transition-colors disabled:opacity-50"
+                                >
+                                  {locale === "en" ? "Edit" : "编辑"}
+                                </button>
+                              )}
+
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => void toggleFilterMode(source)}
+                                title={
+                                  source.filterMode === "all"
+                                    ? (locale === "en"
+                                        ? "Full Tracking: all articles are evaluated. Click to switch to Label Filter."
+                                        : "当前为全量跟踪：该信源所有新文章均进入精选打分。点击切换为按标签过滤。")
+                                    : (locale === "en"
+                                        ? "Label Filter: only matching articles are evaluated (saves tokens). Click to switch to Full Tracking."
+                                        : "当前按标签过滤：仅命中关注项的文章打分（省Token）。点击切换为全量跟踪。")
+                                }
+                                className={`h-8 rounded-full border px-3.5 text-[11px] font-medium transition-colors disabled:opacity-50 ${
+                                  source.filterMode === "all"
+                                    ? "border-accent/40 bg-accent-soft text-accent"
+                                    : "border-line bg-surface text-ink-3 hover:border-line-strong hover:text-ink"
+                                }`}
+                              >
+                                {source.filterMode === "all"
+                                  ? (locale === "en" ? "Full Tracking" : "全量跟踪")
+                                  : (locale === "en" ? "Label Filter" : "标签过滤")}
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => void toggle(source)}
+                                className="h-8 rounded-full border border-line bg-surface px-3.5 text-[11px] font-medium text-ink-2 hover:border-accent/40 hover:text-accent transition-colors disabled:opacity-50"
+                              >
+                                {source.enabled
+                                  ? (locale === "en" ? "Pause" : "暂停")
+                                  : (locale === "en" ? "Resume" : "恢复")}
+                              </button>
+                            </div>
+
+                            <div>
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => void remove(source)}
+                                className="h-8 rounded-full border border-line bg-surface px-3.5 text-[11px] font-medium text-ink-4 hover:border-red-300 hover:text-red-600 dark:hover:border-red-800 dark:hover:text-red-400 transition-colors disabled:opacity-50"
+                              >
+                                {locale === "en" ? "Delete" : "删除"}
+                              </button>
+                            </div>
+                          </div>
+                        </>
                       )}
-
-                      {/* 信源操作按钮工具栏 */}
-                      <div className="flex flex-wrap items-center justify-between gap-2.5 pt-3 border-t border-line/60">
-                        <div className="flex flex-wrap items-center gap-2">
-                          {!isIngest && (
-                            <button
-                              type="button"
-                              disabled={busy || fetching === source.id}
-                              onClick={() => void testFetch(source)}
-                              className="h-8 rounded-full bg-accent px-3.5 text-[11px] font-semibold text-accent-contrast hover:bg-accent-ink transition-colors disabled:opacity-50"
-                            >
-                              {fetching === source.id
-                                ? (locale === "en" ? "Testing..." : "正在测试…")
-                                : (locale === "en" ? "Test Fetch" : "测试抓取")}
-                            </button>
-                          )}
-
-                          {!isIngest && (
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={() => beginEdit(source)}
-                              className="h-8 rounded-full border border-line bg-surface px-3.5 text-[11px] font-medium text-ink-2 hover:border-accent/40 hover:text-accent transition-colors disabled:opacity-50"
-                            >
-                              {locale === "en" ? "Edit" : "编辑"}
-                            </button>
-                          )}
-
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void toggleFilterMode(source)}
-                            title={
-                              source.filterMode === "all"
-                                ? (locale === "en"
-                                    ? "Full Tracking: all articles are evaluated. Click to switch to Label Filter."
-                                    : "当前为全量跟踪：该信源所有新文章均进入精选打分。点击切换为按标签过滤。")
-                                : (locale === "en"
-                                    ? "Label Filter: only matching articles are evaluated (saves tokens). Click to switch to Full Tracking."
-                                    : "当前按标签过滤：仅命中关注项的文章打分（省Token）。点击切换为全量跟踪。")
-                            }
-                            className={`h-8 rounded-full border px-3.5 text-[11px] font-medium transition-colors disabled:opacity-50 ${
-                              source.filterMode === "all"
-                                ? "border-accent/40 bg-accent-soft text-accent"
-                                : "border-line bg-surface text-ink-3 hover:border-line-strong hover:text-ink"
-                            }`}
-                          >
-                            {source.filterMode === "all"
-                              ? (locale === "en" ? "Full Tracking" : "全量跟踪")
-                              : (locale === "en" ? "Label Filter" : "标签过滤")}
-                          </button>
-
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void toggle(source)}
-                            className="h-8 rounded-full border border-line bg-surface px-3.5 text-[11px] font-medium text-ink-2 hover:border-accent/40 hover:text-accent transition-colors disabled:opacity-50"
-                          >
-                            {source.enabled
-                              ? (locale === "en" ? "Pause" : "暂停")
-                              : (locale === "en" ? "Resume" : "恢复")}
-                          </button>
-                        </div>
-
-                        <div>
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void remove(source)}
-                            className="h-8 rounded-full border border-line bg-surface px-3.5 text-[11px] font-medium text-ink-4 hover:border-red-300 hover:text-red-600 dark:hover:border-red-800 dark:hover:text-red-400 transition-colors disabled:opacity-50"
-                          >
-                            {locale === "en" ? "Delete" : "删除"}
-                          </button>
-                        </div>
-                      </div>
                     </div>
                   )}
 

@@ -1,3 +1,4 @@
+import { LogoutDialog } from "./LogoutDialog";
 import { useEffect, useState } from "react";
 import { Link, useLocation, useRouteLoaderData } from "react-router";
 import type { loader as rootLoader } from "../../root";
@@ -48,6 +49,8 @@ export function Sidebar({ changelogVersion }: { changelogVersion: string | null 
   const dict = getDict(locale);
   const rootData = useRouteLoaderData<typeof rootLoader>("root");
   const csrfToken = rootData?.user?.csrfToken;
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const [logoutBusy, setLogoutBusy] = useState(false);
 
   /** Perform user logout and redirect to home. */
   async function handleLogout() {
@@ -56,12 +59,16 @@ export function Sidebar({ changelogVersion }: { changelogVersion: string | null 
       return;
     }
 
+    setLogoutBusy(true);
+
     // Submit logout request to backend
     try {
       await postJSON("/api/auth/logout", {}, csrfToken);
       window.location.assign("/");
     } catch {
       window.location.assign("/");
+    } finally {
+      setLogoutBusy(false);
     }
   }
 
@@ -83,7 +90,7 @@ export function Sidebar({ changelogVersion }: { changelogVersion: string | null 
                 {isLastSection && csrfToken && (
                   <button
                     type="button"
-                    onClick={handleLogout}
+                    onClick={() => setLogoutConfirmOpen(true)}
                     className="flex h-10 w-full items-center gap-2.5 rounded-control px-2.5 text-[14px] font-medium text-ink-3 transition-colors duration-150 hover:bg-bg-sunk hover:text-hot"
                   >
                     <span className="flex w-[22px] shrink-0 justify-center">
@@ -116,6 +123,13 @@ export function Sidebar({ changelogVersion }: { changelogVersion: string | null 
           </a>
         )}
       </div>
+      <LogoutDialog
+        open={logoutConfirmOpen}
+        onClose={() => setLogoutConfirmOpen(false)}
+        onConfirm={handleLogout}
+        busy={logoutBusy}
+        locale={locale}
+      />
     </aside>
   );
 }
