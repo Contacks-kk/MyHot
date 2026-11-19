@@ -49,7 +49,7 @@ func TestRSSRequestFailureRetainsNonPublicDNSClassWithoutRequestDetails(t *testi
 			service := NewService(nil, fakeDoer(func(req *http.Request) (*http.Response, error) {
 				return nil, &url.Error{Op: "Get", URL: req.URL.String(), Err: fmt.Errorf("secret detail: %w", test.cause)}
 			}), nil)
-			_, _, _, err := service.fetchRSS(context.Background(), source{Kind: "rss", Config: settings{"feedUrl": "https://example.invalid/feed?token=secret"}})
+			_, _, _, err := service.fetchRSS(context.Background(), source{Kind: "rss", Config: settings{"feedUrl": "https://example.invalid/feed?token=secret"}}, false)
 			var classified *sourceFetchError
 			if !errors.As(err, &classified) || classified.class != test.class {
 				t.Fatalf("failure = %#v, want class %q", classified, test.class)

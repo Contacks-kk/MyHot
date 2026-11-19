@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"sort"
 
-	"aihot/backend-go/internal/jobs"
+	"aihot/backend-go/internal/jobargs"
 	"aihot/backend-go/internal/publication"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -86,6 +86,7 @@ func (r *CommandsRepository) SetVisibility(ctx context.Context, id string, input
 	return publishResult(published), true, nil
 }
 
+// OverrideFields applies an editorial correction and its report/audit effects atomically.
 func (r *CommandsRepository) OverrideFields(ctx context.Context, id string, input OverrideInput, actor string) (*PublishResult, bool, error) {
 	tx, err := r.begin(ctx)
 	if err != nil {
@@ -138,12 +139,14 @@ func (r *CommandsRepository) OverrideFields(ctx context.Context, id string, inpu
 				return nil, true, err
 			}
 		}
-		storyIDs, err := articleStoryIDs(ctx, tx, id)
-		if err != nil {
-			return nil, true, err
-		}
-		if err := r.enqueueStoryDigests(ctx, tx, storyIDs); err != nil {
-			return nil, true, err
+		if !changedClassification || hasNonClassificationOverride(input.Fields, input.Clear) {
+			storyIDs, err := articleStoryIDs(ctx, tx, id)
+			if err != nil {
+				return nil, true, err
+			}
+			if err := r.enqueueStoryDigests(ctx, tx, storyIDs); err != nil {
+				return nil, true, err
+			}
 		}
 	}
 	if err := insertAudit(ctx, tx, actor, "content.override", "content:"+id, input.Reason, rawObject(before.Fields), fields, ""); err != nil {
@@ -156,6 +159,21 @@ func (r *CommandsRepository) OverrideFields(ctx context.Context, id string, inpu
 }
 
 func hasField(fields map[string]json.RawMessage, key string) bool { _, ok := fields[key]; return ok }
+
+// hasNonClassificationOverride reports whether an edit also changes content beyond category or tags.
+func hasNonClassificationOverride(fields map[string]json.RawMessage, clear []string) bool {
+	for key := range fields {
+		if key != "category" && key != "tags" {
+			return true
+		}
+	}
+	for _, key := range clear {
+		if key != "category" && key != "tags" {
+			return true
+		}
+	}
+	return false
+}
 
 func (r *CommandsRepository) Rerun(ctx context.Context, id, step, requestID, actor string) (*RerunResult, bool, error) {
 	tx, err := r.begin(ctx)
@@ -186,12 +204,16 @@ func (r *CommandsRepository) Rerun(ctx context.Context, id, step, requestID, act
 		if _, err := tx.Exec(ctx, `UPDATE articles SET processing_state='new',processing_error=NULL,processing_attempts=0,processing_retry_at=NULL,body_status='pending' WHERE id=$1`, id); err != nil {
 			return nil, true, err
 		}
-		result, err = r.river.InsertTx(ctx, tx, jobs.SharedBodyArgs{ArticleID: id}, &river.InsertOpts{Queue: "shared_content", Priority: 2, MaxAttempts: 3, UniqueOpts: activeArgsUniqueness()})
+		result, err = r.river.InsertTx(ctx, tx, jobargs.SharedBodyArgs{ArticleID: id}, &river.InsertOpts{Queue: "shared_content", Priority: 2, MaxAttempts: 3, UniqueOpts: activeArgsUniqueness()})
 	case "analyze":
-		if _, err := tx.Exec(ctx, `UPDATE articles SET processing_state='new',processing_error=NULL,processing_attempts=0,processing_retry_at=NULL WHERE id=$1`, id); err != nil {
+		attemptTag := "admin:" + requestID
+
+		// Keep the paid-call identity on the article so a later sweep can rebuild a lost job.
+		if _, err := tx.Exec(ctx, `UPDATE articles SET processing_state='new',processing_error=NULL,processing_attempts=0,
+			processing_retry_at=NULL,processing_queued_at=now(),processing_attempt_tag=$2 WHERE id=$1`, id, attemptTag); err != nil {
 			return nil, true, err
 		}
-		result, err = r.river.InsertTx(ctx, tx, jobs.ContentAnalyzeArgs{ArticleID: id, AttemptTag: "admin:" + requestID}, &river.InsertOpts{Queue: "shared_analysis", Priority: 1, MaxAttempts: 5, UniqueOpts: activeArgsUniqueness()})
+		result, err = r.river.InsertTx(ctx, tx, jobargs.ContentAnalyzeArgs{ArticleID: id, AttemptTag: attemptTag}, &river.InsertOpts{Queue: "shared_analysis", Priority: 1, MaxAttempts: 5, UniqueOpts: activeArgsUniqueness()})
 	case "group":
 		if err = r.resetGrouping(ctx, tx, id); err != nil {
 			return nil, true, err
@@ -199,7 +221,7 @@ func (r *CommandsRepository) Rerun(ctx context.Context, id, step, requestID, act
 		if _, err = r.publication.PublishTx(ctx, tx, id, publication.PublishOptions{}); err != nil {
 			return nil, true, err
 		}
-		result, err = r.river.InsertTx(ctx, tx, jobs.EventGroupArgs{ArticleID: id}, &river.InsertOpts{Queue: "shared_grouping", Priority: 1, MaxAttempts: 5, UniqueOpts: activeArgsUniqueness()})
+		result, err = r.river.InsertTx(ctx, tx, jobargs.EventGroupArgs{ArticleID: id}, &river.InsertOpts{Queue: "shared_grouping", Priority: 1, MaxAttempts: 5, UniqueOpts: activeArgsUniqueness()})
 	}
 	if err != nil {
 		return nil, true, err
@@ -363,6 +385,9 @@ func (r *CommandsRepository) MergeStories(ctx context.Context, fromID, intoID in
 	if from == nil || into == nil || from.MergedInto != nil || into.MergedInto != nil {
 		return nil, false, nil
 	}
+	if !groupingMergeAllowed(actor, from.Origin, into.Origin) {
+		return nil, false, nil
+	}
 	if _, err := tx.Exec(ctx, `UPDATE facts SET story_id=$2,updated_at=now() WHERE story_id=$1`, fromID, intoID); err != nil {
 		return nil, false, err
 	}
@@ -402,6 +427,11 @@ func (r *CommandsRepository) MergeStories(ctx context.Context, fromID, intoID in
 		return nil, false, err
 	}
 	return map[string]int{"moved": len(articles)}, true, nil
+}
+
+/** groupingMergeAllowed prevents automatic merges from overriding either editor-confirmed identity. */
+func groupingMergeAllowed(actor, fromOrigin, intoOrigin string) bool {
+	return actor != "grouping" || (fromOrigin != "manual" && intoOrigin != "manual")
 }
 
 type overrideSnapshot struct {
@@ -483,7 +513,7 @@ func (r *CommandsRepository) enqueueStoryDigests(ctx context.Context, tx pgx.Tx,
 			continue
 		}
 		seen[id] = struct{}{}
-		if _, err := r.river.InsertTx(ctx, tx, jobs.StoryDigestArgs{StoryID: id}, &river.InsertOpts{Queue: "story_digests", Priority: 2, MaxAttempts: 4, UniqueOpts: activeArgsUniqueness()}); err != nil {
+		if _, err := r.river.InsertTx(ctx, tx, jobargs.StoryDigestArgs{StoryID: id}, &river.InsertOpts{Queue: "story_digests", Priority: 2, MaxAttempts: 4, UniqueOpts: activeArgsUniqueness()}); err != nil {
 			return err
 		}
 	}
@@ -491,7 +521,7 @@ func (r *CommandsRepository) enqueueStoryDigests(ctx context.Context, tx pgx.Tx,
 }
 
 func (r *CommandsRepository) enqueueHotRanking(ctx context.Context, tx pgx.Tx) error {
-	_, err := r.river.InsertTx(ctx, tx, jobs.HotRankingArgs{}, &river.InsertOpts{Priority: 1, MaxAttempts: 2, UniqueOpts: activeArgsUniqueness()})
+	_, err := r.river.InsertTx(ctx, tx, jobargs.HotRankingArgs{}, &river.InsertOpts{Priority: 1, MaxAttempts: 2, UniqueOpts: activeArgsUniqueness()})
 	return err
 }
 

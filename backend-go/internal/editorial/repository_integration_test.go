@@ -86,7 +86,9 @@ func TestRepositorySaveAnalysisCommitsReceiptsAndStaleRevisionAtomically(t *test
 	}
 
 	staleReceipt := insertReceipt(staleKey)
-	if err := db.Model(&model.ArticleProcessing{}).Where("id = ?", articleID).Update("revision", 2).Error; err != nil {
+	if err := db.Model(&model.ArticleProcessing{}).Where("id = ?", articleID).Updates(map[string]any{
+		"revision": 2, "processing_state": "new", "processing_error": nil,
+	}).Error; err != nil {
 		t.Fatal(err)
 	}
 	run.Prefilter.ReceiptID = staleReceipt
@@ -97,8 +99,8 @@ func TestRepositorySaveAnalysisCommitsReceiptsAndStaleRevisionAtomically(t *test
 	if stale.AnalysisID == nil || !stale.Stale {
 		t.Fatalf("stale revision result = %#v", stale)
 	}
-	if err := db.Raw("SELECT processing_state FROM articles WHERE id = ?", articleID).Scan(&state).Error; err != nil || state != "analyzed" {
-		t.Fatalf("stale analysis changed current state to %q: %v", state, err)
+	if err := db.Raw("SELECT processing_state FROM articles WHERE id = ?", articleID).Scan(&state).Error; err != nil || state != "new" {
+		t.Fatalf("stale analysis changed the pending revision state to %q: %v", state, err)
 	}
 }
 

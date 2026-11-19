@@ -17,6 +17,7 @@ let logs = '';
 const api = createServer((req, res) => {
   res.setHeader('Content-Type', 'application/json');
   if (req.url === '/api/me') { if (req.headers.cookie !== 'myhot_session=reader') { res.statusCode = 401; return res.end('{}'); } return res.end(JSON.stringify({id:1,email:'reader@example.invalid',csrfToken:'csrf'})); }
+  if (req.url === '/api/me/catalog') return res.end(JSON.stringify({subject:'Fixture',categories:[],topicGroups:[],topics:[]}));
   if (req.url === '/api/health') return res.end(JSON.stringify({ ok: true }));
   if (req.url === '/api/site/meta') return res.end(JSON.stringify({ changelogVersion: '2026-01-01T00:00' }));
   res.statusCode = 404;

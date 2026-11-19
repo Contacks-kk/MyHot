@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"aihot/backend-go/internal/account"
 	"aihot/backend-go/internal/config"
+	"aihot/backend-go/internal/sourceschedule"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -105,11 +107,11 @@ func TestSubscriptionsShareSourceButKeepUserSettingsSeparate(t *testing.T) {
 	if err := db.WithContext(ctx).Raw(`SELECT activated_at,cold_start_pending FROM user_source_subscriptions WHERE id=?`, a.ID).Row().Scan(&repeatedAt, &coldA); err != nil || coldA || !repeatedAt.Equal(activatedAt) {
 		t.Fatalf("repeat create reset activation or cold start: %v %t %v", repeatedAt, coldA, err)
 	}
-	if a.Name != "My feed" || b.Name != "Another label" {
-		t.Fatalf("user labels were not isolated: a=%#v b=%#v", a, b)
+	if a.Name != "My feed" || b.Name != "Another label" || b.EffectiveIntervalMinutes != 30 || b.EffectiveReuseWindowMinutes != 5 {
+		t.Fatalf("user labels/effective cadence were not isolated and aggregated: a=%#v b=%#v", a, b)
 	}
 	list, err := service.List(ctx, ids[0])
-	if err != nil || len(list) != 1 || list[0].Name != "My feed" {
+	if err != nil || len(list) != 1 || list[0].Name != "My feed" || list[0].EffectiveIntervalMinutes != 30 || list[0].EffectiveReuseWindowMinutes != 5 {
 		t.Fatalf("first user's list = %#v, %v", list, err)
 	}
 	changed, err := service.Update(ctx, ids[0], a.ID, Input{Name: "Moved feed", URL: "https://example.invalid/" + prefix + "-other.xml", IntervalMinutes: 60, ReuseWindowMinutes: 10})
@@ -150,6 +152,72 @@ func TestSubscriptionsShareSourceButKeepUserSettingsSeparate(t *testing.T) {
 	}
 }
 
+func TestPlatformScheduleReconcilesExistingSources(t *testing.T) {
+	db, prefix := userSourcesDB(t)
+	ctx := context.Background()
+	var userID int64
+	if err := db.WithContext(ctx).Raw(`INSERT INTO user_accounts(email,password_hash) VALUES(?,'fixture') RETURNING id`,
+		prefix+"_schedule@example.invalid").Row().Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	var sourceID string
+	t.Cleanup(func() {
+		_ = db.WithContext(ctx).Exec(`DELETE FROM user_accounts WHERE id=?`, userID).Error
+		if sourceID != "" {
+			_ = db.WithContext(ctx).Exec(`DELETE FROM sources WHERE id=?`, sourceID).Error
+		}
+	})
+	saved, err := NewService(db, config.SourceSchedule{}).Create(ctx, userID, Input{
+		Name:               "Existing feed",
+		URL:                "https://example.invalid/" + prefix + "-schedule.xml",
+		IntervalMinutes:    5,
+		ReuseWindowMinutes: 45,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceID = saved.SourceID
+	if saved.EffectiveIntervalMinutes != 45 {
+		t.Fatalf("original interval = %d", saved.EffectiveIntervalMinutes)
+	}
+	if err := db.WithContext(ctx).Exec(`UPDATE sources SET last_ok_at=now()-interval '1 minute',
+		next_fetch_at=now()+interval '44 minutes' WHERE id=?`, sourceID).Error; err != nil {
+		t.Fatal(err)
+	}
+	policy := config.SourceSchedule{
+		AutoMinInterval:   15,
+		ManualReuseWindow: 10,
+		AutoReuseWindow:   10,
+	}
+	if err := sourceschedule.Reconcile(ctx, db, policy); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(db, policy)
+	got, err := service.Get(ctx, userID, saved.ID)
+	if err != nil || got.IntervalMinutes != 5 || got.ReuseWindowMinutes != 45 ||
+		got.EffectiveIntervalMinutes != 15 || got.EffectiveReuseWindowMinutes != 10 ||
+		got.NextFetchAt == nil || got.LastCheckedAt == nil || got.NextFetchAt.Sub(*got.LastCheckedAt) != 15*time.Minute {
+		t.Fatalf("reconciled schedule = %#v, %v", got, err)
+	}
+	if err := db.WithContext(ctx).Exec(`UPDATE sources SET next_fetch_at=now() WHERE id=?`, sourceID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := sourceschedule.Reconcile(ctx, db, policy); err != nil {
+		t.Fatal(err)
+	}
+	var next *time.Time
+	if err := db.WithContext(ctx).Raw(`SELECT next_fetch_at FROM sources WHERE id=?`, sourceID).Row().Scan(&next); err != nil || next == nil || !next.Equal(*got.NextFetchAt) {
+		t.Fatalf("existing effective cycle did not restore the minimum: next=%v err=%v", next, err)
+	}
+	if err := account.NewRepository(db).DeleteAccount(ctx, userID, policy); err != nil {
+		t.Fatal(err)
+	}
+	var enabled bool
+	if err := db.WithContext(ctx).Raw(`SELECT enabled,next_fetch_at FROM sources WHERE id=?`, sourceID).Row().Scan(&enabled, &next); err != nil || enabled || next != nil {
+		t.Fatalf("last account deletion left a scheduled source: enabled=%v next=%v err=%v", enabled, next, err)
+	}
+}
+
 func TestSubscriptionReusesCanonicalizedLegacyRSSSource(t *testing.T) {
 	db, prefix := userSourcesDB(t)
 	ctx := context.Background()
@@ -160,7 +228,7 @@ func TestSubscriptionReusesCanonicalizedLegacyRSSSource(t *testing.T) {
 	}
 	sourceID := prefix + "_legacy_source"
 	legacyURL := "https://Example.invalid/feed?b=2&a=1"
-	if err := db.WithContext(ctx).Exec(`INSERT INTO sources(id,name,kind,config,enabled,health) VALUES(?, 'Archived RSS', 'rss', jsonb_build_object('feedUrl', ?), false, 'paused')`, sourceID, legacyURL).Error; err != nil {
+	if err := db.WithContext(ctx).Exec(`INSERT INTO sources(id,name,kind,config,enabled,health) VALUES(?, 'Archived RSS', 'rss', jsonb_build_object('feedUrl', ?::text), false, 'paused')`, sourceID, legacyURL).Error; err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {

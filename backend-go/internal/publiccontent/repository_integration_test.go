@@ -128,9 +128,11 @@ func TestTopicSummariesFollowSelectedSeatsAndCompanyIdentityRules(t *testing.T) 
 	insert(ids[6], "OpenAI no seat", []string{"entity:openai", "Agent"}, true, false, "public", now.Add(-time.Minute))
 
 	pattern := `(?<![A-Za-z])(OpenAI|ChatGPT)(?![A-Za-z])`
+	anthropicPattern := `(?<![A-Za-z])(Anthropic)(?![A-Za-z])`
 	definitions := []topics.Definition{
 		{Slug: "openai", Tags: []string{"entity:openai"}, Pattern: &pattern, Position: 0},
 		{Slug: "agent", Tags: []string{"Agent"}, Position: 1},
+		{Slug: "anthropic", Tags: []string{"entity:anthropic"}, Pattern: &anthropicPattern, Position: 2},
 	}
 	repository := NewRepository(orm)
 	rows, err := repository.Summaries(context.Background(), definitions, now)
@@ -158,6 +160,48 @@ func TestTopicSummariesFollowSelectedSeatsAndCompanyIdentityRules(t *testing.T) 
 	}
 	if page.Items[0].ID != ids[1] || page.Items[1].ID != ids[0] || page.Items[0].SourceName != "Topic fixture" {
 		t.Fatalf("topic page items = %#v", page.Items)
+	}
+
+	if err := orm.Exec("UPDATE publications SET visibility = 'withdrawn' WHERE article_id = ?", ids[0]).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows, err = repository.Summaries(context.Background(), definitions, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = map[string][]string{}
+	for _, row := range rows {
+		if row.ID != nil {
+			got[row.Slug] = append(got[row.Slug], *row.ID)
+		}
+	}
+	page, err = repository.Page(context.Background(), definitions[0], 1, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(got["openai"]) != fmt.Sprint([]string{ids[1]}) || len(got["agent"]) != 0 || page.Total != 1 || page.Latest == nil || page.Latest.Title != "Unnamed company notice" || len(page.Items) != 1 || page.Items[0].ID != ids[1] {
+		t.Fatalf("withdrawal remained in the uncached topic index or page: summaries=%#v page=%#v", got, page)
+	}
+
+	if err := orm.Exec("UPDATE publications SET tags = ? WHERE article_id = ?", []string{"entity:anthropic"}, ids[1]).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows, err = repository.Summaries(context.Background(), definitions, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = map[string][]string{}
+	for _, row := range rows {
+		if row.ID != nil {
+			got[row.Slug] = append(got[row.Slug], *row.ID)
+		}
+	}
+	page, err = repository.Page(context.Background(), definitions[2], 1, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got["openai"]) != 0 || fmt.Sprint(got["anthropic"]) != fmt.Sprint([]string{ids[1]}) || page.Total != 1 || len(page.Items) != 1 || page.Items[0].ID != ids[1] {
+		t.Fatalf("corrected entity topic membership did not refresh: summaries=%#v page=%#v", got, page)
 	}
 }
 

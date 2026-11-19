@@ -68,6 +68,27 @@ func TestIngestRouteAuthRateLimitAndResponse(t *testing.T) {
 	}
 }
 
+/** TestIngestRouteKeepsValidItemsAcrossMalformedBatchEntries preserves partial acceptance semantics. */
+func TestIngestRouteKeepsValidItemsAcrossMalformedBatchEntries(t *testing.T) {
+	repository := &ingestRepositoryFixture{}
+	materialWriter := &ingestMaterialsFixture{}
+	server := &Server{
+		Config:  config.Config{IngestToken: "fixture-ingest-token-123"},
+		limiter: newRateLimiter(),
+		Ingest:  ingest.NewService(repository, materialWriter),
+	}
+	body := `{"sourceId":"external-reporter","items":[null,false,7,"invalid",[],{},{"title":"valid","url":"https://example.com/story"},null,{"title":"duplicate","url":"https://example.com/story?utm_source=duplicate"}]}`
+	request := httptest.NewRequest(http.MethodPost, "/api/ingest/items", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer fixture-ingest-token-123")
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	var result ingest.Result
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || response.Code != http.StatusOK || !result.OK || result.Created != 1 || materialWriter.stores != 1 || repository.records != 1 {
+		t.Fatalf("malformed batch changed partial acceptance: status=%d result=%#v stores=%d records=%d body=%s err=%v", response.Code, result, materialWriter.stores, repository.records, response.Body.String(), err)
+	}
+}
+
 func TestIngestRouteRejectsPlaceholderTokens(t *testing.T) {
 	server := &Server{Config: config.Config{IngestToken: "placeholder-token-value"}, limiter: newRateLimiter()}
 	response := httptest.NewRecorder()

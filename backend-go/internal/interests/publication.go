@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 )
 
-// PublicationSettings is shared by the React site and Go public-content exits.
+// PublicationSettings configures Go public-content behavior and catalog output.
 type PublicationSettings struct {
 	Subject          string           `json:"subject"`
 	AllFeedLeavesOut []string         `json:"allFeedLeavesOut"`
@@ -28,7 +28,7 @@ type PublicCategories struct {
 func LoadPublicationSettings() (PublicationSettings, error) {
 	path := os.Getenv("SITE_PUBLICATION_FILE")
 	if path == "" {
-		for _, candidate := range []string{filepath.Join("shared", "site", "publication.json"), filepath.Join("..", "shared", "site", "publication.json"), filepath.Join("/app", "shared", "site", "publication.json")} {
+		for _, candidate := range []string{filepath.Join("backend-go", "config", "publication.json"), filepath.Join("config", "publication.json"), filepath.Join("..", "config", "publication.json"), filepath.Join("/app", "backend-go", "config", "publication.json")} {
 			if _, err := os.Stat(candidate); err == nil {
 				path = candidate
 				break
@@ -36,7 +36,7 @@ func LoadPublicationSettings() (PublicationSettings, error) {
 		}
 	}
 	if path == "" {
-		return PublicationSettings{}, errors.New("shared/site/publication.json not found")
+		return PublicationSettings{}, errors.New("backend-go/config/publication.json not found")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -47,7 +47,7 @@ func LoadPublicationSettings() (PublicationSettings, error) {
 		return PublicationSettings{}, err
 	}
 	if settings.Subject == "" {
-		return PublicationSettings{}, errors.New("shared/site/publication.json has an empty subject")
+		return PublicationSettings{}, errors.New("backend-go/config/publication.json has an empty subject")
 	}
 	if settings.AllFeedLeavesOut == nil {
 		settings.AllFeedLeavesOut = []string{}

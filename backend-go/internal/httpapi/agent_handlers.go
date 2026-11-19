@@ -284,9 +284,9 @@ func (s *Server) parseAgentItemsRequest(r *http.Request, search bool) (agentItem
 		return parsed, errors.New("window must be '24h' or '7d'.")
 	}
 	if raw, exists := query["category"]; exists {
-		if _, found := s.CategoryKeys[raw]; !found {
-			allowedCategories := s.CategoryOrder
-			if len(allowedCategories) == 0 {
+		if _, found := s.resolvePublicCategory(raw); !found {
+			allowedCategories := s.publicCategoryOptions()
+			if len(allowedCategories) == 0 && len(s.PublicCategoryMembers) == 0 {
 				for key := range s.CategoryKeys {
 					allowedCategories = append(allowedCategories, key)
 				}

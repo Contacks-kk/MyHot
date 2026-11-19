@@ -77,6 +77,7 @@ func TestFeedbackUpdateRollsBackWhenAuditInsertFails(t *testing.T) {
 	}
 }
 
+/** TestFeedbackSubmissionBanAndForwardRetryRepository excludes imported rows from automatic forwarding. */
 func TestFeedbackSubmissionBanAndForwardRetryRepository(t *testing.T) {
 	orm, repository := openIntegrationRepository(t)
 	ctx := context.Background()
@@ -85,8 +86,12 @@ func TestFeedbackSubmissionBanAndForwardRetryRepository(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var imported model.Feedback
 	t.Cleanup(func() {
 		_ = orm.Where("id = ?", rowID).Delete(&model.Feedback{}).Error
+		if imported.ID != 0 {
+			_ = orm.Where("id = ?", imported.ID).Delete(&model.Feedback{}).Error
+		}
 		_ = orm.Where("source_hash = ?", fixture).Delete(&model.FeedbackBan{}).Error
 	})
 	if banned, err := repository.Banned(ctx, []string{fixture}); err != nil || banned {
@@ -100,6 +105,13 @@ func TestFeedbackSubmissionBanAndForwardRetryRepository(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	if err := orm.Model(&model.Feedback{}).Where("id = ?", rowID).Update("created_at", now.Add(-6*time.Minute)).Error; err != nil {
+		t.Fatal(err)
+	}
+	imported = model.Feedback{
+		Content: "imported feedback stays unforwarded", SourceHash: fixture + "_imported", Status: "new",
+		CreatedAt: now.Add(-6 * time.Minute),
+	}
+	if err := orm.Create(&imported).Error; err != nil {
 		t.Fatal(err)
 	}
 	ids, err := repository.PendingForwardIDs(ctx, now.Add(-5*time.Minute), now.Add(-7*24*time.Hour), 20)

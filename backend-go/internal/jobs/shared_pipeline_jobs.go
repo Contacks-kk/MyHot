@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/url"
 	"regexp"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"aihot/backend-go/internal/contentpipeline"
 	"aihot/backend-go/internal/editorial"
+	"aihot/backend-go/internal/jobargs"
 	"aihot/backend-go/internal/media"
 	"aihot/backend-go/internal/publication"
 	"aihot/backend-go/internal/publiccontent"
@@ -36,12 +38,7 @@ type SharedPipelineScanWorker struct {
 	DB      *gorm.DB
 }
 
-type ContentAnalyzeArgs struct {
-	ArticleID  string `json:"articleId" river:"unique"`
-	AttemptTag string `json:"attemptTag,omitempty" river:"unique"`
-}
-
-func (ContentAnalyzeArgs) Kind() string { return "content.analyze" }
+type ContentAnalyzeArgs = jobargs.ContentAnalyzeArgs
 
 type ContentAnalyzeWorker struct {
 	river.WorkerDefaults[ContentAnalyzeArgs]
@@ -49,16 +46,25 @@ type ContentAnalyzeWorker struct {
 	Client  *river.Client[pgx.Tx]
 }
 
-type EventGroupArgs struct {
-	ArticleID  string `json:"articleId" river:"unique"`
-	SignalOnly bool   `json:"signalOnly,omitempty"`
-}
-
-func (EventGroupArgs) Kind() string { return "events.group" }
+type EventGroupArgs = jobargs.EventGroupArgs
 
 type EventGroupWorker struct {
 	river.WorkerDefaults[EventGroupArgs]
 	Service *contentpipeline.Service
+}
+
+type signalGroupEnqueuer struct {
+	client *river.Client[pgx.Tx]
+}
+
+/** EnqueueSignalGroups schedules signal-only grouping behind report processing. */
+func (e signalGroupEnqueuer) EnqueueSignalGroups(ctx context.Context, articleIDs []string) error {
+	for _, articleID := range articleIDs {
+		if _, err := e.client.Insert(ctx, EventGroupArgs{ArticleID: articleID, SignalOnly: true}, eventGroupInsertOpts(-1)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (w *SharedPipelineScanWorker) Work(ctx context.Context, _ *river.Job[SharedPipelineScanArgs]) error {
@@ -100,8 +106,23 @@ func (w *ContentAnalyzeWorker) Timeout(*river.Job[ContentAnalyzeArgs]) time.Dura
 }
 
 func (w *EventGroupWorker) Work(ctx context.Context, job *river.Job[EventGroupArgs]) error {
-	_, err := w.Service.Group(ctx, job.Args.ArticleID, job.Args.SignalOnly)
-	return err
+	result, err := w.Service.Group(ctx, job.Args.ArticleID, job.Args.SignalOnly)
+	if err != nil {
+		return err
+	}
+	if result.ConsolidationError != "" {
+		log.Printf(`{"level":"error","msg":"story consolidation failed","article":%q,"error":%q}`, job.Args.ArticleID, result.ConsolidationError)
+	}
+	if result.RedirectError != "" {
+		log.Printf(`{"level":"error","msg":"empty story redirect failed","article":%q,"error":%q}`, job.Args.ArticleID, result.RedirectError)
+	}
+	if result.ReclaimError != "" {
+		log.Printf(`{"level":"error","msg":"waiting signal reclaim failed","article":%q,"error":%q}`, job.Args.ArticleID, result.ReclaimError)
+	}
+	if result.RematchError != "" {
+		log.Printf(`{"level":"error","msg":"signal rematch failed","article":%q,"error":%q}`, job.Args.ArticleID, result.RematchError)
+	}
+	return nil
 }
 
 func (w *EventGroupWorker) Timeout(*river.Job[EventGroupArgs]) time.Duration { return 8 * time.Minute }

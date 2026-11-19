@@ -74,6 +74,17 @@ func TestMCPHostAndOriginAllowLists(t *testing.T) {
 	if server.mcpAllowedHost(request) {
 		t.Fatal("multiple forwarded authorities must be rejected")
 	}
+	request = httptest.NewRequest(http.MethodGet, "http://unused/api/mcp", nil)
+	request.Host = "attacker.example"
+	request.Header.Set("X-Forwarded-Host", "alias.example:8443")
+	if !server.mcpAllowedHost(request) {
+		t.Fatal("configured forwarded host must take precedence over the proxy host")
+	}
+	request.Host = "myhot.example"
+	request.Header.Set("X-Forwarded-Host", "attacker.example")
+	if server.mcpAllowedHost(request) {
+		t.Fatal("an unconfigured forwarded host must not inherit an allowed proxy host")
+	}
 
 	for _, origin := range []string{"", "https://myhot.example", "https://myhot.example:9443", "http://localhost:3000", "https://127.0.0.1:5173"} {
 		if !server.mcpAllowedOrigin(origin) {
@@ -87,6 +98,25 @@ func TestMCPHostAndOriginAllowLists(t *testing.T) {
 	}
 }
 
+/** TestMCPAllowsEquivalentIPv6SiteOrigins normalizes compressed and expanded IPv6 forms. */
+func TestMCPAllowsEquivalentIPv6SiteOrigins(t *testing.T) {
+	server := &Server{Config: config.Config{SiteURL: "http://[::1]:3000"}}
+	for _, origin := range []string{
+		"http://[::1]:3000",
+		"http://[0:0:0:0:0:0:0:1]:3000",
+	} {
+		if !server.mcpAllowedOrigin(origin) {
+			t.Errorf("equivalent IPv6 site origin %q should be allowed", origin)
+		}
+	}
+	for _, origin := range []string{"https://[::1]:3000", "http://[::2]:3000"} {
+		if server.mcpAllowedOrigin(origin) {
+			t.Errorf("unmatched IPv6 site origin %q should be rejected", origin)
+		}
+	}
+}
+
+/** TestMCPRequestBodyLimitAndBatchDetection counts raw UTF-8 bytes before JSON parsing. */
 func TestMCPRequestBodyLimitAndBatchDetection(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/api/mcp", bytes.NewReader([]byte(`[{},{}]`)))
 	response := httptest.NewRecorder()
@@ -95,10 +125,36 @@ func TestMCPRequestBodyLimitAndBatchDetection(t *testing.T) {
 		t.Fatalf("batch body not recognized: %q %t %v", body, tooLarge, err)
 	}
 
+	exactLimit := "{}" + strings.Repeat(" ", mcpMaxBody-2)
+	request = httptest.NewRequest(http.MethodPost, "/api/mcp", strings.NewReader(exactLimit))
+	response = httptest.NewRecorder()
+	body, tooLarge, err = readMCPBody(response, request)
+	if err != nil || tooLarge || len(body) != mcpMaxBody {
+		t.Fatalf("exact-limit request was rejected: bytes=%d large=%t err=%v", len(body), tooLarge, err)
+	}
+
+	for _, payload := range []string{
+		strings.Repeat(" ", mcpMaxBody+1),
+		strings.Repeat("字", mcpMaxBody/3+1),
+	} {
+		if len([]byte(payload)) <= mcpMaxBody {
+			t.Fatalf("fixture must exceed the limit by encoded bytes: chars=%d bytes=%d", len([]rune(payload)), len([]byte(payload)))
+		}
+		request = httptest.NewRequest(http.MethodPost, "/api/mcp", strings.NewReader(payload))
+		response = httptest.NewRecorder()
+		_, tooLarge, err = readMCPBody(response, request)
+		if err != nil || !tooLarge {
+			t.Fatalf("oversized raw request was not rejected: chars=%d bytes=%d large=%t err=%v", len([]rune(payload)), len([]byte(payload)), tooLarge, err)
+		}
+	}
+
 	request = httptest.NewRequest(http.MethodPost, "/api/mcp", io.LimitReader(strings.NewReader(strings.Repeat("x", mcpMaxBody+1)), int64(mcpMaxBody+1)))
+	if request.ContentLength >= 0 {
+		t.Fatalf("chunked fixture unexpectedly has Content-Length %d", request.ContentLength)
+	}
 	response = httptest.NewRecorder()
 	_, tooLarge, err = readMCPBody(response, request)
 	if err != nil || !tooLarge {
-		t.Fatalf("oversized request body not rejected: large=%t err=%v", tooLarge, err)
+		t.Fatalf("oversized unknown-length request body not rejected: large=%t err=%v", tooLarge, err)
 	}
 }

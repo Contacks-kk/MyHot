@@ -95,7 +95,7 @@ func TestFullFeedIncludesOnlyRedistributableRowsAndSignsBodyImages(t *testing.T)
 	now := time.Date(2026, 10, 8, 3, 0, 0, 0, time.UTC)
 	falseValue := false
 	repo := &feedItemsFake{rows: []Item{
-		{ID: "allowed", Title: "Allowed", URL: "https://source.example/allowed", Syndicate: true, BodyHTML: stringPointer(`<p>正文</p><img src="https://images.example/a.png">`)},
+		{ID: "allowed", Title: "Allowed", URL: "https://source.example/allowed", Syndicate: true, BodyHTML: stringPointer(`<p>正文</p><img src="https://ids4.ad.gt/api/v1/ip_match?id=example"><img src="https://example.org/pixel" width="1" height="1"><img src="https://images.example/a.png" width="800" height="400"><video src="https://example.org/video.mp4" poster="https://youtube.com/watch?v=example"></video><video src="https://example.org/second-video.mp4" poster="https://i.ytimg.com/vi/example/hqdefault.jpg"></video>`)},
 		{ID: "denied", Title: "Denied", URL: "https://source.example/denied", Syndicate: false, BodyHTML: stringPointer("<p>不能转载</p>"), TranslationComplete: &falseValue},
 	}}
 	body, err := testFeedService(repo, &feedReportsFake{}).ItemFeed(context.Background(), "selected-full", "", now)
@@ -104,6 +104,12 @@ func TestFullFeedIncludesOnlyRedistributableRowsAndSignsBodyImages(t *testing.T)
 	}
 	if !strings.Contains(body, "<content:encoded>") || !strings.Contains(body, "本文由 Example 聚合整理") || !strings.Contains(body, "https://myhot.example/api/img-proxy?") {
 		t.Fatalf("licensed full content or signed image missing: %s", body)
+	}
+	if strings.Contains(body, "ids4.ad.gt") || strings.Contains(body, "example.org/pixel") || strings.Count(body, "<img") != 1 {
+		t.Fatalf("tracking pixels were included in the full feed: %s", body)
+	}
+	if strings.Contains(body, "youtube.com/watch") || strings.Count(body, "poster=") != 1 || !strings.Contains(body, "mode=thumb") || !strings.Contains(body, "video.mp4") {
+		t.Fatalf("video poster filtering changed valid media or kept a video page: %s", body)
 	}
 	if strings.Contains(body, "<content:encoded><![CDATA[<p>不能转载</p>") {
 		t.Fatal("full text was included for an unlicensed row")

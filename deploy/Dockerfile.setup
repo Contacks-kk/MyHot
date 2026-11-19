@@ -13,10 +13,7 @@ COPY package.json package-lock.json ./
 COPY frontend/package.json frontend/
 COPY frontend/packages/og-renderer/package.json frontend/packages/og-renderer/
 COPY frontend/packages/contracts/package.json frontend/packages/contracts/
-COPY shared/industry/package.json shared/industry/
 COPY frontend/packages/site/package.json frontend/packages/site/
-COPY legacy/ts-compat/api/package.json legacy/ts-compat/api/
-COPY legacy/ts-compat/backend/package.json legacy/ts-compat/backend/
 COPY tooling/package.json tooling/
 RUN npm ci --omit=dev --workspace=@aihot/tooling --include-workspace-root=false --no-audit --no-fund ${NPM_REGISTRY:+--registry=$NPM_REGISTRY}
 COPY . .
@@ -27,7 +24,6 @@ COPY --from=build --chown=node:node /app/node_modules /app/node_modules
 COPY --from=build --chown=node:node /app/tooling /app/tooling
 COPY --from=build --chown=node:node /app/frontend/packages/contracts /app/frontend/packages/contracts
 COPY --from=build --chown=node:node /app/frontend/packages/site /app/frontend/packages/site
-COPY --from=build --chown=node:node /app/backend-go/config/publication.json /app/backend-go/config/publication.json
 COPY --from=build --chown=node:node /app/backend-go/config/model-catalog.json /app/backend-go/config/model-catalog.json
 COPY --from=build --chown=node:node /app/backend-go/modules /app/backend-go/modules
 COPY --from=build --chown=node:node /app/database /app/database

@@ -15,6 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
+/** TestGormRepositoryIngestsIntoExistingSchema preserves normalized ingest and repeat-request deduplication. */
 func TestGormRepositoryIngestsIntoExistingSchema(t *testing.T) {
 	dsn := os.Getenv("MYHOT_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -46,18 +47,27 @@ func TestGormRepositoryIngestsIntoExistingSchema(t *testing.T) {
 	if err != nil || !result.OK || result.Created != 1 {
 		t.Fatalf("ingest = %#v: %v", result, err)
 	}
+	again, err := service.Ingest(ctx, input)
+	if err != nil || !again.OK || again.Created != 0 {
+		t.Fatalf("repeated ingest = %#v: %v", again, err)
+	}
 	var article struct {
 		SourceID       string          `gorm:"column:source_id"`
 		IdentityKey    string          `gorm:"column:identity_key"`
+		Title          string          `gorm:"column:title"`
 		Backfill       bool            `gorm:"column:backfill"`
 		BackfillReason string          `gorm:"column:backfill_reason"`
 		Raw            json.RawMessage `gorm:"column:raw"`
 	}
-	if err := orm.Raw("SELECT source_id, identity_key, backfill, backfill_reason, raw FROM articles WHERE source_id = ?", sourceID).Scan(&article).Error; err != nil {
+	if err := orm.Raw("SELECT source_id, identity_key, title, backfill, backfill_reason, raw FROM articles WHERE source_id = ?", sourceID).Scan(&article).Error; err != nil {
 		t.Fatal(err)
 	}
-	if article.SourceID != sourceID || article.IdentityKey != "url:https://example.invalid/story" || !article.Backfill || article.BackfillReason != "reported-baseline" || !strings.Contains(string(article.Raw), `"fixture": 7`) {
+	if article.SourceID != sourceID || article.IdentityKey != "url:https://example.invalid/story" || article.Title != "Pushed article" || !article.Backfill || article.BackfillReason != "reported-baseline" || !strings.Contains(string(article.Raw), `"fixture": 7`) {
 		t.Fatalf("stored article changed: %#v raw=%s", article, article.Raw)
+	}
+	var articleCount int64
+	if err := orm.Table("articles").Where("source_id = ?", sourceID).Count(&articleCount).Error; err != nil || articleCount != 1 {
+		t.Fatalf("repeated ingest created %d article rows: %v", articleCount, err)
 	}
 	var source struct {
 		Kind              string `gorm:"column:kind"`
@@ -70,15 +80,15 @@ func TestGormRepositoryIngestsIntoExistingSchema(t *testing.T) {
 	if source.Kind != "external" || source.ParticipationMode != "isolated" || !source.Enabled {
 		t.Fatalf("auto-created source changed: %#v", source)
 	}
-	var event struct {
-		Client  string          `gorm:"column:client"`
-		Summary json.RawMessage `gorm:"column:summary"`
+	var events []struct {
+		Client  string `gorm:"column:client"`
+		Created string `gorm:"column:created"`
 	}
-	if err := orm.Raw("SELECT client, summary FROM ingest_events WHERE client = 'ingest-items' AND summary->>'sourceId' = ? ORDER BY id DESC LIMIT 1", sourceID).Scan(&event).Error; err != nil {
+	if err := orm.Raw("SELECT client, summary->>'created' AS created FROM ingest_events WHERE client = 'ingest-items' AND summary->>'sourceId' = ? ORDER BY id", sourceID).Scan(&events).Error; err != nil {
 		t.Fatal(err)
 	}
-	if event.Client != "ingest-items" || !strings.Contains(string(event.Summary), `"received":2`) || !strings.Contains(string(event.Summary), `"created":1`) {
-		t.Fatalf("ingest audit changed: %#v", event)
+	if len(events) != 2 || events[0].Client != "ingest-items" || events[0].Created != "1" || events[1].Client != "ingest-items" || events[1].Created != "0" {
+		t.Fatalf("ingest audit changed across initial and repeated requests: %#v", events)
 	}
 }
 

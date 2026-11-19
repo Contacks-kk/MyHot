@@ -1,18 +1,41 @@
 package httpapi
 
 import (
-	"aihot/backend-go/internal/config"
+	"bytes"
 	"context"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"aihot/backend-go/internal/config"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
+
+type failingHealth struct {
+	err error
+}
+
+type failingStreamWriter struct {
+	*httptest.ResponseRecorder
+}
+
+/** Check returns the configured health error for request logging tests. */
+func (h failingHealth) Check(context.Context) error {
+	return h.err
+}
+
+/** Write simulates a transport failure after a streaming response has started. */
+func (w failingStreamWriter) Write([]byte) (int, error) {
+	return 0, errors.New("private stream failure")
+}
 
 func closedGORM(t *testing.T, dsn string) *gorm.DB {
 	t.Helper()
@@ -40,6 +63,76 @@ func TestSameOriginUsesForwardedHostWhenBehindWebProxy(t *testing.T) {
 	req.Header.Set("X-Forwarded-Host", "attacker.example")
 	if sameOrigin(req, true) {
 		t.Fatal("mismatched forwarded host should be rejected")
+	}
+}
+
+/** TestServerFailureLogsKeepRequestContextAndDropSecrets verifies safe API diagnostics. */
+func TestServerFailureLogsKeepRequestContextAndDropSecrets(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	server := (&Server{
+		Health: failingHealth{err: errors.New("database failure private-marker")},
+		Logger: logger,
+	}).Handler()
+	missing := httptest.NewRecorder()
+	server.ServeHTTP(missing, httptest.NewRequest(http.MethodGet, "http://localhost/api/missing?token=private-query", nil))
+	if missing.Code != http.StatusNotFound || output.Len() != 0 {
+		t.Fatalf("ordinary 404 response = %d, logs = %s", missing.Code, output.String())
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "http://localhost/api/health?token=private-query", nil)
+	request.Header.Set("Authorization", "Bearer private-auth")
+	request.Header.Set("Cookie", "session=private-cookie")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("health response = status %d headers %#v", response.Code, response.Header())
+	}
+	if !strings.Contains(response.Body.String(), `"code":"temporarily_unavailable"`) {
+		t.Fatalf("health response contract changed: %s", response.Body.String())
+	}
+	var record map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &record); err != nil {
+		t.Fatalf("error log is not JSON: %v: %s", err, output.String())
+	}
+	if record["msg"] != "http request failed" || record["method"] != http.MethodGet || record["path"] != "/api/health" || record["status"] != float64(http.StatusServiceUnavailable) {
+		t.Fatalf("unexpected error log: %#v", record)
+	}
+	if record["request_id"] != response.Header().Get("X-Request-Id") {
+		t.Fatalf("request id differs between response and log: %#v / %q", record["request_id"], response.Header().Get("X-Request-Id"))
+	}
+	if stack, ok := record["stack"].(string); !ok || !strings.Contains(stack, "health") {
+		t.Fatalf("error log omitted handler stack: %#v", record["stack"])
+	}
+	for _, secret := range []string{"private-query", "private-auth", "private-cookie", "private-marker"} {
+		if strings.Contains(output.String(), secret) {
+			t.Fatalf("error log contains request secret %q: %s", secret, output.String())
+		}
+	}
+}
+
+/** TestServerFailureLogsCaptureStreamingWriteErrorsWithoutTheirMessages protects stream diagnostics. */
+func TestServerFailureLogsCaptureStreamingWriteErrorsWithoutTheirMessages(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	handler := logServerFailures(logger, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		_, _ = w.Write([]byte("stream body"))
+	}))
+	recorder := failingStreamWriter{ResponseRecorder: httptest.NewRecorder()}
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "http://localhost/api/stream?token=private-query", nil))
+
+	var record map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &record); err != nil {
+		t.Fatalf("stream error log is not JSON: %v: %s", err, output.String())
+	}
+	if record["msg"] != "http request failed" || record["path"] != "/api/stream" || record["status"] != float64(http.StatusOK) || record["write_error_type"] != "*errors.errorString" {
+		t.Fatalf("unexpected stream error record: %#v", record)
+	}
+	if _, ok := record["stack"].(string); !ok || strings.Contains(output.String(), "private stream failure") || strings.Contains(output.String(), "private-query") {
+		t.Fatalf("stream log omitted stack or exposed private values: %s", output.String())
 	}
 }
 

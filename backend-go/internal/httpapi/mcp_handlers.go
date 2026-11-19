@@ -168,8 +168,15 @@ func mcpHostname(authority string) string {
 }
 
 func mcpNormalizeHostname(host string) string {
+	trimmed := strings.Trim(host, "[]")
+	if address := net.ParseIP(trimmed); address != nil {
+		if address.To4() != nil {
+			return address.To4().String()
+		}
+		return "[" + address.String() + "]"
+	}
 	if strings.Contains(host, ":") {
-		return "[" + strings.ToLower(strings.Trim(host, "[]")) + "]"
+		return "[" + strings.ToLower(trimmed) + "]"
 	}
 	return strings.ToLower(host)
 }
@@ -182,8 +189,8 @@ func (s *Server) mcpAllowedOrigin(origin string) bool {
 	if err != nil || parsed.Hostname() == "" {
 		return false
 	}
-	host := strings.ToLower(parsed.Hostname())
-	if site, err := url.Parse(s.Config.SiteURL); err == nil && parsed.Scheme == site.Scheme && host == strings.ToLower(site.Hostname()) {
+	host := mcpNormalizeHostname(parsed.Hostname())
+	if site, err := url.Parse(s.Config.SiteURL); err == nil && parsed.Scheme == site.Scheme && host == mcpNormalizeHostname(site.Hostname()) {
 		return true
 	}
 	if (host == "localhost" || host == "127.0.0.1") && (parsed.Scheme == "http" || parsed.Scheme == "https") {

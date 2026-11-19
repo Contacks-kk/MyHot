@@ -24,10 +24,10 @@ func TestRepositorySavesDigestAtomicallyAndRejectsChangedEvidence(t *testing.T) 
 	var firstReceipt, staleReceipt int64
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	t.Cleanup(func() {
-		_ = db.Exec("DELETE FROM fact_articles WHERE article_id = ?", articleID).Error
-		_ = db.Exec("DELETE FROM publications WHERE article_id = ?", articleID).Error
-		_ = db.Exec("DELETE FROM analyses WHERE article_id = ?", articleID).Error
-		_ = db.Exec("DELETE FROM articles WHERE id = ?", articleID).Error
+		_ = db.Exec("DELETE FROM fact_articles WHERE article_id LIKE ?", prefix+"_%").Error
+		_ = db.Exec("DELETE FROM publications WHERE article_id LIKE ?", prefix+"_%").Error
+		_ = db.Exec("DELETE FROM analyses WHERE article_id LIKE ?", prefix+"_%").Error
+		_ = db.Exec("DELETE FROM articles WHERE id LIKE ?", prefix+"_%").Error
 		if factID != 0 {
 			_ = db.Exec("DELETE FROM facts WHERE id = ?", factID).Error
 		}
@@ -61,6 +61,38 @@ func TestRepositorySavesDigestAtomicallyAndRejectsChangedEvidence(t *testing.T) 
 	if err := db.Exec("INSERT INTO fact_articles(fact_id,article_id,role,evidence) VALUES (?, ?, 'primary', '面向用户开放')", factID, articleID).Error; err != nil {
 		t.Fatal(err)
 	}
+	for _, excluded := range []struct {
+		suffix     string
+		role       string
+		visibility string
+		scope      string
+	}{
+		{suffix: "mention", role: "mention", visibility: "public"},
+		{suffix: "withdrawn", role: "report", visibility: "withdrawn"},
+		{suffix: "composite", role: "report", visibility: "public", scope: "composite"},
+	} {
+		id := prefix + "_" + excluded.suffix
+		if err := db.Exec(`INSERT INTO articles(id,source_id,identity_key,url,title,discovered_at,timeline_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`, id, sourceID, id, "https://fixture.example/"+id, "Excluded "+excluded.suffix, now, now).Error; err != nil {
+			t.Fatal(err)
+		}
+		var excludedAnalysisID int64
+		output := `{"fact":{"evidence":"fixture"}}`
+		if excluded.scope != "" {
+			output = `{"scope":"` + excluded.scope + `","fact":{"evidence":"fixture"}}`
+		}
+		if err := db.Raw(`INSERT INTO analyses(article_id,input_revision,origin,relevance,output)
+			VALUES (?, 1, 'model', 'pass', ?::jsonb) RETURNING id`, id, output).Scan(&excludedAnalysisID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Exec(`INSERT INTO publications(article_id,analysis_id,source_id,title,summary,url,channel,published_at,discovered_at,timeline_at,sort_at,visibility,eligible,selected)
+			VALUES (?, ?, ?, ?, 'Excluded summary', ?, 'news', ?, ?, ?, ?, ?, true, false)`, id, excludedAnalysisID, sourceID, "Excluded "+excluded.suffix, "https://fixture.example/"+id, now, now, now, now, excluded.visibility).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Exec("INSERT INTO fact_articles(fact_id,article_id,role,evidence) VALUES (?, ?, ?, 'fixture')", factID, id, excluded.role).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := db.Raw(`INSERT INTO receipts(logical_key,service,purpose,status,request,attempts,origin)
 		VALUES (?, 'fixture', 'story_digest', 'received', '{}'::jsonb, 1, 'live') RETURNING id`, prefix+"_first").Scan(&firstReceipt).Error; err != nil {
 		t.Fatal(err)
@@ -69,6 +101,28 @@ func TestRepositorySavesDigestAtomicallyAndRejectsChangedEvidence(t *testing.T) 
 	reports, err := repository.Reports(ctx, storyID, now.Add(time.Hour))
 	if err != nil || len(reports) != 1 || reports[0].ID != articleID || len(reports[0].StructuredFact) == 0 {
 		t.Fatalf("digest reports = %#v, %v", reports, err)
+	}
+	snapshot, err := repository.ExportEvaluationCases(ctx, []string{storyPublicID}, now.Add(time.Hour))
+	if err != nil || len(snapshot) != 1 || len(snapshot[0].Reports) != 1 || snapshot[0].Reports[0].ID != articleID || *snapshot[0].InputMode != "incremental" {
+		t.Fatalf("evaluation snapshot = %#v, %v", snapshot, err)
+	}
+	emptyPublicID := fmt.Sprintf("00000000-0000-4000-8000-%012x", (uint64(time.Now().UnixNano())+1)&0xffffffffffff)
+	if err := db.Exec("INSERT INTO stories(public_id,title,version,origin) VALUES (?::uuid, 'Empty fixture', 1, 'model')", emptyPublicID).Error; err != nil {
+		t.Fatal(err)
+	}
+	defer db.Exec("DELETE FROM stories WHERE public_id = ?::uuid", emptyPublicID)
+	if snapshot, err := repository.ExportEvaluationCases(ctx, []string{storyPublicID, emptyPublicID}, now.Add(time.Hour)); err == nil || snapshot != nil || !strings.Contains(err.Error(), emptyPublicID) {
+		t.Fatalf("event without listed evidence should prevent the entire snapshot: %#v, %v", snapshot, err)
+	}
+	mergedPublicID := fmt.Sprintf("00000000-0000-4000-8000-%012x", (uint64(time.Now().UnixNano())+2)&0xffffffffffff)
+	var mergedStoryID int64
+	if err := db.Raw("INSERT INTO stories(public_id,title,version,origin,merged_into) VALUES (?::uuid, 'Merged fixture', 1, 'model', ?) RETURNING id", mergedPublicID, storyID).Scan(&mergedStoryID).Error; err != nil {
+		t.Fatal(err)
+	}
+	defer db.Exec("DELETE FROM stories WHERE id = ?", mergedStoryID)
+	missing := "00000000-0000-4000-8000-000000000000"
+	if snapshot, err := repository.ExportEvaluationCases(ctx, []string{storyPublicID, mergedPublicID, missing}, now); err == nil || snapshot != nil || !strings.Contains(err.Error(), missing) || !strings.Contains(err.Error(), mergedPublicID) {
+		t.Fatalf("missing or merged event should prevent the entire snapshot: %#v, %v", snapshot, err)
 	}
 	hash, err := DigestInputsHash(reports)
 	if err != nil {

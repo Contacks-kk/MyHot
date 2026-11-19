@@ -93,38 +93,88 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	s.writeUserSession(w, http.StatusCreated, result)
 }
 
+/** Authenticate user account credentials and create session. */
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	// Check rate limit
 	if s.limiter.limited("login:"+clientKey(r, s.Config.TrustProxy), 12, 15*time.Minute) {
 		writeError(w, http.StatusTooManyRequests, "尝试次数过多，请稍后重试")
 		return
 	}
+
+	// Verify request origin
 	if !sameOrigin(r, s.Config.TrustProxy) {
 		writeError(w, http.StatusForbidden, "请求来源无效")
 		return
 	}
+
+	// Parse credentials from form or JSON body
 	var input credentials
-	if !readJSON(w, r, &input) {
-		return
+	contentType := r.Header.Get("Content-Type")
+	isForm := strings.HasPrefix(contentType, "application/x-www-form-urlencoded") || strings.HasPrefix(contentType, "multipart/form-data")
+	if isForm {
+		if err := r.ParseForm(); err != nil {
+			writeError(w, http.StatusBadRequest, "请求内容无效")
+			return
+		}
+		input.Email = r.PostForm.Get("email")
+		input.Password = r.PostForm.Get("password")
+	} else {
+		if !readJSON(w, r, &input) {
+			return
+		}
 	}
+
+	// Validate and normalize email address
 	email, err := normalizeEmail(input.Email)
 	if err != nil {
+		if isForm {
+			http.Redirect(w, r, "/login?error=invalid", http.StatusSeeOther)
+			return
+		}
 		writeError(w, http.StatusUnauthorized, "邮箱或密码不正确")
 		return
 	}
+
+	// Verify account credentials
 	result, err := s.Accounts.Login(r.Context(), email, input.Password)
 	if errors.Is(err, account.ErrInvalidCredentials) {
+		if isForm {
+			http.Redirect(w, r, "/login?error=credentials", http.StatusSeeOther)
+			return
+		}
 		writeError(w, http.StatusUnauthorized, "邮箱或密码不正确")
 		return
 	}
 	if errors.Is(err, account.ErrUnverifiedAccount) {
+		if isForm {
+			http.Redirect(w, r, "/verify-email", http.StatusSeeOther)
+			return
+		}
 		writeError(w, http.StatusForbidden, "请先完成邮箱验证")
 		return
 	}
 	if err != nil {
+		if isForm {
+			http.Redirect(w, r, "/login?error=unavailable", http.StatusSeeOther)
+			return
+		}
 		writeError(w, http.StatusServiceUnavailable, "登录暂不可用")
 		return
 	}
+
+	// Establish authenticated user session
 	s.writeUserSession(w, http.StatusOK, result)
+	if isForm {
+		returnTo := r.URL.Query().Get("return")
+		if returnTo == "" {
+			returnTo = r.PostForm.Get("return")
+		}
+		if returnTo == "" || !strings.HasPrefix(returnTo, "/") || strings.HasPrefix(returnTo, "//") {
+			returnTo = "/"
+		}
+		http.Redirect(w, r, returnTo, http.StatusSeeOther)
+		return
+	}
 }
 
 func (s *Server) writeUserSession(w http.ResponseWriter, status int, result account.LoginResult) {

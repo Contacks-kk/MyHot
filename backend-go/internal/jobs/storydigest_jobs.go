@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"aihot/backend-go/internal/jobargs"
 	"aihot/backend-go/internal/storydigest"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
@@ -14,11 +15,7 @@ type StoryDigestScanArgs struct{}
 
 func (StoryDigestScanArgs) Kind() string { return "myhot_story_digest_scan" }
 
-type StoryDigestArgs struct {
-	StoryID int64 `json:"storyId" river:"unique"`
-}
-
-func (StoryDigestArgs) Kind() string { return "myhot_story_digest" }
+type StoryDigestArgs = jobargs.StoryDigestArgs
 
 type StoryDigestScanWorker struct {
 	river.WorkerDefaults[StoryDigestScanArgs]

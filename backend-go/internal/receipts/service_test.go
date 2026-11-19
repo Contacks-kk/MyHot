@@ -12,6 +12,10 @@ import (
 type memoryRepository struct {
 	claim       Claim
 	claimErr    error
+	reuseClaim  Claim
+	reuseErr    error
+	claimCalls  int
+	reuseCalls  int
 	failure     string
 	failureText string
 	response    json.RawMessage
@@ -20,7 +24,13 @@ type memoryRepository struct {
 }
 
 func (r *memoryRepository) Claim(_ context.Context, _ Request, _ string) (Claim, error) {
+	r.claimCalls++
 	return r.claim, r.claimErr
+}
+
+func (r *memoryRepository) Reuse(_ context.Context, _ string) (Claim, error) {
+	r.reuseCalls++
+	return r.reuseClaim, r.reuseErr
 }
 
 func (r *memoryRepository) RecordFailure(_ context.Context, _ Claim, status, message string, _ time.Duration) error {
@@ -28,8 +38,9 @@ func (r *memoryRepository) RecordFailure(_ context.Context, _ Claim, status, mes
 	return nil
 }
 
-func (r *memoryRepository) RecordReceived(_ context.Context, _ Claim, outcome Outcome, _ time.Duration) error {
+func (r *memoryRepository) RecordReceived(_ context.Context, claim Claim, outcome Outcome, _ time.Duration) error {
 	r.response = outcome.Response
+	r.reuseClaim = Claim{ReceiptID: claim.ReceiptID, Response: outcome.Response, Reused: true}
 	return nil
 }
 
@@ -72,6 +83,70 @@ func TestDoRecordsResponseAndReusesIt(t *testing.T) {
 	})
 	if err != nil || !result.Reused || result.ReceiptID != 14 || calls != 1 {
 		t.Fatalf("reused request = %#v, calls=%d, error=%v", result, calls, err)
+	}
+}
+
+/** Verifies shutdown drains an in-flight receipt and blocks subsequent paid calls. */
+func TestShutdownDrainsInflightCallAndReusesReceipt(t *testing.T) {
+	repository := &memoryRepository{
+		claim: Claim{
+			ReceiptID: 41,
+			AttemptID: 42,
+		},
+	}
+	gate := newCallGate()
+	service := newServiceWithGate(repository, gate)
+	request := Request{
+		Service:  "vendor",
+		Purpose:  "summarize",
+		Identity: "first",
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	type result struct {
+		value Result
+		err   error
+	}
+	done := make(chan result, 1)
+	providerCalls := 0
+	go func() {
+		value, err := service.Do(context.Background(), request, func(context.Context) (Outcome, error) {
+			providerCalls++
+			close(started)
+			<-release
+			return Outcome{Response: json.RawMessage(`{"answer":"ready"}`)}, nil
+		})
+		done <- result{value: value, err: err}
+	}()
+	<-started
+
+	gate.beginShutdown()
+	_, err := service.Do(context.Background(), Request{
+		Service:  "vendor",
+		Purpose:  "summarize",
+		Identity: "second",
+	}, func(context.Context) (Outcome, error) {
+		providerCalls++
+		return Outcome{Response: json.RawMessage(`{"answer":"unexpected"}`)}, nil
+	})
+	if !errors.Is(err, ErrShuttingDown) || repository.claimCalls != 1 || providerCalls != 1 {
+		t.Fatalf("new request error=%v claims=%d provider calls=%d", err, repository.claimCalls, providerCalls)
+	}
+
+	close(release)
+	first := <-done
+	if first.err != nil || first.value.ReceiptID != 41 || string(repository.response) != `{"answer":"ready"}` {
+		t.Fatalf("in-flight result=%#v response=%s error=%v", first.value, repository.response, first.err)
+	}
+	reused, err := service.Do(context.Background(), request, func(context.Context) (Outcome, error) {
+		t.Fatal("shutdown replay called provider")
+		return Outcome{}, nil
+	})
+	if err != nil || !reused.Reused || string(reused.Response) != `{"answer":"ready"}` || repository.claimCalls != 1 || repository.reuseCalls != 2 {
+		t.Fatalf("shutdown replay=%#v claims=%d reuses=%d error=%v", reused, repository.claimCalls, repository.reuseCalls, err)
+	}
+	if err := service.Complete(context.Background(), reused.ReceiptID); err != nil || repository.completed != 41 {
+		t.Fatalf("complete after shutdown receipt=%d error=%v", repository.completed, err)
 	}
 }
 

@@ -109,3 +109,42 @@ func TestSelectBenchImportRollsBackWhenAuditInsertFails(t *testing.T) {
 		t.Fatalf("run survived failed audit transaction: count=%d", count)
 	}
 }
+
+/** TestIdempotentEvaluationImportSurvivesWorkerRetry checks the transactional retry boundary. */
+func TestIdempotentEvaluationImportSurvivesWorkerRetry(t *testing.T) {
+	orm, repository := openIntegrationRepository(t)
+	id := fmt.Sprintf("selectbench_eval_retry_%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = orm.Where("run_id = ?", id).Delete(&model.SelectBenchResult{}).Error
+		_ = orm.Where("id = ?", id).Delete(&model.SelectBenchRun{}).Error
+		_ = orm.Where("subject = ?", "selectbench:"+id).Delete(&model.AdminAuditLog{}).Error
+	})
+	data := ImportData{
+		ID:         id,
+		Idempotent: true,
+		Label:      "retry fixture",
+		Models:     []string{"model"},
+		Summary:    json.RawMessage(`{"model":{"n":1,"sweep":[]}}`),
+		Results: []ImportResult{{
+			Model: "model", CaseID: "case-1", Title: "fixture title", Gold: "select", Decision: stringPtr("select"),
+		}},
+	}
+	for range 2 {
+		if err := repository.Import(context.Background(), data, "script:eval-selection"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var runs, results, audits int64
+	if err := orm.Model(&model.SelectBenchRun{}).Where("id = ?", id).Count(&runs).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := orm.Model(&model.SelectBenchResult{}).Where("run_id = ?", id).Count(&results).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := orm.Model(&model.AdminAuditLog{}).Where("subject = ? AND action = ?", "selectbench:"+id, "selectbench.import").Count(&audits).Error; err != nil {
+		t.Fatal(err)
+	}
+	if runs != 1 || results != 1 || audits != 1 {
+		t.Fatalf("worker retry duplicated SelectBench data: runs=%d results=%d audits=%d", runs, results, audits)
+	}
+}

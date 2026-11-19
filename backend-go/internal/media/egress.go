@@ -21,11 +21,14 @@ import (
 )
 
 type egressRouter struct {
-	proxy     *url.URL
-	direct    map[string]struct{}
-	lookupDoH func(context.Context, string) ([]net.IP, time.Duration, error)
-	mu        sync.Mutex
-	cache     map[string]dnsEntry
+	proxy          *url.URL
+	direct         map[string]struct{}
+	dohClient      *http.Client
+	directDial     func(context.Context, string, string) (net.Conn, error)
+	proxyTLSConfig *tls.Config
+	lookupDoH      func(context.Context, string) ([]net.IP, time.Duration, error)
+	mu             sync.Mutex
+	cache          map[string]dnsEntry
 }
 
 type dnsEntry struct {
@@ -38,6 +41,25 @@ type bufferedConn struct {
 	reader *bufio.Reader
 }
 
+/** NewEgressDialer applies the configured guarded proxy route to public data fetches. */
+func NewEgressDialer(rawProxy string, directHosts []string) (func(context.Context, string, string) (net.Conn, error), error) {
+	if strings.TrimSpace(rawProxy) == "" {
+		return modelconfig.DialPublic, nil
+	}
+	router, err := newEgressRouter(rawProxy, directHosts)
+	if err != nil {
+		return nil, err
+	}
+	return router.dialContext, nil
+}
+
+/** http1OnlyProtocols limits outbound requests to HTTP/1.1 for compatible egress routes. */
+func http1OnlyProtocols() *http.Protocols {
+	protocols := &http.Protocols{}
+	protocols.SetHTTP1(true)
+	return protocols
+}
+
 func (c *bufferedConn) Read(p []byte) (int, error) { return c.reader.Read(p) }
 
 func newEgressRouter(rawProxy string, directHosts []string) (*egressRouter, error) {
@@ -45,9 +67,20 @@ func newEgressRouter(rawProxy string, directHosts []string) (*egressRouter, erro
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return nil, errors.New("EGRESS_PROXY_URL must be an HTTP or HTTPS proxy URL")
 	}
-	transport := &http.Transport{Proxy: http.ProxyURL(parsed), TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 4 * time.Second, MaxResponseHeaderBytes: 64 * 1024}
-	client := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	router := &egressRouter{proxy: parsed, direct: map[string]struct{}{}, cache: map[string]dnsEntry{}}
+	transport := &http.Transport{
+		Proxy:                  http.ProxyURL(parsed),
+		TLSHandshakeTimeout:    5 * time.Second,
+		ResponseHeaderTimeout:  4 * time.Second,
+		MaxResponseHeaderBytes: 64 * 1024,
+		Protocols:              http1OnlyProtocols(),
+	}
+	router := &egressRouter{
+		proxy:      parsed,
+		direct:     map[string]struct{}{},
+		dohClient:  &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		directDial: modelconfig.DialPublic,
+		cache:      map[string]dnsEntry{},
+	}
 	for _, host := range directHosts {
 		host = strings.ToLower(strings.TrimSpace(strings.TrimSuffix(host, ".")))
 		if host != "" {
@@ -66,7 +99,7 @@ func newEgressRouter(rawProxy string, directHosts []string) (*egressRouter, erro
 				return nil, 0, err
 			}
 			req.Header.Set("Accept", "application/dns-json")
-			resp, err := client.Do(req)
+			resp, err := router.dohClient.Do(req)
 			if err != nil {
 				return nil, 0, err
 			}
@@ -138,6 +171,14 @@ func (r *egressRouter) resolve(ctx context.Context, host string) ([]net.IP, time
 	if err != nil {
 		return nil, 0, err
 	}
+	if len(addresses) == 0 {
+		return nil, 0, errors.New("egress DNS lookup returned no addresses")
+	}
+	for _, address := range addresses {
+		if !modelconfig.IsPublicIP(address) {
+			return nil, 0, errors.New("egress DNS returned a non-public address")
+		}
+	}
 	r.mu.Lock()
 	if len(r.cache) >= 256 {
 		for name := range r.cache {
@@ -156,7 +197,7 @@ func (r *egressRouter) dialContext(ctx context.Context, network, address string)
 		return nil, err
 	}
 	if !r.shouldProxy(host) {
-		return modelconfig.DialPublic(ctx, network, address)
+		return r.directDial(ctx, network, address)
 	}
 	addresses, _, err := r.resolve(ctx, host)
 	if err != nil {
@@ -194,7 +235,14 @@ func (r *egressRouter) dialTunnel(ctx context.Context, network, target string) (
 		return nil, err
 	}
 	if r.proxy.Scheme == "https" {
-		tlsConn := tls.Client(conn, &tls.Config{ServerName: r.proxy.Hostname(), MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}})
+		proxyTLS := &tls.Config{ServerName: r.proxy.Hostname(), MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}}
+		if r.proxyTLSConfig != nil {
+			proxyTLS = r.proxyTLSConfig.Clone()
+			proxyTLS.ServerName = r.proxy.Hostname()
+			proxyTLS.MinVersion = tls.VersionTLS12
+			proxyTLS.NextProtos = []string{"http/1.1"}
+		}
+		tlsConn := tls.Client(conn, proxyTLS)
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			_ = conn.Close()
 			return nil, err

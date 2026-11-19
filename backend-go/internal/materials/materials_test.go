@@ -2,6 +2,7 @@ package materials
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -141,5 +142,72 @@ func TestNormalizeURLAndIdentityKeyForURL(t *testing.T) {
 		if _, ok := NormalizeURL(input); ok {
 			t.Errorf("invalid URL %q was accepted", input)
 		}
+	}
+}
+
+/** TestOwnershipPathMatchesPreservesVerifiedOrigins checks publisher scope boundaries and URL credentials. */
+func TestOwnershipPathMatchesPreservesVerifiedOrigins(t *testing.T) {
+	tests := []struct {
+		name  string
+		scope string
+		url   string
+		want  bool
+	}{
+		{name: "root scope", scope: "https://publisher.example/", url: "https://publisher.example/news/item", want: true},
+		{name: "exact path", scope: "https://publisher.example/news", url: "https://publisher.example/news", want: true},
+		{name: "child path", scope: "https://publisher.example/news", url: "https://publisher.example/news/item", want: true},
+		{name: "path boundary", scope: "https://publisher.example/news", url: "https://publisher.example/newsroom/item"},
+		{name: "scheme stays distinct", scope: "https://publisher.example/news", url: "http://publisher.example/news/item"},
+		{name: "www stays distinct", scope: "https://publisher.example/news", url: "https://www.publisher.example/news/item"},
+		{name: "default port matches origin", scope: "https://publisher.example:443/news", url: "https://publisher.example/news/item", want: true},
+		{name: "encoded slash is not a path separator", scope: "https://publisher.example/news", url: "https://publisher.example/news%2Fitem"},
+		{name: "query scope is invalid", scope: "https://publisher.example/news?source=official", url: "https://publisher.example/news/item"},
+		{name: "empty query scope is invalid", scope: "https://publisher.example/news?", url: "https://publisher.example/news/item"},
+		{name: "fragment scope is invalid", scope: "https://publisher.example/news#official", url: "https://publisher.example/news/item"},
+		{name: "scope credentials are invalid", scope: "https://user@publisher.example/news", url: "https://publisher.example/news/item"},
+		{name: "target credentials are invalid", scope: "https://publisher.example/news", url: "https://user@publisher.example/news/item"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ownershipPathMatches(test.scope, test.url); got != test.want {
+				t.Fatalf("ownershipPathMatches(%q, %q) = %t, want %t", test.scope, test.url, got, test.want)
+			}
+		})
+	}
+}
+
+/** TestSourceOwnsMaterialURLUsesOnlyVerifiedPublisherEvidence rejects distributor-only URLs. */
+func TestSourceOwnsMaterialURLUsesOnlyVerifiedPublisherEvidence(t *testing.T) {
+	articleURL := "https://publisher.example/news/item"
+	for _, test := range []struct {
+		name      string
+		candidate publisherCandidate
+		want      bool
+	}{
+		{
+			name:      "explicit T1 scope",
+			candidate: publisherCandidate{id: "official", config: json.RawMessage(`{"publisherUrlPrefixes":["https://publisher.example/news"]}`)},
+			want:      true,
+		},
+		{
+			name:      "valid scope survives a malformed sibling",
+			candidate: publisherCandidate{id: "official", config: json.RawMessage(`{"publisherUrlPrefixes":[17,"https://publisher.example/news"]}`)},
+			want:      true,
+		},
+		{
+			name:      "observed web list owns its listing path",
+			candidate: publisherCandidate{id: "listing", kind: "web_list", config: json.RawMessage(`{"url":"https://publisher.example/news"}`)},
+			want:      true,
+		},
+		{
+			name:      "RSS host alone is not ownership",
+			candidate: publisherCandidate{id: "feed", kind: "rss", config: json.RawMessage(`{"url":"https://publisher.example/news"}`)},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := sourceOwnsMaterialURL(test.candidate, articleURL); got != test.want {
+				t.Fatalf("sourceOwnsMaterialURL(%s) = %t, want %t", test.candidate.id, got, test.want)
+			}
+		})
 	}
 }

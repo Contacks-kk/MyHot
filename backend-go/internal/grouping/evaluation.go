@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/big"
 	"sort"
+	"strings"
 )
 
 var evaluationRelations = []Relation{RelationSameOccurrence, RelationSameStory, RelationUnrelated, RelationRoundup}
@@ -58,6 +59,33 @@ func SampleRelationGold(rows []EvaluationGoldRow, split string, limit int, seed 
 	result := make([]EvaluationGoldRow, 0, min(len(pool), max(limit, 0)))
 	for _, entry := range pool[:min(len(pool), max(limit, 0))] {
 		result = append(result, entry.row)
+	}
+	return result
+}
+
+/** SafeEvaluationReportNamePart turns a split label into a bounded report filename component. */
+func SafeEvaluationReportNamePart(value string) string {
+	value = strings.TrimSpace(value)
+	var safe strings.Builder
+	separator := false
+	for _, char := range value {
+		allowed := char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '_' || char == '-'
+		if allowed {
+			safe.WriteRune(char)
+			separator = false
+			continue
+		}
+		if !separator {
+			safe.WriteByte('-')
+			separator = true
+		}
+	}
+	result := strings.Trim(safe.String(), "-")
+	if len(result) > 80 {
+		result = result[:80]
+	}
+	if result == "" {
+		return "all"
 	}
 	return result
 }

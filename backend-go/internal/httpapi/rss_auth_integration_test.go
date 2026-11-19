@@ -58,6 +58,46 @@ func TestRSSRequiresVerifiedSessionAndKeepsResponsesPrivate(t *testing.T) {
 	handler.ServeHTTP(conditional, request)
 	private(t, conditional, http.StatusNotModified)
 
+	expiredToken, expiredHash, err := auth.NewToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO user_sessions(user_id,token_hash,csrf_token,expires_at) VALUES($1,$2,'expired-csrf',now()-interval '1 hour')`, userID, expiredHash); err != nil {
+		t.Fatal(err)
+	}
+	unverifiedEmail := "rss-unverified-" + strings.ReplaceAll(time.Now().UTC().Format("20060102150405.000000000"), ".", "") + "@example.invalid"
+	var unverifiedUserID int64
+	if err := pool.QueryRow(ctx, `INSERT INTO user_accounts(email,password_hash) VALUES($1,'fixture') RETURNING id`, unverifiedEmail).Scan(&unverifiedUserID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM user_accounts WHERE id=$1`, unverifiedUserID) })
+	unverifiedToken, unverifiedHash, err := auth.NewToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO user_sessions(user_id,token_hash,csrf_token,expires_at) VALUES($1,$2,'unverified-csrf',now()+interval '1 hour')`, unverifiedUserID, unverifiedHash); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []struct {
+		name  string
+		token string
+	}{
+		{name: "forged", token: "forged-session-token"},
+		{name: "expired", token: expiredToken},
+		{name: "unverified", token: unverifiedToken},
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			request := httptest.NewRequest(method, "http://localhost/feed.xml", nil)
+			request.AddCookie(&http.Cookie{Name: sessionCookie, Value: value.token})
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			private(t, response, http.StatusUnauthorized)
+			if method == http.MethodGet && !strings.Contains(response.Body.String(), `"code":"unauthorized"`) {
+				t.Fatalf("%s session admitted or changed response: %s", value.name, response.Body.String())
+			}
+		}
+	}
+
 	if _, err := pool.Exec(ctx, `DELETE FROM user_sessions WHERE user_id=$1`, userID); err != nil {
 		t.Fatal(err)
 	}

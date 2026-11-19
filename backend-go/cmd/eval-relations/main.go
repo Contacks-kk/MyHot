@@ -60,6 +60,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if *jobID == 0 && !cfg.ModelCallsEnabled {
+		return errors.New("MODEL_CALLS_ENABLED must be true to start a relation evaluation")
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	pool, err := db.Open(ctx, cfg.DatabaseURL)
@@ -165,18 +168,7 @@ func writeReport(dataDir string, report grouping.RelationEvaluationRun) error {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return err
 	}
-	name := strings.Trim(strings.Map(func(r rune) rune {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
-			return r
-		}
-		return '-'
-	}, report.Meta.Split), "-")
-	if len(name) > 80 {
-		name = name[:80]
-	}
-	if name == "" {
-		name = "all"
-	}
+	name := grouping.SafeEvaluationReportNamePart(report.Meta.Split)
 	encoded, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return err

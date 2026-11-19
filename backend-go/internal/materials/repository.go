@@ -38,10 +38,11 @@ type Input struct {
 }
 
 type Result struct {
-	ArticleID string
-	Created   bool
-	Revised   bool
-	Backfill  bool
+	ArticleID        string
+	Created          bool
+	Revised          bool
+	Backfill         bool
+	ProcessingNeeded bool
 }
 
 func (r *Repository) StorePrepared(ctx context.Context, input Input, decision TimelineDecision, hash string) (Result, error) {
@@ -147,9 +148,6 @@ func (r *Repository) recordExisting(tx *gorm.DB, old model.Article, input Input,
 		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.ArticleRevision{
 			ArticleID: old.ID, Revision: old.Revision, ContentHash: hash, Title: input.Title, BodyText: optionalString(bodyText),
 		}).Error
-	}
-	if input.BodyText == "" && !timeFilled {
-		return nil
 	}
 	if old.ContentHash != nil && *old.ContentHash == hash && !timeFilled {
 		return nil

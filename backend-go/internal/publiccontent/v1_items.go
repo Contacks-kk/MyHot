@@ -23,13 +23,14 @@ const itemCursorPrefix = "it3"
 var itemCursorIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,80}$`)
 
 type V1ItemsQuery struct {
-	Mode     string
-	Window   string
-	By       string
-	Category *string
-	Search   *string
-	Limit    int
-	Cursor   *string
+	Mode         string
+	Window       string
+	By           string
+	Category     *string
+	CategoryKeys []string
+	Search       *string
+	Limit        int
+	Cursor       *string
 }
 
 type V1ItemsResponse struct {
@@ -142,7 +143,9 @@ func (r *GormRepository) V1Items(ctx context.Context, query V1ItemsQuery, now ti
 		} else {
 			db = db.Where("p.visibility = 'public' AND p.eligible AND (NOT p.selected OR p.visible_after <= ?)", now)
 		}
-		if query.Category != nil {
+		if len(query.CategoryKeys) > 0 {
+			db = db.Where("p.category IN ?", query.CategoryKeys)
+		} else if query.Category != nil {
 			db = db.Where("p.category = ?", *query.Category)
 		}
 		if query.Search != nil {
@@ -179,6 +182,11 @@ func (s *Service) V1Items(ctx context.Context, query V1ItemsQuery, now time.Time
 	repository, ok := s.repository.(V1ItemsRepository)
 	if !ok {
 		return V1ItemsResponse{}, errors.New("v1 items repository is unavailable")
+	}
+	if query.Category != nil && len(query.CategoryKeys) == 0 {
+		if members := s.publicCategoryMembers[*query.Category]; len(members) > 0 {
+			query.CategoryKeys = append([]string(nil), members...)
+		}
 	}
 	now = now.UTC().Truncate(time.Millisecond)
 	window := 7 * 24 * time.Hour

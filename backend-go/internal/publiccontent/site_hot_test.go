@@ -86,12 +86,21 @@ func TestSiteHotBuildsWebsitePayloadWithSignedImagesAndHourlySpark(t *testing.T)
 }
 
 func TestSiteHotEmptyRankingAndErrors(t *testing.T) {
-	service := NewService(&siteHotFixtureRepository{fakeRepository: &fakeRepository{}})
+	repository := &siteHotFixtureRepository{fakeRepository: &fakeRepository{}}
+	service := NewService(repository)
 	empty, err := service.SiteHot(context.Background(), time.Now(), "secret")
 	if err != nil || empty.ComputedAt != nil || empty.Entries == nil || empty.WindowHours != 48 {
 		t.Fatalf("empty hot response = %#v, %v", empty, err)
 	}
-	repository := &siteHotFixtureRepository{fakeRepository: &fakeRepository{}, err: errors.New("database unavailable")}
+	repository.ranking = &SiteHotRanking{
+		ComputedAt: time.Now(),
+		Entries:    []SiteHotRankingRecord{{StoryPublicID: "new-story", Entry: json.RawMessage(`{}`)}},
+	}
+	updated, err := service.SiteHot(context.Background(), time.Now(), "secret")
+	if err != nil || len(updated.Entries) != 1 {
+		t.Fatalf("published ranking remained hidden after an empty read: %#v, %v", updated, err)
+	}
+	repository = &siteHotFixtureRepository{fakeRepository: &fakeRepository{}, err: errors.New("database unavailable")}
 	if _, err := NewService(repository).SiteHot(context.Background(), time.Now(), "secret"); err == nil {
 		t.Fatal("database error was hidden")
 	}

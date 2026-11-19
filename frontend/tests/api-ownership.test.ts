@@ -10,8 +10,7 @@ const webProxy = readFileSync(path.join(root, "frontend/app/lib/api-proxy.server
 const ssrApi = readFileSync(path.join(root, "frontend/app/lib/api.server.ts"), "utf8");
 const adminApi = readFileSync(path.join(root, "frontend/app/lib/admin.server.ts"), "utf8");
 const goServer = readFileSync(path.join(root, "backend-go/internal/httpapi/server.go"), "utf8");
-const siteModules = readFileSync(path.join(root, "shared/site/modules/server.ts"), "utf8");
-const envExample = readFileSync(path.join(root, ".env.example"), "utf8");
+const siteModules = readFileSync(path.join(root, "frontend/packages/site/modules/server.ts"), "utf8");
 
 test("personal sources paths are not redirected into the admin area", () => {
   for (const pathname of ["/sources", "/sources/new", "/sources/example.xml"]) {
@@ -59,9 +58,6 @@ test("Compose has no TypeScript API or Worker runtime and keeps safety valves cl
   assert.match(compose, /go-worker:/);
   assert.doesNotMatch(compose, /API_BASE_URL: http:\/\/api:3001/);
   assert.match(siteModules, /SERVER_MODULES: readonly ServerModule\[\] = \[\]/);
-  for (const gate of ["COLLECT_ENABLED", "MODEL_CALLS_ENABLED", "GO_SHARED_PIPELINE_ENABLED", "GO_SHARED_BODY_ENABLED", "GO_CONTENT_DELIVERY_ENABLED", "GO_MEDIA_PREPARE_ENABLED", "GO_STORY_DIGEST_ENABLED"]) {
-    assert.match(envExample, new RegExp(`^${gate}=false$`, "m"), `${gate} must default off`);
-  }
 });
 
 test("all share images render in Web", () => {

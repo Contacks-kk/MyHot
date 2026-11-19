@@ -57,6 +57,30 @@ func TestLoadCatalogBuildsCompanyPatternsAndPreservesTopicOrder(t *testing.T) {
 	}
 }
 
+/** TestLoadCatalogPreservesBundledPath verifies configuration loads from the relocated catalog. */
+func TestLoadCatalogPreservesBundledPath(t *testing.T) {
+	t.Setenv("INDUSTRY_TOPICS_FILE", "")
+	expectedGroups, expectedTopics, err := LoadCatalog(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("INDUSTRY_TOPICS_FILE", "../../config/topics.json")
+	groups, topics, err := LoadCatalog(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Regex alternatives are assembled from a map and can have equivalent orders.
+	for i := range topics {
+		topics[i].Pattern = nil
+	}
+	for i := range expectedTopics {
+		expectedTopics[i].Pattern = nil
+	}
+	if len(topics) == 0 || !reflect.DeepEqual(groups, expectedGroups) || !reflect.DeepEqual(topics, expectedTopics) {
+		t.Fatal("bundled path must load the same topic catalog")
+	}
+}
+
 func TestListBuildsSummaryCountsIndexabilityAndLatest(t *testing.T) {
 	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
 	recent := now.Add(-time.Hour)

@@ -49,11 +49,10 @@ func (r *GormRepository) SiteTimelineFacts(ctx context.Context, query SiteTimeli
 		Select(`p.fact_id, p.article_id AS article_id, p.source_id AS source_id, s.tier AS source_tier,
 			s.config->>'publisherRole' AS publisher_role, s.owner_entity_id, f.subject AS fact_subject,
 			p.article_id AS id, p.title, p.summary, p.reason, p.category, p.tags, p.score, p.channel,
-			p.published_at, p.timeline_at, p.body_mode, s.name AS source_name, a.x_post, qt.text_zh AS quoted_zh`).
+			p.published_at, p.timeline_at, p.body_mode, s.name AS source_name`).
 		Joins("JOIN sources AS s ON s.id = p.source_id").
 		Joins("LEFT JOIN facts AS f ON f.id = p.fact_id").
 		Joins("JOIN articles AS a ON a.id = p.article_id").
-		Joins("LEFT JOIN quote_translations AS qt ON p.channel = 'x' AND qt.tweet_id = substring(a.x_post->'quoted'->>'url' from '/status/([0-9]+)')").
 		Where("p.fact_id IN ? AND p.visibility = 'public' AND p.selected AND p.visible_after <= ?", factIDs, now).
 		Where(timelineOwnFactEvidence)
 	memberQuery = applySiteTimelineFilters(memberQuery, query)

@@ -22,7 +22,7 @@ export default function SelectBench({ loaderData }: Route.ComponentProps) {
   return (
     <AdminPage
       title="SelectBench"
-      subtitle="精选判断的模型对比：同一批人工金标样本，逐条比较各模型的入选决定。运行由 legacy/ts-compat/tools/eval-selection.ts 产生并自动导入；也可以上传报告文件。"
+      subtitle="精选判断的模型对比：同一批人工金标样本，逐条比较各模型的入选决定。服务器上的 Go 管理命令会把报告自动导入；也可以上传报告文件。"
       actions={
         <>
           <input
@@ -94,7 +94,7 @@ export default function SelectBench({ loaderData }: Route.ComponentProps) {
           })}
         </div>
       ) : (
-        <Card><Empty>还没有对比运行。运行 legacy/ts-compat/tools/eval-selection.ts 后会自动出现在这里。</Empty></Card>
+        <Card><Empty>还没有对比运行。运行 Go 精选评测命令后，结果会自动出现在这里。</Empty></Card>
       )}
     </AdminPage>
   );

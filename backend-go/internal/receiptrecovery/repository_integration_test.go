@@ -2,6 +2,7 @@ package receiptrecovery
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -110,6 +111,65 @@ func TestReleaseRollsBackReceiptArticleAndAuditTogether(t *testing.T) {
 	var auditAfter map[string]any
 	if err := json.Unmarshal(after, &auditAfter); err != nil || auditAfter["status"] != "failed" || auditAfter["requeued"] != true || auditAfter["billed"] != false {
 		t.Fatalf("audit result=%s err=%v", after, err)
+	}
+}
+
+/** TestReleaseResumesEveryAnalysisPurpose verifies manual receipt release repairs its owning article state. */
+func TestReleaseResumesEveryAnalysisPurpose(t *testing.T) {
+	db := recoveryTestDB(t).Begin()
+	if db.Error != nil {
+		t.Fatal(db.Error)
+	}
+	t.Cleanup(func() { _ = db.Rollback().Error })
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	sourceID := "receipt-purpose-" + suffix
+	if err := db.Exec(`INSERT INTO sources(id,name,kind,tier,participation_mode) VALUES(?, 'receipt purpose test', 'rss', 'T1', 'editorial')`, sourceID).Error; err != nil {
+		t.Fatal(err)
+	}
+	purposes := []string{"prefilter_article", "score_article", "structure_article", "understand_article", "summarize_article", "embedding"}
+	for _, purpose := range purposes {
+		articleID := "receipt-purpose-" + purpose + "-" + suffix
+		attemptTag := "admin:receipt-resume-" + purpose
+		if err := db.Exec(`INSERT INTO articles(id,source_id,identity_key,url,title,discovered_at,timeline_at,processing_state,grouping_status,processing_attempt_tag)
+			VALUES(?,?,?,?,?,now(),now(),'failed','failed',?)`, articleID, sourceID, "identity:"+articleID, "https://example.invalid/"+articleID, purpose, attemptTag).Error; err != nil {
+			t.Fatal(err)
+		}
+		logicalKey := "receipt-purpose:" + articleID
+		subject := "article:" + articleID + "@1"
+		var receiptID int64
+		if err := db.Raw(`INSERT INTO receipts(logical_key,service,purpose,subject,status,request,attempts,origin)
+			VALUES(?, 'fixture', ?, ?, 'unknown', '{}'::jsonb, 1, 'live') RETURNING id`, logicalKey, purpose, subject).Row().Scan(&receiptID); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Exec(`INSERT INTO receipt_attempts(receipt_id,attempt,service,origin,status,error)
+			VALUES(?,1,'fixture','live','unknown','original outcome unknown')`, receiptID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if purpose == "embedding" {
+			if err := db.Exec(`UPDATE articles SET grouping_receipt_id=? WHERE id=?`, receiptID, articleID).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		result, found, err := NewRepository(db).Release(context.Background(), receiptID, "manual release", "test", "confirmed", boolPointer(false))
+		if err != nil || !found || result == nil || !result.Requeued {
+			t.Fatalf("release %s = result=%+v found=%t err=%v", purpose, result, found, err)
+		}
+		var processingState, groupingStatus, recoveredAttemptTag string
+		var groupingReceiptID sql.NullInt64
+		if err := db.Raw(`SELECT processing_state,grouping_status,grouping_receipt_id,processing_attempt_tag FROM articles WHERE id=?`, articleID).
+			Row().Scan(&processingState, &groupingStatus, &groupingReceiptID, &recoveredAttemptTag); err != nil {
+			t.Fatal(err)
+		}
+		if recoveredAttemptTag != attemptTag {
+			t.Fatalf("%s release changed its paid-call identity to %q", purpose, recoveredAttemptTag)
+		}
+		if purpose == "embedding" {
+			if processingState != "failed" || groupingStatus != "pending" || groupingReceiptID.Valid {
+				t.Fatalf("embedding release left article state=%s/%s receipt=%v", processingState, groupingStatus, groupingReceiptID)
+			}
+		} else if processingState != "new" {
+			t.Fatalf("%s release left processing state %q", purpose, processingState)
+		}
 	}
 }
 

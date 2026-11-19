@@ -95,8 +95,16 @@ func (r *GormRepository) Run(ctx context.Context, id string, filters Filters) (*
 func (r *GormRepository) Import(ctx context.Context, data ImportData, actor string) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		run := model.SelectBenchRun{ID: data.ID, Label: data.Label, Split: data.Split, SampleSize: data.SampleSize, Seed: data.Seed, PromptVersion: data.Prompt, Models: data.Models, Summary: data.Summary, ImportedBy: &actor}
-		if err := tx.Create(&run).Error; err != nil {
-			return err
+		create := tx
+		if data.Idempotent {
+			create = create.Clauses(clause.OnConflict{DoNothing: true})
+		}
+		inserted := create.Create(&run)
+		if inserted.Error != nil {
+			return inserted.Error
+		}
+		if data.Idempotent && inserted.RowsAffected == 0 {
+			return nil
 		}
 		rows := make([]model.SelectBenchResult, 0, len(data.Results))
 		for _, item := range data.Results {

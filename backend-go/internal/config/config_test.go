@@ -7,11 +7,67 @@ import (
 	"testing"
 )
 
+/** TestSiteContactDirKeepsCustomDirectory verifies branding relocation preserves explicit contact paths. */
+func TestSiteContactDirKeepsCustomDirectory(t *testing.T) {
+	custom := t.TempDir()
+	t.Setenv("SITE_CONTACT_DIR", custom)
+	if got := siteContactDir(); got != custom {
+		t.Fatalf("custom contact directory changed: %q", got)
+	}
+	t.Setenv("SITE_CONTACT_DIR", "")
+	want := filepath.Join(repositoryRoot(), "frontend", "brand", "contact")
+	if got := siteContactDir(); got != want {
+		t.Fatalf("default contact directory = %q, want %q", got, want)
+	}
+}
+
+func TestSourceScheduleMinutes(t *testing.T) {
+	t.Setenv("SOURCE_AUTO_MIN_INTERVAL_MINUTES", "15")
+	t.Setenv("SOURCE_MANUAL_REUSE_WINDOW_MINUTES", "10")
+	t.Setenv("SOURCE_AUTO_REUSE_WINDOW_MINUTES", "8")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SourceSchedule.AutoMinInterval != 15 || cfg.SourceSchedule.ManualReuseWindow != 10 || cfg.SourceSchedule.AutoReuseWindow != 8 {
+		t.Fatalf("source schedule = %#v", cfg.SourceSchedule)
+	}
+	for _, invalid := range []string{"0", "1441", "1.5"} {
+		t.Setenv("SOURCE_AUTO_REUSE_WINDOW_MINUTES", invalid)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "SOURCE_AUTO_REUSE_WINDOW_MINUTES") {
+			t.Fatalf("invalid source window %q returned %v", invalid, err)
+		}
+	}
+	t.Setenv("SOURCE_AUTO_MIN_INTERVAL_MINUTES", "")
+	t.Setenv("SOURCE_MANUAL_REUSE_WINDOW_MINUTES", "")
+	t.Setenv("SOURCE_AUTO_REUSE_WINDOW_MINUTES", "")
+	cfg, err = Load()
+	if err != nil || cfg.SourceSchedule != (SourceSchedule{}) {
+		t.Fatalf("unset source schedule = %#v, %v", cfg.SourceSchedule, err)
+	}
+}
+
+/** TestLocalDefaultsAndHTTPSCookies verifies closed feature gates and secure local defaults. */
 func TestLocalDefaultsAndHTTPSCookies(t *testing.T) {
 	t.Setenv("USER_API_KEY_ENCRYPTION_KEY", "")
 	t.Setenv("GO_API_ADDR", "")
 	t.Setenv("GO_TRUST_PROXY", "false")
 	t.Setenv("OPEN_REGISTRATION_ENABLED", "")
+	for _, name := range []string{
+		"COLLECT_ENABLED",
+		"MODEL_CALLS_ENABLED",
+		"PERSONALIZATION_ENABLED",
+		"GO_SHARED_BODY_ENABLED",
+		"GO_SHARED_PIPELINE_ENABLED",
+		"GO_STORY_DIGEST_ENABLED",
+		"GO_CONTENT_DELIVERY_ENABLED",
+		"GO_MEDIA_PREPARE_ENABLED",
+		"FEISHU_INTERNAL_ENABLED",
+		"FEISHU_CONTENT_PUSH_ENABLED",
+		"INDEXNOW_SUBMIT_ENABLED",
+	} {
+		t.Setenv(name, "")
+	}
 	t.Setenv("PUBLIC_BASE_URL", "https://myhot.example")
 	t.Setenv("SESSION_COOKIE_SECURE", "false")
 	cfg, err := Load()
@@ -23,6 +79,9 @@ func TestLocalDefaultsAndHTTPSCookies(t *testing.T) {
 	}
 	if cfg.OpenRegistration {
 		t.Fatal("registration must default to closed")
+	}
+	if cfg.CollectorEnabled || cfg.ModelCallsEnabled || cfg.PersonalizationEnabled || cfg.SharedBodyEnabled || cfg.SharedPipelineEnabled || cfg.StoryDigestEnabled || cfg.GoContentDeliveryEnabled || cfg.GoMediaPrepareEnabled || cfg.FeishuInternalEnabled || cfg.FeishuContentPushEnabled || cfg.IndexNowSubmitEnabled {
+		t.Fatal("an external-work safety valve must default to closed")
 	}
 	if !cfg.CookieSecure {
 		t.Fatal("HTTPS must always use Secure cookies")
@@ -485,4 +544,21 @@ func appendEnv(values map[string]*string, key, value string) map[string]*string 
 	}
 	values[key] = &value
 	return values
+}
+
+/** TestSitePublicDirPreservesCustomPathsAndResolvesTheBundledDirectory checks the OpenAPI location. */
+func TestSitePublicDirPreservesCustomPathsAndResolvesTheBundledDirectory(t *testing.T) {
+	t.Setenv("SITE_PUBLIC_DIR", "")
+	got := sitePublicDir()
+	if !strings.HasSuffix(filepath.ToSlash(got), "backend-go/config/public") {
+		t.Fatalf("former bundle path was not relocated: %s", got)
+	}
+	if _, err := os.Stat(filepath.Join(got, "openapi-v1.json")); err != nil {
+		t.Fatalf("bundled API document is missing: %v", err)
+	}
+	dir := t.TempDir()
+	t.Setenv("SITE_PUBLIC_DIR", dir)
+	if got := sitePublicDir(); got != dir {
+		t.Fatalf("custom API document directory changed: got %s, want %s", got, dir)
+	}
 }

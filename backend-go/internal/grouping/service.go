@@ -44,18 +44,28 @@ type WorkflowConfig struct {
 }
 
 type Service struct {
-	repository WorkflowRepository
-	recall     *RecallService
-	judge      *JudgeService
-	embeddings EmbeddingStore
-	publisher  ArticlePublisher
-	config     WorkflowConfig
+	repository  WorkflowRepository
+	recall      *RecallService
+	judge       *JudgeService
+	embeddings  EmbeddingStore
+	publisher   ArticlePublisher
+	storyMerger StoryMerger
+	signalTasks SignalTaskEnqueuer
+	config      WorkflowConfig
 }
 
 type Result struct {
-	Verdict string
-	FactID  *int64
-	StoryID *int64
+	Verdict            string          `json:"verdict"`
+	FactID             *int64          `json:"factId,omitempty"`
+	StoryID            *int64          `json:"storyId,omitempty"`
+	Consolidated       []Consolidation `json:"consolidated,omitempty"`
+	ConsolidationError string          `json:"consolidationError,omitempty"`
+	Redirected         []int64         `json:"redirected,omitempty"`
+	RedirectError      string          `json:"redirectError,omitempty"`
+	ReclaimedSignals   int             `json:"reclaimedSignals,omitempty"`
+	RematchedSignals   int             `json:"rematchedSignals,omitempty"`
+	ReclaimError       string          `json:"reclaimError,omitempty"`
+	RematchError       string          `json:"rematchError,omitempty"`
 }
 
 func NewService(repository WorkflowRepository, recall *RecallService, judge *JudgeService, embeddings EmbeddingStore, publisher ArticlePublisher, cfg WorkflowConfig) *Service {
@@ -63,6 +73,20 @@ func NewService(repository WorkflowRepository, recall *RecallService, judge *Jud
 		cfg.Now = time.Now
 	}
 	return &Service{repository: repository, recall: recall, judge: judge, embeddings: embeddings, publisher: publisher, config: cfg}
+}
+
+/** SetStoryMerger injects the transaction owner used after a double-confirmed identity match. */
+func (s *Service) SetStoryMerger(merger StoryMerger) {
+	if s != nil {
+		s.storyMerger = merger
+	}
+}
+
+/** SetSignalTaskEnqueuer injects the River producer for revisited discussion posts. */
+func (s *Service) SetSignalTaskEnqueuer(enqueuer SignalTaskEnqueuer) {
+	if s != nil {
+		s.signalTasks = enqueuer
+	}
 }
 
 // Process runs a single durable grouping decision. Model calls happen before the write transaction;
@@ -290,7 +314,39 @@ func (s *Service) decide(ctx context.Context, articleID string, signalOnly bool,
 	if err == nil {
 		err = s.completeReceipts(ctx, receiptIDs)
 	}
-	return resultFromCommit(verdict, committed), err
+	result := resultFromCommit(verdict, committed)
+	if err != nil || committed.Manual.Found || committed.StoryID == nil {
+		return result, err
+	}
+	storyIDs := []int64{*committed.StoryID}
+	for _, candidate := range candidates {
+		candidateVerdict := verdicts[candidate.FactID]
+		if FirmlyTied(candidateVerdict.Relation, candidateVerdict.Confidence) {
+			storyIDs = append(storyIDs, candidate.StoryID)
+		}
+	}
+	consolidated, liveStoryID, consolidationErr := s.consolidateStoryRoots(ctx, *committed.StoryID, storyIDs)
+	result.Consolidated = consolidated
+	if liveStoryID != *committed.StoryID {
+		result.StoryID = &liveStoryID
+	}
+	if consolidationErr != nil {
+		result.ConsolidationError = truncateUTF16(consolidationErr.Error(), 300)
+	}
+	redirected, redirectErr := s.redirectEmptyStories(ctx, articleID, *result.StoryID)
+	result.Redirected = redirected
+	if redirectErr != nil {
+		result.RedirectError = truncateUTF16(redirectErr.Error(), 300)
+	}
+	reclaimed, rematched, reclaimErr, rematchErr := s.revisitSignals(ctx, *article, queryText, verdict)
+	result.ReclaimedSignals, result.RematchedSignals = reclaimed, rematched
+	if reclaimErr != nil {
+		result.ReclaimError = truncateUTF16(reclaimErr.Error(), 300)
+	}
+	if rematchErr != nil {
+		result.RematchError = truncateUTF16(rematchErr.Error(), 300)
+	}
+	return result, nil
 }
 
 func (s *Service) groupSignal(ctx context.Context, article ArticleInput, observedAt time.Time) (Result, error) {

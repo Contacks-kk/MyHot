@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Link, useLoaderData } from "react-router";
+import { Link, redirect, useLoaderData } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import { createCodeChecker, confirmRegistrationSession, type CodeCheckState } from "./code-check";
 import { VerificationNotice } from "./VerificationNotice";
@@ -7,40 +7,68 @@ import { verificationDeadline, verificationSeconds } from "./verification-timing
 import { safeReturnTo } from "../../lib/access";
 import { AccountFrame, fieldClass, FormMessage, labelClass, postJSON, submitClass } from "./common";
 
+/** Load login page options and sanitize sensitive query parameters. */
 export async function loginLoader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
+
+  // Security: Purge sensitive credentials if leaked via GET query parameters
+  if (url.searchParams.has("password") || url.searchParams.has("email")) {
+    const cleanUrl = new URL(url.pathname, url.origin);
+    const returnParam = url.searchParams.get("return");
+    if (returnParam) {
+      cleanUrl.searchParams.set("return", returnParam);
+    }
+    return redirect(cleanUrl.pathname + cleanUrl.search, 303);
+  }
+
   const returnTo = safeReturnTo(url.searchParams.get("return"));
   return { returnTo };
 }
 
+/** Render user login page with secure form submission. */
 export function LoginPage() {
   const { returnTo } = useLoaderData<typeof loginLoader>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  /** Submit credentials over JSON API. */
   async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError("");
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+
     const fields = new FormData(event.currentTarget);
     try {
-      await postJSON("/api/auth/login", { email: fields.get("email"), password: fields.get("password") });
+      await postJSON("/api/auth/login", {
+        email: fields.get("email"),
+        password: fields.get("password"),
+      });
       window.location.assign(returnTo);
-    } catch (e) { setError(e instanceof Error ? e.message : "登录失败"); }
-    finally { setBusy(false); }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "登录失败");
+    } finally {
+      setBusy(false);
+    }
   }
-  return <AccountFrame title="登录 MyHOT" description="登录后查看为你整理的个人热点。">
-    <form onSubmit={submit}>
-      <label className={labelClass} htmlFor="email">邮箱</label>
-      <input className={fieldClass} id="email" name="email" type="email" autoComplete="email" required />
-      <label className={labelClass} htmlFor="password">密码</label>
-      <input className={fieldClass} id="password" name="password" type="password" autoComplete="current-password" required />
-      {error && <FormMessage error>{error}</FormMessage>}
-      <button className={submitClass} disabled={busy}>{busy ? "正在登录…" : "登录"}</button>
-    </form>
-    <div className="mt-4 flex justify-between text-[12.5px] text-ink-3">
-      <Link to={`/password-reset?${new URLSearchParams({ return: returnTo })}`} className="hover:text-accent">忘记密码</Link>
-      <Link to="/register" className="hover:text-accent">创建账号</Link>
-    </div>
-    <p className="mt-3 text-center text-[12px] text-ink-4"><Link to="/verify-email" className="hover:text-accent">输入邮箱验证码</Link></p>
-  </AccountFrame>;
+
+  return (
+    <AccountFrame title="登录 MyHOT" description="登录后查看为你整理的个人热点。">
+      <form method="post" action="/api/auth/login" onSubmit={submit}>
+        <input type="hidden" name="return" value={returnTo} />
+        <label className={labelClass} htmlFor="email">邮箱</label>
+        <input className={fieldClass} id="email" name="email" type="email" autoComplete="email" required />
+        <label className={labelClass} htmlFor="password">密码</label>
+        <input className={fieldClass} id="password" name="password" type="password" autoComplete="current-password" required />
+        {error && <FormMessage error>{error}</FormMessage>}
+        <button className={submitClass} disabled={busy}>{busy ? "正在登录…" : "登录"}</button>
+      </form>
+      <div className="mt-4 flex justify-between text-[12.5px] text-ink-3">
+        <Link to={`/password-reset?${new URLSearchParams({ return: returnTo })}`} className="hover:text-accent">忘记密码</Link>
+        <Link to="/register" className="hover:text-accent">创建账号</Link>
+      </div>
+      <p className="mt-3 text-center text-[12px] text-ink-4"><Link to="/verify-email" className="hover:text-accent">输入邮箱验证码</Link></p>
+    </AccountFrame>
+  );
 }
 
 export async function registerLoader({ request }: LoaderFunctionArgs) {
@@ -157,7 +185,7 @@ export function RegisterPage() {
     }
   }
   return <AccountFrame title="创建账号" description="填写邮箱验证码完成注册，验证码60秒内有效。">
-    {!enabled ? <div className="mt-5 rounded-control border border-line bg-bg-sunk p-4 text-[13px] leading-relaxed text-ink-3">注册暂未开放，请稍后再试。</div> : <form onSubmit={submit}>
+    {!enabled ? <div className="mt-5 rounded-control border border-line bg-bg-sunk p-4 text-[13px] leading-relaxed text-ink-3">注册暂未开放，请稍后再试。</div> : <form method="post" action="/api/auth/register" onSubmit={submit}>
       <VerificationFields state={verification} busy={busy || created}/>
       <label className={labelClass} htmlFor="password">密码（至少 12 位）</label>
       <input className={fieldClass} id="password" name="password" type="password" minLength={12} autoComplete="new-password" required value={password} onChange={e => setPassword(e.target.value)} disabled={busy || created}/>
@@ -168,30 +196,137 @@ export function RegisterPage() {
   </AccountFrame>;
 }
 
-export function VerifyEmailPage() {
-  const verification = useVerificationCode();
-  const [error,setError]=useState(""); const [message,setMessage]=useState(""); const [busy,setBusy]=useState(false);
-  async function verify(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError("");
-    try { const result = await postJSON<{message:string}>("/api/auth/verify", {email: verification.email, code: verification.code}); setMessage(result.message); }
-    catch(e) { setError(e instanceof Error ? e.message : "验证失败"); }
-    finally { setBusy(false); }
+/** Sanitize query parameters for email verification page. */
+export async function verifyLoader({ request }: LoaderFunctionArgs) {
+  const url = new URL(request.url);
+
+  // Security: Purge sensitive parameters from GET query string
+  if (url.searchParams.has("code") || url.searchParams.has("password")) {
+    return redirect("/verify-email", 303);
   }
-  return <AccountFrame title="验证邮箱" description="获取6位邮箱验证码，60秒内填写并完成验证。">
-    <form onSubmit={verify}><VerificationFields state={verification} busy={busy}/><button className={submitClass} disabled={busy || verification.sending || !!message}>{busy ? "正在验证…" : "完成邮箱验证"}</button></form>
-    {error && <FormMessage error>{error}</FormMessage>}{message && <FormMessage>{message} <Link to="/login" className="text-accent">前往登录</Link></FormMessage>}
-  </AccountFrame>;
+
+  return null;
 }
 
-export async function passwordLoader({ request }: LoaderFunctionArgs) { const url=new URL(request.url);return {token:url.searchParams.get("token")??""}; }
+/** Render email verification page. */
+export function VerifyEmailPage() {
+  const verification = useVerificationCode();
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
 
+  /** Submit email verification code. */
+  async function verify(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+
+    try {
+      const result = await postJSON<{ message: string }>("/api/auth/verify", {
+        email: verification.email,
+        code: verification.code,
+      });
+      setMessage(result.message);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "验证失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AccountFrame title="验证邮箱" description="获取6位邮箱验证码，60秒内填写并完成验证。">
+      <form method="post" action="/api/auth/verify" onSubmit={verify}>
+        <VerificationFields state={verification} busy={busy} />
+        <button className={submitClass} disabled={busy || verification.sending || !!message}>
+          {busy ? "正在验证…" : "完成邮箱验证"}
+        </button>
+      </form>
+      {error && <FormMessage error>{error}</FormMessage>}
+      {message && (
+        <FormMessage>
+          {message} <Link to="/login" className="text-accent">前往登录</Link>
+        </FormMessage>
+      )}
+    </AccountFrame>
+  );
+}
+
+/** Load password reset token and sanitize query parameters. */
+export async function passwordLoader({ request }: LoaderFunctionArgs) {
+  const url = new URL(request.url);
+
+  // Security: Purge sensitive parameters from GET query string
+  if (url.searchParams.has("password")) {
+    const cleanUrl = new URL(url.pathname, url.origin);
+    const token = url.searchParams.get("token");
+    if (token) {
+      cleanUrl.searchParams.set("token", token);
+    }
+    return redirect(cleanUrl.pathname + cleanUrl.search, 303);
+  }
+
+  return { token: url.searchParams.get("token") ?? "" };
+}
+
+/** Render password reset request or submission page. */
 export function PasswordResetPage() {
-  const {token}=useLoaderData<typeof passwordLoader>();const [busy,setBusy]=useState(false);const [message,setMessage]=useState("");const [error,setError]=useState("");
-  async function submit(event:FormEvent<HTMLFormElement>){event.preventDefault();setBusy(true);setMessage("");setError("");const fields=new FormData(event.currentTarget);try{const result=token?await postJSON<{message:string}>("/api/auth/password/reset",{token,password:fields.get("password")}):await postJSON<{message:string}>("/api/auth/password/forgot",{email:fields.get("email")});setMessage(result.message);}catch(e){setError(e instanceof Error?e.message:"操作失败");}finally{setBusy(false);}}
-  return <AccountFrame title={token?"设置新密码":"找回密码"} description={token?"新密码至少 12 位。":"输入账号邮箱，我们会发送密码重置链接。"}>
-    <form onSubmit={submit}>{token?<><label className={labelClass} htmlFor="password">新密码</label><input className={fieldClass} id="password" name="password" type="password" minLength={12} autoComplete="new-password" required/></>:<><label className={labelClass} htmlFor="email">邮箱</label><input className={fieldClass} id="email" name="email" type="email" autoComplete="email" required/></>}
-      {error&&<FormMessage error>{error}</FormMessage>}{message&&<FormMessage>{message}</FormMessage>}<button className={submitClass} disabled={busy}>{busy?"请稍候…":token?"更新密码":"发送重置邮件"}</button>
-    </form>
-    <p className="mt-4 text-center text-[12.5px] text-ink-3"><Link to="/login" className="text-accent">返回登录</Link></p>
-  </AccountFrame>;
+  const { token } = useLoaderData<typeof passwordLoader>();
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  /** Submit password reset request or new password. */
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    setError("");
+
+    const fields = new FormData(event.currentTarget);
+    try {
+      const result = token
+        ? await postJSON<{ message: string }>("/api/auth/password/reset", {
+            token,
+            password: fields.get("password"),
+          })
+        : await postJSON<{ message: string }>("/api/auth/password/forgot", {
+            email: fields.get("email"),
+          });
+      setMessage(result.message);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "操作失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AccountFrame
+      title={token ? "设置新密码" : "找回密码"}
+      description={token ? "新密码至少 12 位。" : "输入账号邮箱，我们会发送密码重置链接。"}
+    >
+      <form method="post" action={token ? "/api/auth/password/reset" : "/api/auth/password/forgot"} onSubmit={submit}>
+        {token ? (
+          <>
+            <label className={labelClass} htmlFor="password">新密码</label>
+            <input className={fieldClass} id="password" name="password" type="password" minLength={12} autoComplete="new-password" required />
+          </>
+        ) : (
+          <>
+            <label className={labelClass} htmlFor="email">邮箱</label>
+            <input className={fieldClass} id="email" name="email" type="email" autoComplete="email" required />
+          </>
+        )}
+        {error && <FormMessage error>{error}</FormMessage>}
+        {message && <FormMessage>{message}</FormMessage>}
+        <button className={submitClass} disabled={busy}>
+          {busy ? "请稍候…" : token ? "更新密码" : "发送重置邮件"}
+        </button>
+      </form>
+      <p className="mt-4 text-center text-[12.5px] text-ink-3">
+        <Link to="/login" className="text-accent">返回登录</Link>
+      </p>
+    </AccountFrame>
+  );
 }

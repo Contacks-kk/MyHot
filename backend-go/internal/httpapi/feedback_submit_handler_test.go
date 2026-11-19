@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"image"
+	"image/png"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -75,6 +79,54 @@ func TestFeedbackSubmitIsPublicAndReturnsCreatedContract(t *testing.T) {
 	}
 }
 
+/** A large real multipart screenshot must survive HTTP parsing and local staging byte-for-byte. */
+func TestFeedbackSubmitPreservesLargeMultipartScreenshotBytes(t *testing.T) {
+	const width = 1350
+	const height = 1350
+
+	img := image.NewNRGBA(image.Rect(0, 0, width, height))
+	state := uint32(0x9e3779b9)
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			state ^= state << 13
+			state ^= state >> 17
+			state ^= state << 5
+			pixel := img.PixOffset(x, y)
+			img.Pix[pixel] = byte(state >> 24)
+			img.Pix[pixel+1] = byte(state >> 16)
+			img.Pix[pixel+2] = byte(state >> 8)
+			img.Pix[pixel+3] = 0xff
+		}
+	}
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, img); err != nil {
+		t.Fatal(err)
+	}
+	screenshot := encoded.Bytes()
+	if len(screenshot) <= 5*1024*1024 || len(screenshot) > feedbackScreenshotLimit {
+		t.Fatalf("fixture should exercise the valid 5 MiB to 8 MiB range: %d bytes", len(screenshot))
+	}
+
+	dataDir := t.TempDir()
+	repo := &submitFeedbackRepository{}
+	server := &Server{Feedback: feedback.NewService(repo, feedback.Config{DataDir: dataDir})}
+	body, contentType := feedbackForm(t, map[string]string{"content": "large image"}, screenshot)
+	request := httptest.NewRequest(http.MethodPost, "/api/site/feedback", body)
+	request.Header.Set("Content-Type", contentType)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("valid large multipart screenshot should be accepted: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if repo.created.ScreenshotKey == nil || len(*repo.created.ScreenshotKey) <= len("local:") {
+		t.Fatalf("screenshot was not staged locally: %#v", repo.created.ScreenshotKey)
+	}
+	stored, err := os.ReadFile(filepath.Join(dataDir, "feedback-screenshots", (*repo.created.ScreenshotKey)[len("local:"):]))
+	if err != nil || !bytes.Equal(stored, screenshot) {
+		t.Fatalf("multipart screenshot bytes changed: stored=%d expected=%d err=%v", len(stored), len(screenshot), err)
+	}
+}
+
 func TestFeedbackSubmitMapsFormValidationAndRequestSize(t *testing.T) {
 	server := &Server{Feedback: feedback.NewService(&submitFeedbackRepository{}, feedback.Config{})}
 	badText, badTextType := feedbackForm(t, map[string]string{"content": "valid", "screenshot": "not-a-file"}, nil)
@@ -84,6 +136,23 @@ func TestFeedbackSubmitMapsFormValidationAndRequestSize(t *testing.T) {
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte("截图上传格式不正确")) {
 		t.Fatalf("screenshot text should be rejected: status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/site/feedback", bytes.NewBufferString("bad multipart body"))
+	request.Header.Set("Content-Type", "multipart/form-data; boundary=missing")
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(`"code":"invalid_request"`)) {
+		t.Fatalf("malformed multipart should preserve the invalid-request contract: status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	oversizedScreenshot, oversizedType := feedbackForm(t, map[string]string{"content": "valid"}, bytes.Repeat([]byte{0}, feedbackScreenshotLimit+1))
+	request = httptest.NewRequest(http.MethodPost, "/api/site/feedback", oversizedScreenshot)
+	request.Header.Set("Content-Type", oversizedType)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte("8MB")) {
+		t.Fatalf("oversized screenshot should be rejected with the size contract: status=%d body=%s", response.Code, response.Body.String())
 	}
 
 	tooLarge := bytes.NewReader(bytes.Repeat([]byte("x"), feedbackRequestLimit+1))

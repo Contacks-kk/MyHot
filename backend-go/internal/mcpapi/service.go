@@ -42,10 +42,13 @@ type Config struct {
 }
 
 type Service struct {
-	content *publiccontent.Service
-	config  Config
-	mu      sync.Mutex
-	cache   map[string]cacheEntry
+	content        *publiccontent.Service
+	config         Config
+	mu             sync.Mutex
+	cache          map[string]cacheEntry
+	lifecycleCtx   context.Context
+	cancelRequests context.CancelFunc
+	closeOnce      sync.Once
 }
 
 type cacheEntry struct {
@@ -93,10 +96,23 @@ func NewService(content *publiccontent.Service, config Config) *Service {
 	if config.Logger == nil {
 		config.Logger = slog.Default()
 	}
-	return &Service{content: content, config: config, cache: make(map[string]cacheEntry)}
+	lifecycleCtx, cancelRequests := context.WithCancel(context.Background())
+	return &Service{
+		content:        content,
+		config:         config,
+		cache:          make(map[string]cacheEntry),
+		lifecycleCtx:   lifecycleCtx,
+		cancelRequests: cancelRequests,
+	}
 }
 
-func (s *Service) Handler() *mcp.StreamableHTTPHandler {
+/** Close cancels active MCP requests so persistent streams can drain during API shutdown. */
+func (s *Service) Close() {
+	s.closeOnce.Do(s.cancelRequests)
+}
+
+/** Handler builds the MCP endpoint and connects its request lifetime to the service lifecycle. */
+func (s *Service) Handler() http.Handler {
 	server := mcp.NewServer(
 		&mcp.Implementation{Name: s.config.Prefix, Version: s.config.Version},
 		&mcp.ServerOptions{
@@ -134,9 +150,22 @@ func (s *Service) Handler() *mcp.StreamableHTTPHandler {
 			return out, nil
 		})
 	}
-	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{
+	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{
 		Stateless: true, JSONResponse: true, DisableLocalhostProtection: true,
 		MaxRequestBodyBytes: 256 * 1024, PropagateRequestCancellation: true,
+	})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("MCP-Method") != "subscriptions/listen" {
+			handler.ServeHTTP(w, r)
+			return
+		}
+		requestCtx, cancel := context.WithCancel(r.Context())
+		stop := context.AfterFunc(s.lifecycleCtx, cancel)
+		defer func() {
+			stop()
+			cancel()
+		}()
+		handler.ServeHTTP(w, r.WithContext(requestCtx))
 	})
 }
 

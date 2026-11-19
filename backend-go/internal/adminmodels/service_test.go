@@ -68,6 +68,23 @@ func TestLoadCatalogKeepsPresetOrderAndRejectsDuplicateCapabilities(t *testing.T
 	}
 }
 
+/** TestLoadCatalogPreservesBundledPath verifies the bundled catalog remains available after relocation. */
+func TestLoadCatalogPreservesBundledPath(t *testing.T) {
+	t.Setenv("MODEL_CATALOG_FILE", "")
+	expected, err := LoadCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MODEL_CATALOG_FILE", "../../config/model-catalog.json")
+	actual, err := LoadCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(actual, expected) || len(actual.Capabilities) == 0 {
+		t.Fatal("bundled path must load the same built-in model catalog")
+	}
+}
+
 func TestOverviewResolvesSourcesAndEstimatesCachedTokenCost(t *testing.T) {
 	t.Setenv("SCORE_MODEL", "named")
 	t.Setenv("SUMMARY_MODEL", "unknown")

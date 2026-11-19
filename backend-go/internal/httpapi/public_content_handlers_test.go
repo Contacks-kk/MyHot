@@ -9,6 +9,39 @@ import (
 	"testing"
 )
 
+/** TestContentExitRoutesRejectAnonymousGetAndHead verifies the Go-owned content boundary across migrated exits. */
+func TestContentExitRoutesRejectAnonymousGetAndHead(t *testing.T) {
+	server := &Server{}
+	paths := []string{
+		"/api/v1/items",
+		"/api/site/pool",
+		"/api/site/items/missing",
+		"/items/missing/markdown",
+		"/feed.xml",
+		"/feed/full.xml",
+		"/feed/all.xml",
+		"/feed/daily.xml",
+		"/feed/weekly.xml",
+		"/feed/monthly.xml",
+		"/api/v1/agent",
+		"/api/v1/agent/latest",
+		"/openapi-v1.json",
+		"/sitemap.xml",
+	}
+	for _, path := range paths {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, httptest.NewRequest(method, path, nil))
+			if response.Code != http.StatusUnauthorized || response.Header().Get("Cache-Control") != "private, no-store" || response.Header().Get("Surrogate-Control") != "no-store" {
+				t.Errorf("anonymous %s %s: status=%d headers=%v body=%s", method, path, response.Code, response.Header(), response.Body.String())
+			}
+			if method == http.MethodGet && !strings.Contains(response.Body.String(), `"code":"unauthorized"`) {
+				t.Errorf("anonymous GET %s response did not retain the unauthorized problem body: %s", path, response.Body.String())
+			}
+		}
+	}
+}
+
 func TestItemAvailabilityRequiresVerifiedUserSession(t *testing.T) {
 	server := &Server{}
 	recorder := httptest.NewRecorder()

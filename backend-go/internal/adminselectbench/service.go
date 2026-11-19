@@ -86,6 +86,7 @@ type Filters struct {
 
 type ImportData struct {
 	ID         string
+	Idempotent bool
 	Label      string
 	Split      *string
 	SampleSize int
@@ -152,6 +153,19 @@ func (s *Service) Run(ctx context.Context, id string, filters Filters) (*RunCase
 }
 
 func (s *Service) Import(ctx context.Context, label string, raw json.RawMessage, actor string) (string, error) {
+	return s.importReport(ctx, "", false, label, raw, actor)
+}
+
+/** ImportWithID makes a worker-owned SelectBench import safe to retry. */
+func (s *Service) ImportWithID(ctx context.Context, id, label string, raw json.RawMessage, actor string) (string, error) {
+	if strings.TrimSpace(id) == "" {
+		return "", errors.New("selectbench import id is required")
+	}
+	return s.importReport(ctx, id, true, label, raw, actor)
+}
+
+/** importReport validates the report and stores its SelectBench projection. */
+func (s *Service) importReport(ctx context.Context, id string, idempotent bool, label string, raw json.RawMessage, actor string) (string, error) {
 	var input report
 	if err := json.Unmarshal(raw, &input); err != nil {
 		return "", err
@@ -162,11 +176,15 @@ func (s *Service) Import(ctx context.Context, label string, raw json.RawMessage,
 	}
 
 	data := ImportData{Label: label, Models: names}
-	var randomID [3]byte
-	if _, err := rand.Read(randomID[:]); err != nil {
-		return "", err
+	if id == "" {
+		var randomID [3]byte
+		if _, err := rand.Read(randomID[:]); err != nil {
+			return "", err
+		}
+		id = fmt.Sprintf("sb-%s-%s", time.Now().UTC().Format("20060102"), hex.EncodeToString(randomID[:]))
 	}
-	data.ID = fmt.Sprintf("sb-%s-%s", time.Now().UTC().Format("20060102"), hex.EncodeToString(randomID[:]))
+	data.ID = id
+	data.Idempotent = idempotent
 	if value, ok := input.Meta["split"].(string); ok {
 		data.Split = stringPtr(value)
 	}

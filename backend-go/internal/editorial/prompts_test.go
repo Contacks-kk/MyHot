@@ -5,9 +5,39 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+/** TestSelectionRulesPreservesBundledThresholds checks relocated rules through the bundled path. */
+func TestSelectionRulesPreservesBundledThresholds(t *testing.T) {
+	t.Setenv("INDUSTRY_SELECTION_FILE", "")
+	want, err := LoadSelectionRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("INDUSTRY_SELECTION_FILE", "../../config/selection.json")
+	got, err := LoadSelectionRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(want, got) || len(got.Thresholds) == 0 {
+		t.Fatal("selection thresholds changed after relocation")
+	}
+}
+
+/** TestPromptDirectoryResolvesBundledPack verifies prompts load from the Go configuration bundle. */
+func TestPromptDirectoryResolvesBundledPack(t *testing.T) {
+	t.Setenv("INDUSTRY_PROMPT_DIR", "../../config/prompts")
+	pack, err := LoadPrompts("Example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pack.Version("selection-score"); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestPromptPackExpandsFillsAndVersionsTransitiveFiles(t *testing.T) {
 	directory := t.TempDir()
@@ -32,6 +62,10 @@ func TestPromptPackExpandsFillsAndVersionsTransitiveFiles(t *testing.T) {
 	want := "规则 共享约束\n站名=MyHOT，栏目=产品\n"
 	if got != want {
 		t.Fatalf("Render() = %q, want %q", got, want)
+	}
+	candidate, err := pack.RenderText("candidate", files["main.md"], map[string]string{"category": "产品"})
+	if err != nil || candidate != got {
+		t.Fatalf("candidate rendering differs from the pack: %q, %v", candidate, err)
 	}
 	version, err := pack.Version("main")
 	if err != nil {
@@ -70,6 +104,12 @@ func TestPromptPackRejectsMissingValuesFilesAndCycles(t *testing.T) {
 	}
 	if _, err := pack.Version("left"); err == nil || !strings.Contains(err.Error(), "left -> right -> left") {
 		t.Fatalf("include cycle error = %v", err)
+	}
+	if _, err := pack.RenderText("candidate", "{{> left}}", nil); err == nil || !strings.Contains(err.Error(), "left -> right -> left") {
+		t.Fatalf("candidate include cycle error = %v", err)
+	}
+	if _, err := pack.RenderText("candidate", "{{value}}", nil); err == nil || !strings.Contains(err.Error(), "no value for {{value}}") {
+		t.Fatalf("candidate missing value error = %v", err)
 	}
 }
 

@@ -17,6 +17,7 @@ func TestSiteReportDetailReplacesWithdrawnLeadAndKeepsPublicPresentation(t *test
 		"overview": "Daily overview", "highlights": []any{"live"},
 		"sections": []any{map[string]any{"label": "研究", "items": []any{
 			map[string]any{"itemId": "withdrawn", "title": "Withdrawn editorial lead", "summary": "private after withdrawal"},
+			map[string]any{"title": "Historical citation"},
 			map[string]any{"itemId": "live", "title": "Available result", "summary": "Frozen public summary", "sourceName": "Original", "sourceUrl": "https://source.example.invalid/live", "sourceId": "old-source", "sources": 3, "related": []any{map[string]any{"itemId": "related", "title": "Related result", "sourceId": "related-source"}}, "followUp": "2026-10-06"},
 		}}},
 		"flashes": []any{}, "metrics": map[string]any{"firstPartyEvents": 99, "sourcesCount": 99},
@@ -42,10 +43,17 @@ func TestSiteReportDetailReplacesWithdrawnLeadAndKeepsPublicPresentation(t *test
 	if result.Title != "AI 日报 · 2026-10-07" || result.Lead == nil || result.Lead.Title != "Available result" || result.Lead.LeadParagraph != "Frozen public summary" || result.LeadItemID == nil || *result.LeadItemID != "live" {
 		t.Fatalf("report lead = %#v", result)
 	}
-	if len(result.Sections) != 1 || len(result.Sections[0].Items) != 2 || result.Sections[0].Items[0].Available || result.Sections[0].Items[0].Summary != nil {
-		t.Fatalf("withdrawn citation = %#v", result.Sections)
+	if len(result.Sections) != 1 || len(result.Sections[0].Items) != 3 {
+		t.Fatalf("citation order or unavailable-item redaction changed: %#v", result.Sections)
 	}
-	citation := result.Sections[0].Items[1]
+	items := result.Sections[0].Items
+	if items[0].ItemID == nil || *items[0].ItemID != "withdrawn" || items[1].ItemID != nil || items[1].Title != "Historical citation" || items[2].ItemID == nil || *items[2].ItemID != "live" {
+		t.Fatalf("citation order changed: %#v", items)
+	}
+	if items[0].Available || items[0].Summary != nil || items[1].Summary != nil {
+		t.Fatalf("unavailable citation data was exposed: %#v", items[:2])
+	}
+	citation := items[2]
 	if citation.Summary == nil || *citation.Summary != "Frozen public summary" || citation.SourceName != "Current" || !citation.FirstParty || citation.SourceIconURL == nil || !strings.HasPrefix(*citation.SourceIconURL, "/api/img-proxy?") || citation.SourceIconSrcSet == nil {
 		t.Fatalf("available citation = %#v", citation)
 	}
@@ -110,6 +118,85 @@ func TestSiteReportDoesNotReturnCoverForUnavailableLead(t *testing.T) {
 	}
 	if result.Cover != nil || result.LeadItemID != nil || result.Sections[0].Items[0].Available {
 		t.Fatalf("unavailable lead leaked to cover or item link: %#v", result)
+	}
+}
+
+/** TestSiteReportPreservesHistoricalDailyLeadMatching verifies title matching and safe fallbacks. */
+func TestSiteReportPreservesHistoricalDailyLeadMatching(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	arenaTitle := "Claude Opus 5.5 (High) 以 1509 分登顶 Arena Text Arena 榜首"
+	openAITitle := "OpenAI 暂停最强模型的训练与工具使用，披露智能体利用 DNS 漏洞联网及泄露 GitHub token 等安全事件"
+	cases := []struct {
+		name           string
+		leadTitle      string
+		highlightIDs   []string
+		items          []map[string]any
+		available      map[string]bool
+		wantLeadItemID string
+	}{
+		{
+			name:           "matches a written headline to its cited article",
+			leadTitle:      "OpenAI 暂停最强模型训练与工具使用，披露智能体安全事件",
+			highlightIDs:   []string{"a", "b"},
+			items:          []map[string]any{{"itemId": "a", "title": arenaTitle}, {"itemId": "b", "title": openAITitle}},
+			available:      map[string]bool{"a": true, "b": true},
+			wantLeadItemID: "b",
+		},
+		{
+			name:         "leaves an unmatched written headline without an article",
+			leadTitle:    "多家公司发布新模型，行业竞争加剧",
+			highlightIDs: []string{"a", "b"},
+			items:        []map[string]any{{"itemId": "a", "title": arenaTitle}, {"itemId": "b", "title": openAITitle}},
+			available:    map[string]bool{"a": true, "b": true},
+		},
+		{
+			name:           "falls back to the first available highlight",
+			highlightIDs:   []string{"withdrawn", "a"},
+			items:          []map[string]any{{"itemId": "withdrawn", "title": "已下架"}, {"itemId": "a", "title": arenaTitle}},
+			available:      map[string]bool{"withdrawn": false, "a": true},
+			wantLeadItemID: "a",
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			items := make([]any, 0, len(testCase.items))
+			availability := make(map[string]V1ReportAvailabilityRecord, len(testCase.available))
+			for _, item := range testCase.items {
+				items = append(items, item)
+				id := item["itemId"].(string)
+				availability[id] = V1ReportAvailabilityRecord{Available: testCase.available[id]}
+			}
+			highlights := make([]any, 0, len(testCase.highlightIDs))
+			for _, id := range testCase.highlightIDs {
+				highlights = append(highlights, id)
+			}
+			content := map[string]any{
+				"highlights": highlights,
+				"sections":   []any{map[string]any{"label": "头条", "items": items}},
+			}
+			if testCase.leadTitle != "" {
+				content["lead"] = map[string]any{"title": testCase.leadTitle, "leadParagraph": "编辑头条摘要"}
+			}
+			report := &V1ReportRecord{Kind: "daily", Key: "2026-10-07", GeneratedAt: now, Content: content}
+			repository := &v1ReportsFakeRepository{
+				fakeRepository: &fakeRepository{},
+				reports:        map[string]*V1ReportRecord{"daily:" + report.Key: report},
+				availability:   availability,
+			}
+
+			result, err := NewService(repository).SiteReport(context.Background(), "daily", report.Key, now, SiteReportConfig{Subject: "AI"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := ""
+			if result.LeadItemID != nil {
+				got = *result.LeadItemID
+			}
+			if got != testCase.wantLeadItemID {
+				t.Fatalf("lead item = %q, want %q", got, testCase.wantLeadItemID)
+			}
+		})
 	}
 }
 

@@ -11,19 +11,22 @@ import (
 	"html"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	"aihot/backend-go/internal/mediaurl"
 	"aihot/backend-go/internal/publiccontent"
 )
 
 const feedImageLifetime = 7 * 24 * time.Hour
 
 var (
-	imgTagPattern      = regexp.MustCompile(`(?is)<img\b[^>]*>`)
-	imgSourcePattern   = regexp.MustCompile(`(?i)\ssrc="([^"]+)"`)
-	videoPosterPattern = regexp.MustCompile(`(?i)(<video\b[^>]*?\sposter=")([^"]+)(")`)
-	bareURLPattern     = regexp.MustCompile(`https?://[^\s<>"'　-〿㐀-䶿一-鿿＀-￯぀-ヿ가-힯☀-➿️‍]+`)
+	imgTagPattern       = regexp.MustCompile(`(?is)<img\b[^>]*>`)
+	imgSourcePattern    = regexp.MustCompile(`(?i)\ssrc="([^"]+)"`)
+	imgDimensionPattern = regexp.MustCompile(`(?i)\s(width|height)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))`)
+	videoPosterPattern  = regexp.MustCompile(`(?i)\s+poster="([^"]+)"`)
+	bareURLPattern      = regexp.MustCompile(`https?://[^\s<>"'　-〿㐀-䶿一-鿿＀-￯぀-ヿ가-힯☀-➿️‍]+`)
 )
 
 type Category struct {
@@ -468,7 +471,8 @@ func proxyBodyImages(body, siteURL, secret string, now time.Time, lifetime time.
 			return tag
 		}
 		source := strings.ReplaceAll(match[1], "&amp;", "&")
-		if nonArticleImage(source) {
+		width, height := bodyImageDimensions(tag)
+		if mediaurl.IsNonArticleImage(source, width, height) {
 			return ""
 		}
 		proxied, err := signedImageURL(source, "full", siteURL, secret, now, lifetime)
@@ -483,15 +487,19 @@ func proxyBodyImages(body, siteURL, secret string, now time.Time, lifetime time.
 	}
 	body = videoPosterPattern.ReplaceAllStringFunc(body, func(tag string) string {
 		parts := videoPosterPattern.FindStringSubmatch(tag)
-		if len(parts) != 4 {
+		if len(parts) != 2 {
 			return tag
 		}
-		proxied, err := signedImageURL(strings.ReplaceAll(parts[2], "&amp;", "&"), "thumb", siteURL, secret, now, lifetime)
+		source := strings.ReplaceAll(parts[1], "&amp;", "&")
+		if mediaurl.IsNonArticleImage(source, nil, nil) {
+			return ""
+		}
+		proxied, err := signedImageURL(source, "thumb", siteURL, secret, now, lifetime)
 		if err != nil {
 			proxyErr = err
 			return tag
 		}
-		return parts[1] + html.EscapeString(proxied) + parts[3]
+		return ` poster="` + html.EscapeString(proxied) + `"`
 	})
 	return body, proxyErr
 }
@@ -515,25 +523,29 @@ func signedImageURL(source, mode, siteURL, secret string, now time.Time, lifetim
 	return absoluteURL(siteURL, path), nil
 }
 
-func nonArticleImage(value string) bool {
-	parsed, err := url.Parse(value)
-	if err != nil {
-		return false
+/** bodyImageDimensions reads numeric width and height attributes from an image tag. */
+func bodyImageDimensions(tag string) (*float64, *float64) {
+	var width, height *float64
+	for _, match := range imgDimensionPattern.FindAllStringSubmatch(tag, -1) {
+		raw := match[2]
+		if raw == "" {
+			raw = match[3]
+		}
+		if raw == "" {
+			raw = match[4]
+		}
+		dimension, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+		if err != nil {
+			continue
+		}
+		switch strings.ToLower(match[1]) {
+		case "width":
+			width = &dimension
+		case "height":
+			height = &dimension
+		}
 	}
-	host := strings.ToLower(parsed.Hostname())
-	if strings.HasPrefix(host, "www.") {
-		host = strings.TrimPrefix(host, "www.")
-	} else if strings.HasPrefix(host, "m.") {
-		host = strings.TrimPrefix(host, "m.")
-	}
-	switch host {
-	case "ids4.ad.gt", "ids.ad.gt", "secure.adnxs.com", "sync.1rx.io", "ssum-sec.casalemedia.com", "sync.smartadserver.com", "token.rubiconproject.com", "image2.pubmatic.com", "sync.go.sonobi.com", "onetag-sys.com":
-		return true
-	case "youtube.com":
-		parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
-		return len(parts) == 1 && parts[0] == "watch" || len(parts) == 2 && parts[0] == "shorts"
-	}
-	return false
+	return width, height
 }
 
 func publicSourceName(name string) string { return publiccontent.PublicSourceName(name) }

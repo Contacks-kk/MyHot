@@ -75,6 +75,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if *jobID == 0 && !cfg.ModelCallsEnabled {
+		return errors.New("MODEL_CALLS_ENABLED must be true to start a story digest evaluation")
+	}
+	if *jobID == 0 && !cfg.StoryDigestEnabled {
+		return errors.New("GO_STORY_DIGEST_ENABLED must be true to start a story digest evaluation")
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	pool, err := db.Open(ctx, cfg.DatabaseURL)

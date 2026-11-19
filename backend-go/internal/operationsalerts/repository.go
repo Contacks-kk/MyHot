@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"aihot/backend-go/internal/model"
+	"aihot/backend-go/internal/sourcehealth"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -16,6 +17,12 @@ import (
 const autoReleaseNote = "自动放行：结果未知超过 30 分钟，未核对是否计费"
 
 type GormRepository struct{ db *gorm.DB }
+
+type backupSnapshot struct {
+	At       string `json:"at"`
+	Uploaded *bool  `json:"uploaded"`
+	FilesErr string `json:"filesError"`
+}
 
 func NewRepository(db *gorm.DB) *GormRepository { return &GormRepository{db: db} }
 
@@ -60,6 +67,12 @@ func (r *GormRepository) Findings(ctx context.Context, now time.Time, cfg Config
 			return nil, err
 		}
 		findings = append(findings, items...)
+		cutoff := now.Add(-7 * 24 * time.Hour)
+		weekly, err := sourcehealth.NewRepository(r.db).Weekly(ctx, cutoff, cutoff.Add(-7*24*time.Hour))
+		if err != nil {
+			return nil, err
+		}
+		findings = append(findings, sourceHealthFindings(weekly.Sources, cutoff)...)
 	}
 	items, err := r.providerFindings(ctx)
 	if err != nil {
@@ -77,6 +90,117 @@ func (r *GormRepository) Findings(ctx context.Context, now time.Time, cfg Config
 	}
 	findings = append(findings, items...)
 	return findings, nil
+}
+
+/** sourceHealthFindings retains daily follow-ups for distinct collection uses. */
+func sourceHealthFindings(sources []sourcehealth.Source, cutoff time.Time) []Finding {
+	groups := []struct {
+		mode string
+		name string
+	}{
+		{mode: "editorial", name: "编辑内容"},
+		{mode: "hot_signal", name: "热度信号"},
+	}
+	findings := make([]Finding, 0)
+	for _, group := range groups {
+		matching := make([]sourcehealth.Source, 0)
+		for _, source := range sources {
+			if source.Mode == group.mode {
+				matching = append(matching, source)
+			}
+		}
+		failing := make([]sourcehealth.Source, 0)
+		unstable := make([]sourcehealth.Source, 0)
+		silent := make([]sourcehealth.Source, 0)
+		quality := make([]sourcehealth.Source, 0)
+		detailFailures := make([]sourcehealth.Source, 0)
+		for _, source := range matching {
+			if source.Health == "failing" {
+				failing = append(failing, source)
+			}
+			if source.Failed >= 5 && source.Runs > 0 && float64(source.Failed)/float64(source.Runs) >= 0.1 {
+				unstable = append(unstable, source)
+			}
+			if source.CreatedAt.Before(cutoff) && source.Discoveries == 0 {
+				silent = append(silent, source)
+			}
+			if group.mode == "editorial" && (source.Undated > 0 || source.Repeated > 0) {
+				quality = append(quality, source)
+			}
+			if source.DetailFailures > 0 {
+				detailFailures = append(detailFailures, source)
+			}
+		}
+		if len(failing) > 0 {
+			findings = append(findings, Finding{
+				Key:   "sources.failing." + group.mode,
+				Level: LevelToday,
+				Title: fmt.Sprintf("%s有 %d 个信源连续抓取失败", group.name, len(failing)),
+				Detail: sourceHealthList(failing, func(source sourcehealth.Source) string {
+					detail := fmt.Sprintf("连续失败 %d 次", source.FailCount)
+					if source.LastError != nil && *source.LastError != "" {
+						detail += "，" + *source.LastError
+					}
+					return detail
+				}) + "；转给 AI 检查抓取错误",
+			})
+		}
+		if len(unstable) > 0 {
+			findings = append(findings, Finding{
+				Key:   "sources.unstable." + group.mode,
+				Level: LevelToday,
+				Title: fmt.Sprintf("%s有 %d 个信源反复抓取失败", group.name, len(unstable)),
+				Detail: sourceHealthList(unstable, func(source sourcehealth.Source) string {
+					return fmt.Sprintf("近 7 天失败 %d/%d 次", source.Failed, source.Runs)
+				}) + "；即使最近成功也需检查，避免继续漏收",
+			})
+		}
+		if len(silent) > 0 {
+			findings = append(findings, Finding{
+				Key:   "sources.silent." + group.mode,
+				Level: LevelToday,
+				Title: fmt.Sprintf("%s有 %d 个信源 7 天未发现新内容", group.name, len(silent)),
+				Detail: sourceHealthList(silent, func(source sourcehealth.Source) string {
+					return fmt.Sprintf("近 7 天 %d 次抓取、0 条新发现", source.Runs)
+				}) + "；需对照原站，区分低频更新与采集失效",
+			})
+		}
+		if len(quality) > 0 {
+			findings = append(findings, Finding{
+				Key:   "sources.quality." + group.mode,
+				Level: LevelToday,
+				Title: fmt.Sprintf("%s有 %d 个信源需要核实文章质量", group.name, len(quality)),
+				Detail: sourceHealthList(quality, func(source sourcehealth.Source) string {
+					return fmt.Sprintf("近 7 天缺发布时间 %d 篇、反复修订 %d 篇", source.Undated, source.Repeated)
+				}) + "；缺时间可能让新闻按历史文章处理，反复修订需核对正文是否混入变化内容",
+			})
+		}
+		if len(detailFailures) > 0 {
+			findings = append(findings, Finding{
+				Key:   "sources.details." + group.mode,
+				Level: LevelToday,
+				Title: fmt.Sprintf("%s有 %d 个信源详情补全失败", group.name, len(detailFailures)),
+				Detail: sourceHealthList(detailFailures, func(source sourcehealth.Source) string {
+					return fmt.Sprintf("近 7 天 %d 次", source.DetailFailures)
+				}) + "；查看抓取记录中的详情地址与错误",
+			})
+		}
+	}
+	return findings
+}
+
+/** sourceHealthList bounds source details while retaining the total count. */
+func sourceHealthList(sources []sourcehealth.Source, describe func(sourcehealth.Source) string) string {
+	limit := min(10, len(sources))
+	items := make([]string, 0, limit)
+	for _, source := range sources[:limit] {
+		items = append(items, fmt.Sprintf("%s（%s）：%s", source.Name, source.ID, describe(source)))
+	}
+	detail := strings.Join(items, "；")
+	if len(sources) > limit {
+		detail += fmt.Sprintf("；另有 %d 个，见信源周报与后台信源列表", len(sources)-limit)
+	}
+	return detail
 }
 
 func (r *GormRepository) collectionFindings(ctx context.Context, now time.Time, cfg Config) ([]Finding, error) {
@@ -308,11 +432,7 @@ func (r *GormRepository) backupFindings(ctx context.Context, now time.Time, cfg 
 	if err := r.db.WithContext(ctx).Raw(`SELECT value FROM settings WHERE key='backup.last'`).Scan(&setting).Error; err != nil {
 		return nil, err
 	}
-	var backup struct {
-		At       string `json:"at"`
-		Uploaded *bool  `json:"uploaded"`
-		FilesErr string `json:"filesError"`
-	}
+	var backup backupSnapshot
 	if len(setting.Value) > 0 {
 		if err := json.Unmarshal(setting.Value, &backup); err != nil {
 			return nil, err
@@ -329,6 +449,11 @@ func (r *GormRepository) backupFindings(ctx context.Context, now time.Time, cfg 
 	if runs.LastOK != nil {
 		lastSuccess = runs.LastOK
 	}
+	return backupFailureFinding(now, backup, lastSuccess, runs.FirstAttempt), nil
+}
+
+/** Builds the backup alert after applying uploaded-state and escalation-age rules. */
+func backupFailureFinding(now time.Time, backup backupSnapshot, lastSuccess, firstAttempt *time.Time) []Finding {
 	if backup.Uploaded != nil && *backup.Uploaded {
 		if at, err := time.Parse(time.RFC3339Nano, backup.At); err == nil && (lastSuccess == nil || at.After(*lastSuccess)) {
 			lastSuccess = &at
@@ -337,12 +462,12 @@ func (r *GormRepository) backupFindings(ctx context.Context, now time.Time, cfg 
 	since := now
 	if lastSuccess != nil {
 		since = *lastSuccess
-	} else if runs.FirstAttempt != nil {
-		since = *runs.FirstAttempt
+	} else if firstAttempt != nil {
+		since = *firstAttempt
 	}
 	age := now.Sub(since)
 	if age <= 50*time.Hour {
-		return nil, nil
+		return nil
 	}
 	state := ""
 	if backup.FilesErr != "" {
@@ -358,7 +483,7 @@ func (r *GormRepository) backupFindings(ctx context.Context, now time.Time, cfg 
 	if lastSuccess != nil {
 		kind = "最近一次成功"
 	}
-	return []Finding{{Key: "backup.failed", Level: LevelToday, Title: "数据库备份连续两天没成功", Impact: impact, Heals: "不会", Action: "转给 AI 处理", Detail: kind + " " + beijingStamp(since) + state + "；看 ops.backup 的运行记录", Since: &since}}, nil
+	return []Finding{{Key: "backup.failed", Level: LevelToday, Title: "数据库备份连续两天没成功", Impact: impact, Heals: "不会", Action: "转给 AI 处理", Detail: kind + " " + beijingStamp(since) + state + "；看 ops.backup 的运行记录", Since: &since}}
 }
 
 func overdueDaily(now time.Time, edition string) (bool, string) {

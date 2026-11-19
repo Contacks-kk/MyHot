@@ -1,16 +1,31 @@
 // Failure cases: an origin-form // path is read as a URL authority and throws a 500; an unknown
 // double-slash path becomes a different host's root; HEAD or single-fetch data follows another rule.
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { createServer, request } from "node:http";
 import type { AddressInfo } from "node:net";
-import { after, before, test } from "node:test";
+import { after, afterEach, before, mock, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { data } from "react-router";
+import { apiGet, loadOr404 } from "../app/lib/api.server.ts";
+import { handleError } from "../app/lib/errors.server.ts";
+import { createRenderErrorHandler } from "../app/lib/render-recovery.ts";
+import { siteUrl, topicLd } from "../app/lib/seo.ts";
+import { ogEtag } from "@aihot/og-renderer/og";
+import { parseOgPrewarmRequest } from "../app/lib/og-prewarm.server.ts";
 
 let web: ChildProcess;
 let port: number;
 let logs = "";
+let shareImageCacheDir = "";
+let shareImageTitle = "OG fixture";
+let shareImageWithdrawn = false;
+const shareImagePrewarmSecret = "request-target-prewarm-secret-with-at-least-32-bytes";
 const upstreamPaths: string[] = [];
 const userApiPaths: string[] = [];
 const userApiMethods: string[] = [];
@@ -20,14 +35,14 @@ const api = createServer((req, res) => {
   if ((req.url ?? "").split("?")[0] === "/api/img-proxy") {
     res.setHeader("Cache-Control", "public, max-age=60");
     if (req.method === "HEAD") return res.end();
-    return res.end("legacy-image-proxy");
+    return res.end("fixture-image-proxy");
   }
   res.setHeader("Content-Type", "application/json");
   if (req.url === "/openapi-v1.json") return res.end("{}");
   if (req.url === "/api/me") { res.statusCode = 401; return res.end("{}"); }
   if (req.url === "/api/auth/registration-status") return res.end(JSON.stringify({ enabled: false }));
   if (req.url === "/api/site/meta") return res.end(JSON.stringify({ changelogVersion: null }));
-  if ((req.url ?? "").startsWith("/api/admin/deliveries/")) return res.end(JSON.stringify({ owner: "legacy-deliveries" }));
+  if ((req.url ?? "").startsWith("/api/admin/deliveries/")) return res.end(JSON.stringify({ owner: "fixture-deliveries" }));
   if (req.url?.startsWith("/api/site/timeline")) return res.end(JSON.stringify({
     cards: [], nextCursor: null, dayCounts: {}, hot: [], filters: { category: null, channel: null, tag: null },
   }));
@@ -134,7 +149,13 @@ const goApi = createServer((req, res) => {
     if (req.method === "HEAD") return res.end();
     return res.end("# Article\n");
   }
-  if (req.url === "/api/site/items/og_fixture") return res.end(JSON.stringify({ id: "og_fixture", title: "OG fixture", summary: "An article summary", source: { name: "Fixture source" }, timelineAt: "2026-10-08T00:00:00.000Z", category: "ai-models", score: 80, selected: true }));
+  if (req.url === "/api/site/items/og_fixture") {
+    if (shareImageWithdrawn) {
+      res.statusCode = 404;
+      return res.end("{}");
+    }
+    return res.end(JSON.stringify({ id: "og_fixture", title: shareImageTitle, summary: "An article summary", source: { name: "Fixture source" }, timelineAt: "2026-10-08T00:00:00.000Z", category: "paper", score: 80, selected: true }));
+  }
   if (/^\/api\/site\/items\/(?!availability(?:\/|$))[a-zA-Z0-9_-]{1,80}(?:\/original)?$/.test((req.url ?? "").split("?")[0]!)) {
     if (req.headers.cookie !== "myhot_session=reader") {
       res.statusCode = 401;
@@ -194,6 +215,7 @@ const goApi = createServer((req, res) => {
   if (req.url === "/api/admin/sources/rss-preview-demo") return res.end(JSON.stringify({ source: { kind: "rss" } }));
     if (req.url === "/api/admin/sources/x-preview-demo") return res.end(JSON.stringify({ source: { kind: "x_search" } }));
     if (["/api/auth/login", "/api/auth/options", "/api/auth/password", "/api/auth/feishu", "/api/auth/callback", "/api/auth/check", "/api/admin/auth/logout", "/api/admin/me", "/api/admin/feedback", "/api/admin/feedback/12", "/api/admin/feedback/12/erase", "/api/admin/feedback/12/screenshot", "/api/admin/feedback-bans", "/api/admin/feedback-bans/abc123", "/api/admin/nav-counts", "/api/admin/audit", "/api/admin/runs", "/api/admin/processing/requeue", "/api/admin/models", "/api/admin/models/prefilter", "/api/admin/settings", "/api/admin/settings/contact-qr", "/api/admin/notify-targets/weekly", "/api/admin/budgets/openai", "/api/admin/selectbench", "/api/admin/selectbench/sb-20261007-abc123", "/api/admin/selectbench/import", "/api/admin/sources", "/api/admin/sources/preview", "/api/admin/sources/rss-demo", "/api/admin/sources/rss-preview-demo/preview", "/api/admin/sources/x-preview-demo", "/api/admin/sources/x-preview-demo/preview", "/api/admin/content", "/api/admin/content/article-1", "/api/admin/content/article-1/seo", "/api/admin/deliveries/17/resolve", "/api/admin/deliveries/18/resolve", "/api/admin/receipts/17/release", "/api/site/meta", "/api/site/changelog", "/api/site/feedback", "/api/site/items/availability", "/api/site/topics", "/api/site/topics/openai", "/api/site/stories/12345678-1234-4234-8234-123456789abc/followups", "/api/site/groups/fact-1/reports", "/api/site/reports/daily/navigation/2026-10-07", "/api/site/reports/daily/months/2026-10", "/api/v1/items", "/api/v1/hot-topics", "/api/v1/agent/hot", "/api/v1/agent/latest", "/api/v1/agent/search", "/api/v1/agent/stories/12345678-1234-4234-8234-123456789abc", "/api/v1/selected/snapshot", "/api/v1/selected/changes", "/api/v1/dailies", "/api/v1/dailies/latest", "/api/v1/dailies/2026-10-07", "/api/v1/weeklies", "/api/v1/weeklies/latest", "/api/v1/weeklies/2026-W41", "/api/v1/monthlies", "/api/v1/monthlies/latest", "/api/v1/monthlies/2026-10", "/contact/qr-wechat-1234abcd.png"].includes((req.url ?? "").split("?")[0]!)) return res.end(JSON.stringify({ owner: "go-admin-auth" }));
+  if (req.url === "/api/me/catalog") return res.end(JSON.stringify({ subject: "Fixture", categories: [{ key: "paper", label: "Fixture category", publicKey: "paper", feedLabel: "Fixture category" }], topicGroups: [{ key: "company", name: "Fixture companies", blurb: "" }], topics: [{ slug: "openai", name: "Fixture topic", group: "company", definition: "Fixture definition" }] }));
   if (req.url === "/api/me") { if (req.headers.cookie === "myhot_session=reader") return res.end(JSON.stringify({ id: 1, email: "reader@example.invalid", csrfToken: "fixture" })); res.statusCode = 401; return res.end("{}"); }
   if (req.url === "/api/auth/registration-status") return res.end(JSON.stringify({ enabled: false }));
   if (req.url === "/api/ingest/items") return res.end(JSON.stringify({ ok: true, created: 1 }));
@@ -204,12 +226,13 @@ const goApi = createServer((req, res) => {
 });
 
 before(async () => {
+  shareImageCacheDir = await mkdtemp(path.join(os.tmpdir(), "myhot-share-image-test-"));
   api.listen(0, "127.0.0.1");
   await once(api, "listening");
   goApi.listen(0, "127.0.0.1");
   await once(goApi, "listening");
   web = spawn(process.execPath, [fileURLToPath(new URL("../server.ts", import.meta.url))], {
-    env: { ...process.env, WEB_PORT: "0", TRUST_PROXY: "false", GO_MEDIA_PREPARE_ENABLED: "false", INDEXNOW_KEY: "0123456789abcdef0123456789abcdef", GO_API_BASE_URL: `http://127.0.0.1:${(goApi.address() as AddressInfo).port}` },
+    env: { ...process.env, WEB_PORT: "0", TRUST_PROXY: "false", GO_MEDIA_PREPARE_ENABLED: "false", INDEXNOW_KEY: "0123456789abcdef0123456789abcdef", GO_API_BASE_URL: `http://127.0.0.1:${(goApi.address() as AddressInfo).port}`, WEB_OG_PREWARM_SECRET: shareImagePrewarmSecret, AIHOT_DATA_DIR: shareImageCacheDir },
     stdio: ["ignore", "pipe", "pipe"],
   });
   await new Promise<void>((resolve, reject) => {
@@ -229,21 +252,76 @@ after(async () => {
   await new Promise<void>((resolve) => api.close(() => resolve()));
   goApi.closeAllConnections();
   await new Promise<void>((resolve) => goApi.close(() => resolve()));
+  if (shareImageCacheDir) {
+    await rm(shareImageCacheDir, { recursive: true, force: true });
+  }
 });
 
 function rawAt(targetPort: number, path: string, method: "GET" | "HEAD" | "POST" | "PATCH" | "PUT" | "DELETE" | "OPTIONS", headers: import("node:http").OutgoingHttpHeaders = {}, body?: string) {
-  return new Promise<{ status: number; headers: import("node:http").IncomingHttpHeaders; body: string }>((resolve, reject) => {
+  return new Promise<{ status: number; headers: import("node:http").IncomingHttpHeaders; body: string; rawBody: Buffer }>((resolve, reject) => {
     const req = request({ hostname: "127.0.0.1", port: targetPort, path, method, headers }, (res) => {
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", (chunk) => { body += chunk; });
-      res.on("end", () => resolve({ status: res.statusCode!, headers: res.headers, body }));
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk) => { chunks.push(Buffer.from(chunk)); });
+      res.on("end", () => {
+        const rawBody = Buffer.concat(chunks);
+        resolve({ status: res.statusCode!, headers: res.headers, body: rawBody.toString("utf8"), rawBody });
+      });
       res.on("error", reject);
     });
     req.on("error", reject);
     req.end(body);
   });
 }
+
+/** Verify Worker prewarm, current article rendering, correction, and withdrawal use the same image path. */
+test("worker prewarm shares the authenticated article image cache and respects current content", async () => {
+  shareImageTitle = "OG fixture";
+  shareImageWithdrawn = false;
+  const item = {
+    id: "og_fixture",
+    title: shareImageTitle,
+    summary: "An article summary",
+    timelineAt: "2026-10-08T00:00:00.000Z",
+    category: "paper",
+    categoryLabel: "Fixture category",
+    score: 80,
+    selected: true,
+    source: { name: "Fixture source" },
+  };
+  const payload = Buffer.from(JSON.stringify({ id: item.id, item }));
+  const signature = createHmac("sha256", shareImagePrewarmSecret).update(payload).digest("hex");
+  const parsed = parseOgPrewarmRequest(payload, signature, shareImagePrewarmSecret);
+  assert.ok(parsed);
+  const cacheFile = path.join(shareImageCacheDir, "ogcache", `${ogEtag(parsed.card)}.png`);
+
+  const rejected = await raw("/_internal/og/prewarm", "POST", {
+    "content-type": "application/json",
+    "x-og-prewarm-signature": "0".repeat(64),
+  }, payload.toString("utf8"));
+  assert.equal(rejected.status, 404, logs);
+
+  const warmed = await raw("/_internal/og/prewarm", "POST", {
+    "content-type": "application/json",
+    "x-og-prewarm-signature": signature,
+  }, payload.toString("utf8"));
+  assert.equal(warmed.status, 204, logs);
+  const cachedPng = await readFile(cacheFile);
+  const image = await raw("/og/items/og_fixture.png", "GET", { cookie: "myhot_session=reader" });
+  assert.equal(image.status, 200, logs);
+  assert.equal(image.headers.etag, `"og-${ogEtag(parsed.card)}"`);
+  assert.deepEqual(image.rawBody, cachedPng);
+
+  shareImageTitle = "Corrected OG fixture";
+  const corrected = await raw("/og/items/og_fixture.png", "GET", { cookie: "myhot_session=reader" });
+  assert.equal(corrected.status, 200, logs);
+  assert.notEqual(corrected.headers.etag, image.headers.etag);
+  assert.notDeepEqual(corrected.rawBody, image.rawBody);
+
+  shareImageWithdrawn = true;
+  const withdrawn = await raw("/og/items/og_fixture.png", "GET", { cookie: "myhot_session=reader" });
+  assert.equal(withdrawn.status, 404, logs);
+  assert.ok(await readFile(cacheFile), "withdrawn image bytes may remain cached on disk");
+});
 
 function raw(path: string, method: "GET" | "HEAD" | "POST" | "PATCH" | "PUT" | "DELETE" | "OPTIONS", headers: import("node:http").OutgoingHttpHeaders = {}, body?: string) {
   return rawAt(port, path, method, headers, body);
@@ -277,7 +355,7 @@ test("RSS feed paths are proxied to the Go API", async () => {
     assert.equal(response.status, 200, `${path}: ${logs}`);
     assert.equal(response.headers["content-type"], "application/rss+xml; charset=utf-8");
     assert.ok(userApiPaths.includes(path), `${path} did not reach Go`);
-    assert.ok(!upstreamPaths.includes(path), `${path} reached the legacy API`);
+    assert.ok(!upstreamPaths.includes(path), `${path} reached the Go API`);
   }
   const options = await raw("/feed.xml", "OPTIONS");
   assert.equal(options.status, 204);
@@ -333,12 +411,23 @@ test("image proxy remains on Go when animation preparation is enabled", async ()
 });
 
 test("share cards and posters render in Web behind the Go session gate", async () => {
-  const legacyBefore = upstreamPaths.length;
+  const upstreamBefore = upstreamPaths.length;
   const denied = await raw("/og/site.png", "GET");
   assert.equal(denied.status, 401, logs);
   assert.equal(denied.headers["content-type"], "application/problem+json");
   assert.equal(denied.headers["cache-control"], "private, no-store");
   assert.equal(JSON.parse(denied.body).code, "unauthorized");
+  for (const method of ["GET", "HEAD"] as const) {
+    const deniedItem = await raw("/og/items/missing.png", method);
+    assert.equal(deniedItem.status, 401, logs);
+    assert.equal(deniedItem.headers["cache-control"], "private, no-store");
+    assert.equal(deniedItem.headers["surrogate-control"], "no-store");
+    if (method === "GET") {
+      assert.equal(JSON.parse(deniedItem.body).code, "unauthorized");
+    } else {
+      assert.equal(deniedItem.body, "");
+    }
+  }
 
   const site = await raw("/og/site.png", "GET", { cookie: "myhot_session=reader" });
   assert.equal(site.status, 200, logs);
@@ -401,7 +490,7 @@ test("share cards and posters render in Web behind the Go session gate", async (
   const missing = await raw("/og/pages/not-a-card.png", "GET", { cookie: "myhot_session=reader" });
   assert.equal(missing.status, 404, logs);
   assert.equal(missing.headers["cache-control"], "private, no-store");
-  assert.equal(upstreamPaths.length, legacyBefore, "Web-owned share cards must not reach the API");
+  assert.equal(upstreamPaths.length, upstreamBefore, "Web-owned share cards must not reach the API");
   assert.ok(userApiPaths.filter((path) => path === "/api/me").length >= 8, "the Go session gate should run for each card request");
 });
 
@@ -448,7 +537,7 @@ test("health, site metadata and content reads use Go", async () => {
     const reportIndex = await raw(path, "GET", { cookie: "myhot_session=reader" });
     assert.equal(reportIndex.status, 200, `${path}: ${logs}`);
     assert.ok(userApiPaths.includes(path), `${path} did not reach Go`);
-    assert.ok(!upstreamPaths.includes(path), `${path} reached the legacy API`);
+    assert.ok(!upstreamPaths.includes(path), `${path} reached the Go API`);
   }
   const reportHead = await raw("/api/site/reports/daily", "HEAD", { cookie: "myhot_session=reader" });
   assert.equal(reportHead.status, 200, logs);
@@ -458,13 +547,13 @@ test("health, site metadata and content reads use Go", async () => {
     const reportNavigation = await raw(path, "GET", { cookie: "myhot_session=reader" });
     assert.equal(reportNavigation.status, 200, `${path}: ${logs}`);
     assert.ok(userApiPaths.includes(path), `${path} did not reach Go`);
-    assert.ok(!upstreamPaths.includes(path), `${path} reached the legacy API`);
+    assert.ok(!upstreamPaths.includes(path), `${path} reached the Go API`);
   }
   for (const path of ["/api/site/reports/daily/latest-page", "/api/site/reports/daily/2026-10-07"]) {
     const response = await raw(path, "GET", { cookie: "myhot_session=reader" });
     assert.equal(response.status, 200, `${path}: ${logs}`);
     assert.ok(userApiPaths.includes(path), `${path} did not reach Go`);
-    assert.ok(!upstreamPaths.includes(path), `${path} reached the legacy API`);
+    assert.ok(!upstreamPaths.includes(path), `${path} reached the Go API`);
   }
   const reportDetailHead = await raw("/api/site/reports/daily/2026-10-07", "HEAD", { cookie: "myhot_session=reader" });
   assert.equal(reportDetailHead.status, 200, logs);
@@ -473,7 +562,7 @@ test("health, site metadata and content reads use Go", async () => {
   const dailyArchive = await raw("/daily/archive", "GET", { cookie: "myhot_session=reader" });
   assert.equal(dailyArchive.status, 200, logs);
   assert.ok(userApiPaths.includes("/api/site/reports/daily"), "SSR archive index request uses Go");
-  assert.ok(!upstreamPaths.includes("/api/site/reports/daily"), "SSR archive index request skips legacy API");
+  assert.ok(!upstreamPaths.includes("/api/site/reports/daily"), "SSR archive index request skips the Go API");
 });
 
 test("admin authentication and all admin API paths use Go", async () => {
@@ -496,7 +585,7 @@ test("admin authentication and all admin API paths use Go", async () => {
     assert.equal(response.status, 200, `${method} ${path}: ${logs}`);
     assert.deepEqual(JSON.parse(response.body), { owner: "go-admin-auth" });
     assert.ok(userApiPaths.includes(path), `${path} did not reach Go`);
-    assert.ok(!upstreamPaths.includes(path), `${path} reached the legacy API`);
+    assert.ok(!upstreamPaths.includes(path), `${path} reached the Go API`);
   }
   const adminData = await raw("/api/admin/models", "GET");
   assert.equal(adminData.status, 200);
@@ -593,7 +682,7 @@ test("admin authentication and all admin API paths use Go", async () => {
     const response = await raw(path, "GET");
     assert.equal(response.status, 200, `${path}: ${logs}`);
     assert.ok(userApiPaths.includes(path), `${path} did not reach Go`);
-    assert.ok(!upstreamPaths.includes(path), `${path} reached the legacy API`);
+    assert.ok(!upstreamPaths.includes(path), `${path} reached the Go API`);
   }
   const agentLatestHead = await raw("/api/v1/agent/latest?limit=5", "HEAD");
   assert.equal(agentLatestHead.status, 200, logs);
@@ -607,7 +696,7 @@ test("admin authentication and all admin API paths use Go", async () => {
     const response = await raw(path, "GET");
     assert.equal(response.status, 200, `${path}: ${logs}`);
     assert.ok(userApiPaths.includes(path), `${path} did not reach Go`);
-    assert.ok(!upstreamPaths.includes(path), `${path} reached the legacy API`);
+    assert.ok(!upstreamPaths.includes(path), `${path} reached the Go API`);
   }
   const items = await raw("/api/v1/items?limit=4", "GET");
   assert.equal(items.status, 200);
@@ -617,7 +706,7 @@ test("admin authentication and all admin API paths use Go", async () => {
     const response = await raw(path, "GET");
     assert.equal(response.status, 200, `${path}: ${logs}`);
     assert.ok(userApiPaths.includes(path), `${path} did not reach Go`);
-    assert.ok(!upstreamPaths.includes(path), `${path} reached the legacy API`);
+    assert.ok(!upstreamPaths.includes(path), `${path} reached the Go API`);
   }
   const storyPath = "/api/v1/stories/12345678-1234-4234-8234-123456789abc";
   const story = await raw(storyPath, "GET");
@@ -628,7 +717,7 @@ test("admin authentication and all admin API paths use Go", async () => {
     const response = await raw(path, "GET");
     assert.equal(response.status, 200, `${path}: ${logs}`);
     assert.ok(userApiPaths.includes(path), `${path} did not reach Go`);
-    assert.ok(!upstreamPaths.includes(path), `${path} reached the legacy API`);
+    assert.ok(!upstreamPaths.includes(path), `${path} reached the Go API`);
   }
 });
 
@@ -883,4 +972,220 @@ test("uploaded contact images are served by Go", async () => {
   assert.equal(response.status, 200, logs);
   assert.ok(userApiPaths.includes("/contact/qr-wechat-1234abcd.png"));
   assert.ok(!upstreamPaths.includes("/contact/qr-wechat-1234abcd.png"));
+});
+
+const recoveryKey = "aihot-render-recovery-release";
+const recoveryOrigin = "https://news.example.com";
+const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+
+/** browserRecoveryFixture supplies deterministic browser state for the obsolete-document reload guard. */
+function browserRecoveryFixture(path = "/topics/openai?page=2#latest", stored = new Map<string, string>()) {
+  const location = { href: `${recoveryOrigin}${path}`, reload: mock.fn() };
+  const sessionStorage = {
+    getItem: mock.fn((key: string) => stored.get(key) ?? null),
+    setItem: mock.fn((key: string, value: string) => { stored.set(key, value); }),
+  };
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { location, sessionStorage } });
+  const fetch = mock.method(globalThis, "fetch", async () => Response.json({ ok: true, release: "release-B" }));
+  const log = mock.method(console, "error", () => {});
+  return { location, sessionStorage, stored, fetch, log };
+}
+
+/** recoveryErrorInfo represents a component error reported by React hydration. */
+function recoveryErrorInfo() {
+  return { componentStack: "at TopicRoute" };
+}
+
+afterEach(() => {
+  mock.restoreAll();
+  shareImageTitle = "OG fixture";
+  shareImageWithdrawn = false;
+  if (originalWindow) {
+    Object.defineProperty(globalThis, "window", originalWindow);
+  } else {
+    Reflect.deleteProperty(globalThis, "window");
+  }
+});
+
+test("an obsolete public document reloads its exact URL once after health confirms a newer release", async () => {
+  const browser = browserRecoveryFixture();
+  const error = new TypeError("document metadata changed");
+  const onError = createRenderErrorHandler("release-A");
+
+  await onError(error, recoveryErrorInfo());
+
+  assert.equal(browser.fetch.mock.calls.length, 1);
+  assert.equal(browser.fetch.mock.calls[0]!.arguments[0], "/api/health");
+  assert.equal(browser.fetch.mock.calls[0]!.arguments[1]?.cache, "no-store");
+  assert.equal(browser.location.reload.mock.calls.length, 1);
+  assert.equal(browser.location.href, `${recoveryOrigin}/topics/openai?page=2#latest`);
+  assert.equal(browser.stored.get(recoveryKey), "release-A");
+  assert.equal(browser.log.mock.calls[0]!.arguments[0], error);
+
+  await onError(error, recoveryErrorInfo());
+  await createRenderErrorHandler("release-A")(error, recoveryErrorInfo());
+  assert.equal(browser.location.reload.mock.calls.length, 1);
+});
+
+test("current, failed and unversioned health checks keep the render error visible", async () => {
+  const replies = [
+    () => Response.json({ ok: true, release: "release-A" }),
+    () => Response.json({ ok: false, release: "release-B" }),
+    () => Response.json({ ok: true }),
+    () => Response.json({ ok: true, release: "" }),
+    () => Response.json({ ok: true, release: "dev" }),
+    () => Response.json({ ok: true, release: 123 }),
+    () => Response.json({ ok: true, release: "release-B" }, { status: 503 }),
+    () => new Response("<html>challenge</html>"),
+    () => { throw new TypeError("Failed to fetch"); },
+  ];
+
+  for (const reply of replies) {
+    const browser = browserRecoveryFixture();
+    browser.fetch.mock.mockImplementation(async () => reply());
+    await createRenderErrorHandler("release-A")(new TypeError("render failed"), recoveryErrorInfo());
+    assert.equal(browser.location.reload.mock.calls.length, 0);
+    assert.equal(browser.stored.size, 0);
+    mock.restoreAll();
+  }
+});
+
+test("route responses, admin pages and development documents never probe health", async () => {
+  const browser = browserRecoveryFixture();
+  const onError = createRenderErrorHandler("release-A");
+
+  for (const status of [404, 503]) {
+    await onError({ status, statusText: "Error", internal: false, data: {} }, recoveryErrorInfo());
+  }
+  for (const path of ["/admin", "/admin/content/1"]) {
+    browser.location.href = `${recoveryOrigin}${path}`;
+    await onError(new Error("admin render failed"), recoveryErrorInfo());
+  }
+  browser.location.href = `${recoveryOrigin}/topics/openai?page=2#latest`;
+  for (const release of [null, "", "dev"]) {
+    await createRenderErrorHandler(release)(new Error("render failed"), recoveryErrorInfo());
+  }
+
+  assert.equal(browser.fetch.mock.calls.length, 0);
+  assert.equal(browser.location.reload.mock.calls.length, 0);
+});
+
+test("blocked session storage prevents automatic reload", async () => {
+  for (const method of ["getItem", "setItem"] as const) {
+    const browser = browserRecoveryFixture();
+    browser.sessionStorage[method].mock.mockImplementation(() => { throw new Error("storage disabled"); });
+    await createRenderErrorHandler("release-A")(new Error("render failed"), recoveryErrorInfo());
+    assert.equal(browser.location.reload.mock.calls.length, 0);
+    mock.restoreAll();
+  }
+
+  const browser = browserRecoveryFixture();
+  Object.defineProperty(window, "sessionStorage", { get() { throw new Error("storage disabled"); } });
+  await createRenderErrorHandler("release-A")(new Error("render failed"), recoveryErrorInfo());
+  assert.equal(browser.location.reload.mock.calls.length, 0);
+});
+
+test("navigation during the health request does not reload a different page", async () => {
+  const browser = browserRecoveryFixture();
+  let finish!: (response: Response) => void;
+  browser.fetch.mock.mockImplementation(() => new Promise<Response>((resolve) => { finish = resolve; }));
+  const pending = createRenderErrorHandler("release-A")(new TypeError("metadata changed"), recoveryErrorInfo());
+
+  browser.location.href = `${recoveryOrigin}/all`;
+  finish(Response.json({ ok: true, release: "release-B" }));
+  await pending;
+
+  assert.equal(browser.location.reload.mock.calls.length, 0);
+  assert.equal(browser.stored.size, 0);
+});
+
+test("SSR errors omit query secrets, keep stacks, and stay quiet for expected refusals and cancellations", (t) => {
+  const lines: string[] = [];
+  t.mock.method(console, "error", (line: string) => lines.push(line));
+  const request = new Request("https://example.test/missing?token=query-only-secret-9386&aihot_actor=query-only-secret-9386");
+
+  handleError({ status: 404, statusText: "Not Found", internal: true, data: "missing", error: new Error("No route matches") }, { request });
+  handleError({ status: 405, statusText: "Method Not Allowed", internal: true, data: "method" }, { request });
+  const controller = new AbortController();
+  controller.abort();
+  handleError(new Error("cancelled"), { request: new Request(request, { signal: controller.signal }) });
+  assert.deepEqual(lines, []);
+
+  const error = new TypeError("render exploded");
+  handleError(error, { request });
+  const record = JSON.parse(lines[0]!);
+  assert.equal(record.path, "/missing");
+  assert.equal(record.method, "GET");
+  assert.equal(record.err.stack, error.stack);
+  assert.equal(record.err.name, "TypeError");
+  assert.ok(!lines.join("\n").includes("query-only-secret-9386"));
+
+  handleError({ status: 503, statusText: "Unavailable", internal: true, data: "failed", error }, { request });
+  assert.equal(lines.length, 2);
+  assert.equal(JSON.parse(lines[1]!).err.stack, error.stack);
+});
+
+test("SSR timeout logs the upstream path before mapping to a private 503", async (t) => {
+  const lines: string[] = [];
+  t.mock.method(console, "error", (line: string) => lines.push(line));
+  const error = new DOMException("The operation was aborted due to timeout", "TimeoutError");
+  t.mock.method(globalThis, "fetch", async () => { throw error; });
+
+  await assert.rejects(loadOr404("/api/site/timeline?q=query-only-secret-9386&aihot_actor=query-only-secret-9386"), (thrown) => {
+    assert.deepEqual(thrown, data({ message: "unavailable" }, { status: 503 }));
+    return true;
+  });
+  assert.equal(lines.length, 1);
+  const record = JSON.parse(lines[0]!);
+  assert.equal(record.path, "/api/site/timeline");
+  assert.equal(record.method, "GET");
+  assert.equal(record.err.name, "TimeoutError");
+  assert.equal(record.err.stack, error.stack);
+  assert.ok(!lines[0]!.includes("query-only-secret-9386"));
+});
+
+test("ordinary SSR misses and caller cancellations do not produce error logs", async (t) => {
+  const lines: string[] = [];
+  t.mock.method(console, "error", (line: string) => lines.push(line));
+  const fetched = t.mock.method(globalThis, "fetch", async () => new Response("{}", { status: 404 }));
+
+  await assert.rejects(loadOr404("/api/site/items/missing"), (error) => {
+    assert.deepEqual(error, data({ message: "not_found" }, { status: 404 }));
+    return true;
+  });
+  const controller = new AbortController();
+  controller.abort();
+  fetched.mock.mockImplementation(async () => { throw controller.signal.reason; });
+  await assert.rejects(apiGet("/api/site/timeline", { signal: controller.signal }));
+  assert.deepEqual(lines, []);
+});
+
+test("topic structured data names the collection and only links visible public story pages", () => {
+  const input = {
+    path: "/topics/tutorials",
+    name: "教程实践 最新动态",
+    description: "值得阅读的教程与实践。",
+    dateModified: "2026-10-02T08:00:00.000Z",
+    lists: [] as Array<{ name: string; entries: Array<{ title: string; href: string | null }> }>,
+  };
+
+  const empty = topicLd(input);
+  assert.equal(empty["@type"], "CollectionPage");
+  assert.equal(empty.url, `${siteUrl()}/topics/tutorials`);
+  assert.equal(empty.dateModified, input.dateModified);
+  assert.equal("mainEntity" in empty, false);
+  assert.equal("mainEntity" in topicLd({ ...input, lists: [{ name: "大事记", entries: [] }] }), false);
+
+  const withList = topicLd({ ...input, lists: [{ name: "大事记", entries: [
+    { title: "正式发布", href: "/story/model-release" },
+    { title: "历史节点", href: null },
+    { title: "普通文章", href: "/items/private-id" },
+  ] }] });
+  const list = withList.mainEntity as { numberOfItems: number; itemListElement: Array<Record<string, unknown>> };
+  assert.equal(list.numberOfItems, 3);
+  assert.deepEqual(list.itemListElement, [
+    { "@type": "ListItem", position: 1, name: "正式发布", url: `${siteUrl()}/story/model-release` },
+    { "@type": "ListItem", position: 2, name: "历史节点" },
+    { "@type": "ListItem", position: 3, name: "普通文章" },
+  ]);
 });

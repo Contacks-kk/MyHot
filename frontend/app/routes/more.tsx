@@ -109,7 +109,7 @@ function DeleteAccount({ csrfToken }: { csrfToken: string }) {
   }
 
   return (
-    <form onSubmit={remove} className="mt-3">
+    <form method="post" onSubmit={remove} className="mt-3">
       <label className={labelClass} htmlFor="confirmPassword">
         {dict.action.enterPasswordConfirm}
       </label>

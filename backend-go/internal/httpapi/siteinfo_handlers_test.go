@@ -8,9 +8,52 @@ import (
 	"testing"
 	"time"
 
+	"aihot/backend-go/internal/adminauth"
+	"aihot/backend-go/internal/config"
+	"aihot/backend-go/internal/interests"
 	"aihot/backend-go/internal/publiccontent"
 	"aihot/backend-go/internal/siteinfo"
 )
+
+/** TestCatalogRoutesProtectDisplayData verifies the two session boundaries. */
+func TestCatalogRoutesProtectDisplayData(t *testing.T) {
+	adminConfig := config.Config{
+		SessionSecret: "admin-session-secret",
+		AdminPassword: "correct-admin-password",
+		SiteURL:       "http://localhost",
+	}
+	adminService := adminauth.NewService(&memoryAdminRepository{}, adminConfig, nil)
+	token, _, err := adminService.PasswordLogin(t.Context(), adminConfig.AdminPassword, "/admin", "agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{
+		AdminAuth: adminService,
+		Catalog: interests.NewCatalogService(
+			[]string{"research"},
+			map[string]string{"research": "Research"},
+			nil,
+			interests.PublicationSettings{Subject: "Technology"},
+			nil,
+			nil,
+		),
+	}
+	handler := server.Handler()
+	for _, path := range []string{"/api/me/catalog", "/api/admin/catalog"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusUnauthorized || response.Header().Get("Cache-Control") != "private, no-store" {
+			t.Fatalf("anonymous %s: status=%d headers=%v", path, response.Code, response.Header())
+		}
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/catalog", nil)
+	request.AddCookie(&http.Cookie{Name: adminauth.SessionCookie, Value: token})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "private, no-store" || response.Body.String() != "{\"subject\":\"Technology\",\"categories\":[{\"key\":\"research\",\"label\":\"Research\",\"publicKey\":\"research\",\"feedLabel\":\"Research\"}],\"topicGroups\":[],\"topics\":[]}\n" {
+		t.Fatalf("admin catalog: status=%d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
+	}
+}
 
 func TestSiteMetadataKeepsCacheAndConditionalRequestContract(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "changelog.json")

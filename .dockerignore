@@ -8,4 +8,6 @@ frontend/.react-router
 !.env.example
 .git
 .github
+legacy/
+shared/
 *.log

@@ -101,6 +101,38 @@ func TestClientCallsInjectedModelAndPersistsOnlyRedactedRequestSummary(t *testin
 	}
 }
 
+/** TestClientEvaluationTokenFloorMatchesLegacy verifies the 512-token minimum and reasoning allowance. */
+func TestClientEvaluationTokenFloorMatchesLegacy(t *testing.T) {
+	repository := &fakeReceiptRepository{}
+	model := Model{
+		Key:             "preset",
+		Service:         "vendor",
+		Name:            "model-name",
+		BaseURL:         "https://model.example/",
+		APIKey:          []byte("test-key"),
+		ReasoningTokens: 100,
+	}
+	var actualTokens int
+	client := NewClient(true, fakeResolver{model: model}, receipts.NewService(repository), func(_ context.Context, cfg provider.Config, _ string) (provider.Completion, error) {
+		actualTokens = cfg.MaxTokens
+		return provider.Completion{
+			Response: json.RawMessage(`{"choices":[{"message":{"content":"{}"},"finish_reason":"stop"}]}`),
+		}, nil
+	})
+	_, err := client.Call(context.Background(), Request{
+		Capability: "groupReview",
+		Purpose:    "eval_relation_pair",
+		MaxTokens:  400,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := repository.request.Identity.(map[string]any)
+	if actualTokens != 612 || identity["maxTokens"] != 612 {
+		t.Fatalf("effective token limit = %d, receipt identity = %#v", actualTokens, identity)
+	}
+}
+
 func TestClientRejectsUnusableReceivedResponseWithoutRepeatingCall(t *testing.T) {
 	repository := &fakeReceiptRepository{}
 	client := NewClient(true, fakeResolver{model: Model{Key: "preset", Service: "vendor", Name: "m", BaseURL: "https://model.example", APIKey: []byte("key"), JSONMode: true}},

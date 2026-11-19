@@ -21,10 +21,104 @@ type scriptedXProvider struct {
 	calls  []xSearchCall
 }
 
+type jinaReceiptRepositoryFixture struct {
+	request     receipts.Request
+	outcome     receipts.Outcome
+	failure     string
+	failureText string
+	completed   int64
+}
+
+/** Claim captures the paid Jina identity and reserves its test receipt. */
+func (r *jinaReceiptRepositoryFixture) Claim(_ context.Context, request receipts.Request, _ string) (receipts.Claim, error) {
+	r.request = request
+	return receipts.Claim{ReceiptID: 44, AttemptID: 45}, nil
+}
+
+/** RecordFailure accepts the provider's classified test failure. */
+func (r *jinaReceiptRepositoryFixture) RecordFailure(_ context.Context, _ receipts.Claim, status, message string, _ time.Duration) error {
+	r.failure, r.failureText = status, message
+	return nil
+}
+
+/** RecordReceived captures the response that Jina stores before source writes. */
+func (r *jinaReceiptRepositoryFixture) RecordReceived(_ context.Context, _ receipts.Claim, outcome receipts.Outcome, _ time.Duration) error {
+	r.outcome = outcome
+	return nil
+}
+
+/** Complete records the paid receipt completion request. */
+func (r *jinaReceiptRepositoryFixture) Complete(_ context.Context, receiptID int64) error {
+	r.completed = receiptID
+	return nil
+}
+
+/** Reject accepts a response rejection request for the test repository. */
+func (*jinaReceiptRepositoryFixture) Reject(context.Context, int64, string) error {
+	return nil
+}
+
 func (p *scriptedXProvider) Search(_ context.Context, query, searchType, cursor, subject, window string) (XPage, error) {
 	call := xSearchCall{query: query, searchType: searchType, cursor: cursor, subject: subject, window: window}
 	p.calls = append(p.calls, call)
 	return p.search(call)
+}
+
+/** TestJinaListingUsesPaidReceiptAndReturnsRenderedContent verifies provider transport and metering. */
+func TestJinaListingUsesPaidReceiptAndReturnsRenderedContent(t *testing.T) {
+	repository := &jinaReceiptRepositoryFixture{}
+	client := fakeDoer(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet || request.URL.Path != "/https://example.org/news/" || request.URL.Query().Get("page") != "2" {
+			t.Fatalf("Jina request URL = %s", request.URL.String())
+		}
+		if request.Header.Get("Authorization") != "Bearer jina-test-key" || request.Header.Get("X-Return-Format") != "html" || request.Header.Get("Accept") != "text/plain" || request.Header.Get("X-Cache-Tolerance") != "45" {
+			t.Fatalf("Jina request headers = %#v", request.Header)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				"X-Request-Id":   []string{"jina-list-1"},
+				"X-Usage-Tokens": []string{"100"},
+			},
+			Body: io.NopCloser(strings.NewReader("Title: News\nURL Source: https://example.org/news/\n\nMarkdown Content:\n<article>rendered</article>")),
+		}, nil
+	})
+	reader := NewJina("jina-test-key", "https://jina.example", client, receipts.NewService(repository))
+	tolerance := 45
+	page, err := reader.Read(context.Background(), "https://example.org/news/?page=2", "news-source", "source_listing", "html", &tolerance)
+	if err != nil || page.ReceiptID != 44 || page.Content != "<article>rendered</article>" || !strings.Contains(page.Raw, "URL Source:") {
+		t.Fatalf("Jina page = %#v, err=%v", page, err)
+	}
+	if repository.request.Service != "jina" || repository.request.Purpose != "source_listing" || repository.request.Subject != "source:news-source" {
+		t.Fatalf("Jina receipt identity = %#v", repository.request)
+	}
+	identity, ok := repository.request.Identity.(map[string]string)
+	if !ok || identity["url"] != "https://example.org/news/?page=2" || identity["format"] != "html" || identity["day"] == "" {
+		t.Fatalf("Jina receipt key = %#v", repository.request.Identity)
+	}
+	var saved map[string]any
+	if err := json.Unmarshal(repository.outcome.Response, &saved); err != nil || saved["status"] != float64(http.StatusOK) || repository.outcome.RequestID != "jina-list-1" || repository.outcome.Cost == nil || *repository.outcome.Cost != 0.000036 {
+		t.Fatalf("Jina receipt outcome = %#v, err=%v", repository.outcome, err)
+	}
+	if err := reader.Complete(context.Background(), page.ReceiptID); err != nil || repository.completed != 44 {
+		t.Fatalf("Jina receipt completion = %d, %v", repository.completed, err)
+	}
+}
+
+/** TestJinaTransportFailureLeavesAnUnknownReceipt verifies uncertain paid reads are not classified as free failures. */
+func TestJinaTransportFailureLeavesAnUnknownReceipt(t *testing.T) {
+	repository := &jinaReceiptRepositoryFixture{}
+	reader := NewJina("jina-test-key", "https://jina.example", fakeDoer(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("network reset after send")
+	}), receipts.NewService(repository))
+	_, err := reader.Read(context.Background(), "https://example.org/news/", "news-source", "source_listing", "markdown", nil)
+	var unknown *receipts.OutcomeUnknownError
+	if !errors.As(err, &unknown) || unknown.ReceiptID != 44 || repository.failure != "unknown" {
+		t.Fatalf("Jina transport error = %v, receipt status=%q", err, repository.failure)
+	}
+	if strings.Contains(repository.failureText, "network reset") {
+		t.Fatalf("unsafe transport detail was persisted: %q", repository.failureText)
+	}
 }
 
 func TestReadXSearchPaginatesDeduplicatesAndCarriesReceiptIDs(t *testing.T) {
@@ -155,20 +249,26 @@ func containsString(values []string, target string) bool {
 
 func TestTweetCandidatePreservesXPostMediaAndArticleBodyStatus(t *testing.T) {
 	var post tweet
-	input := `{"id_str":"123","tweet_created_at":"2026-10-01T02:03:04Z","full_text":"Breaking &amp; useful https://t.co/a https://x.com/i/article/99","lang":"en","user":{"name":"Author","screen_name":"writer","profile_image_url_https":"https://img/x_normal.png"},"entities":{"urls":[{"url":"https://t.co/a","expanded_url":"https://example.com/story"}],"media":[{"type":"photo","media_url_https":"https://img/p.jpg","original_info":{"width":640,"height":480}}]},"favorite_count":4,"retweet_count":2,"views_count":9}`
+	input := `{"id_str":"123","tweet_created_at":"2026-10-01T02:03:04Z","full_text":"Breaking &amp; useful &lt;code&gt; &amp;lt; https://t.co/a https://x.com/i/article/99","lang":"en","user":{"name":"Author","screen_name":"writer","profile_image_url_https":"https://img/x_normal.png"},"quoted_status":{"id_str":"456","full_text":"Quoted &amp; text &lt;code&gt; &amp;gt; &amp;lt;","user":{"name":"Quoted author","screen_name":"quoted"}},"entities":{"urls":[{"url":"https://t.co/a","expanded_url":"https://example.com/story"}],"media":[{"type":"photo","media_url_https":"https://img/p.jpg","original_info":{"width":640,"height":480}}]},"favorite_count":4,"retweet_count":2,"views_count":9}`
 	if err := json.Unmarshal([]byte(input), &post); err != nil {
 		t.Fatal(err)
 	}
 	candidate := tweetCandidate(post)
-	if candidate.URL != "https://x.com/writer/status/123" || candidate.Language != "en" || candidate.BodyStatus != "pending" || !strings.Contains(candidate.Body, "https://example.com/story") {
+	if candidate.URL != "https://x.com/writer/status/123" || candidate.Language != "en" || candidate.BodyStatus != "pending" ||
+		candidate.Title != "Breaking & useful <code> &lt; https://example.com/story https://x.com/i/article/99" ||
+		candidate.Body != "Breaking & useful <code> &lt; https://example.com/story https://x.com/i/article/99\n\n【引用 @quoted】Quoted & text <code> &gt; &lt;" {
 		t.Fatalf("candidate = %#v", candidate)
 	}
 	var xPost map[string]any
 	if err := json.Unmarshal(candidate.XPost, &xPost); err != nil {
 		t.Fatal(err)
 	}
-	if xPost["avatarUrl"] != "https://img/x_bigger.png" || xPost["lang"] != "en" {
+	if xPost["avatarUrl"] != "https://img/x_bigger.png" || xPost["lang"] != "en" || xPost["text"] != "Breaking & useful <code> &lt; https://example.com/story https://x.com/i/article/99" {
 		t.Fatalf("X post metadata = %#v", xPost)
+	}
+	quoted := xPost["quoted"].(map[string]any)
+	if quoted["text"] != "Quoted & text <code> &gt; &lt;" {
+		t.Fatalf("quoted text was not decoded exactly once: %#v", quoted)
 	}
 	media := xPost["media"].([]any)[0].(map[string]any)
 	if media["kind"] != "image" || media["poster"] != nil || media["width"] != float64(640) {

@@ -43,6 +43,33 @@ func TestProxyURLMatchesSignedImageProxyContract(t *testing.T) {
 	if !strings.Contains(*got, "a%20b.jpg%3Fx%3Dhello%26tag%3D!~'()*") {
 		t.Fatalf("u is not encodeURIComponent-compatible: %q", *got)
 	}
+
+	modes := []string{"image-336", "image-720"}
+	widths := []int{336, 720}
+	set, err := ProxyURLSet(&raw, modes, widths, now, 48*time.Hour, secret)
+	if err != nil || set == nil {
+		t.Fatalf("ProxyURLSet = %v, %v", set, err)
+	}
+	repeated, err := ProxyURLSet(&raw, modes, widths, now, 48*time.Hour, secret)
+	if err != nil || repeated == nil || *repeated != *set {
+		t.Fatalf("responsive URLs changed for the same input and expiry: %v, %v", repeated, err)
+	}
+	for index, candidate := range strings.Split(*set, ", ") {
+		parts := strings.Split(candidate, " ")
+		parsedCandidate, err := url.Parse(parts[0])
+		if err != nil || len(parts) != 2 || parts[1] != strconv.Itoa(widths[index])+"w" {
+			t.Fatalf("responsive candidate %q is malformed: %v", candidate, err)
+		}
+		candidateQuery := parsedCandidate.Query()
+		if candidateQuery.Get("u") != raw || candidateQuery.Get("mode") != modes[index] || candidateQuery.Get("exp") != strconv.FormatInt(expectedExpiry, 10) {
+			t.Fatalf("responsive candidate %q changed its signed inputs", candidate)
+		}
+		mac := hmac.New(sha256.New, []byte(secret))
+		_, _ = mac.Write([]byte(raw + "|" + modes[index] + "|" + candidateQuery.Get("exp")))
+		if candidateQuery.Get("sig") != hex.EncodeToString(mac.Sum(nil))[:16] {
+			t.Fatalf("responsive candidate %q has an invalid signature", candidate)
+		}
+	}
 }
 
 func TestProxyURLSkipsInvalidAndTrackingImages(t *testing.T) {

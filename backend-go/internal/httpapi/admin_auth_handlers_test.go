@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -156,6 +158,41 @@ func TestAdminAuthUnavailableAndInvalidSessionUseProblemResponses(t *testing.T) 
 	}
 }
 
+/** TestExpiredAdminSessionIsRejectedAtAuthenticationRoutes verifies the database expiry guard. */
+func TestExpiredAdminSessionIsRejectedAtAuthenticationRoutes(t *testing.T) {
+	pool, orm := authTestPools(t)
+	ctx := context.Background()
+	cfg := config.Config{
+		SessionSecret: "expired-admin-session-integration-secret",
+		AdminPassword: "expired-admin-password-long-enough",
+		SiteURL:       "http://localhost",
+	}
+	repository := adminauth.NewRepository(orm)
+	service := adminauth.NewService(repository, cfg, nil)
+	token, _, err := service.PasswordLogin(ctx, cfg.AdminPassword, "/admin", "integration-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256([]byte(token))
+	hashText := hex.EncodeToString(hash[:])
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), "DELETE FROM admin_sessions WHERE id_hash=$1", hashText)
+	})
+	if _, err := pool.Exec(ctx, "UPDATE admin_sessions SET expires_at=now()-interval '1 second' WHERE id_hash=$1", hashText); err != nil {
+		t.Fatal(err)
+	}
+	handler := (&Server{Config: cfg, AdminAuth: service, limiter: newRateLimiter()}).Handler()
+	for _, endpoint := range []string{"/api/auth/check", "/api/admin/me"} {
+		request := httptest.NewRequest(http.MethodGet, endpoint, nil)
+		request.Header.Set("Cookie", adminauth.SessionCookie+"="+token)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("expired admin session reached %s: status=%d body=%s", endpoint, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestFeedbackRoutesRequireAdminSessionAndCSRF(t *testing.T) {
 	cfg := config.Config{SessionSecret: "admin-session-secret", AdminPassword: "correct-admin-password", SiteURL: "http://localhost:3000"}
 	adminRepo := &memoryAdminRepository{}
@@ -200,6 +237,29 @@ func TestFeedbackRoutesRequireAdminSessionAndCSRF(t *testing.T) {
 	handler.ServeHTTP(listed, request)
 	if listed.Code != http.StatusOK || feedbackRepo.listQuery != "urgent" || feedbackRepo.listPage != 2 {
 		t.Fatalf("feedback filters were not passed through: status=%d query=%q page=%d", listed.Code, feedbackRepo.listQuery, feedbackRepo.listPage)
+	}
+
+	feedbackRepo.banned = false
+	rotated := cfg
+	rotated.AdminPassword = "replacement-admin-password"
+	server.AdminAuth = adminauth.NewService(adminRepo, rotated, nil)
+	request = httptest.NewRequest(http.MethodPost, "/api/admin/feedback-bans", strings.NewReader(`{"sourceHash":"source","reason":"policy"}`))
+	request.Header.Set("Cookie", cookie)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-CSRF-Token", adminRepo.session.CSRF)
+	revokedWrite := httptest.NewRecorder()
+	handler.ServeHTTP(revokedWrite, request)
+	if revokedWrite.Code != http.StatusUnauthorized || feedbackRepo.banned {
+		t.Fatalf("revoked session reached an admin write: status=%d banned=%t", revokedWrite.Code, feedbackRepo.banned)
+	}
+	for _, endpoint := range []string{"/api/auth/check", "/api/admin/me"} {
+		probe := httptest.NewRequest(http.MethodGet, endpoint, nil)
+		probe.Header.Set("Cookie", cookie)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, probe)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("revoked session remained valid at %s: status=%d", endpoint, response.Code)
+		}
 	}
 }
 
@@ -383,5 +443,58 @@ func TestAdminReceiptReleaseKeepsSessionCSRFAndJSONContract(t *testing.T) {
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK || recoveryRepo.actor != "admin:41" || recoveryRepo.note != "reviewed" || recoveryRepo.errorText != "人工核对：供应商未计费。reviewed" || recoveryRepo.billed == nil || *recoveryRepo.billed || !strings.Contains(response.Body.String(), `"requeued":true`) {
 		t.Fatalf("receipt release contract changed: status=%d repository=%#v body=%s", response.Code, recoveryRepo, response.Body.String())
+	}
+}
+
+/** TestPasswordRotationBlocksExistingAdminReadAndWriteRoutes verifies the process-reload session boundary. */
+func TestPasswordRotationBlocksExistingAdminReadAndWriteRoutes(t *testing.T) {
+	cfg := config.Config{SessionSecret: "admin-session-secret", AdminPassword: "correct-admin-password", SiteURL: "http://localhost:3000"}
+	adminRepo := &memoryAdminRepository{}
+	adminService := adminauth.NewService(adminRepo, cfg, nil)
+	token, _, err := adminService.PasswordLogin(context.Background(), cfg.AdminPassword, "/admin", "agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryRepo := &memoryReceiptRecoveryRepository{status: "unknown", found: true, result: &receiptrecovery.Result{ID: 27, Status: "failed", Purpose: "score_article", Requeued: true}}
+	server := &Server{Config: cfg, AdminAuth: adminService, ReceiptRecovery: receiptrecovery.NewService(recoveryRepo), limiter: newRateLimiter()}
+
+	// Confirm the original cookie is accepted before the configuration reload.
+	request := httptest.NewRequest(http.MethodGet, "/api/auth/check", nil)
+	request.Header.Set("Cookie", adminauth.SessionCookie+"="+token)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("valid session check status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	// Recreate the service with the replacement password, as the Go process does on restart.
+	cfg.AdminPassword = "replacement-admin-password"
+	server.Config = cfg
+	server.AdminAuth = adminauth.NewService(adminRepo, cfg, nil)
+
+	request = httptest.NewRequest(http.MethodGet, "/api/auth/check", nil)
+	request.Header.Set("Cookie", adminauth.SessionCookie+"="+token)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("rotated password check status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/admin/me", nil)
+	request.Header.Set("Cookie", adminauth.SessionCookie+"="+token)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("rotated password admin read status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/admin/receipts/27/release", strings.NewReader(`{"billed":false,"note":"reviewed"}`))
+	request.Header.Set("Cookie", adminauth.SessionCookie+"="+token)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-CSRF-Token", adminRepo.session.CSRF)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || recoveryRepo.actor != "" || adminRepo.hash != "" {
+		t.Fatalf("rotated password write status=%d actor=%q remaining session=%q body=%s", response.Code, recoveryRepo.actor, adminRepo.hash, response.Body.String())
 	}
 }

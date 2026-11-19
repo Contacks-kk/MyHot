@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -21,6 +22,7 @@ type submissionRepoFixture struct {
 	created    Submission
 	banKeys    []string
 	forwarded  map[int64]time.Time
+	erased     []int64
 }
 
 func newSubmissionRepoFixture() *submissionRepoFixture {
@@ -30,14 +32,23 @@ func newSubmissionRepoFixture() *submissionRepoFixture {
 func (r *submissionRepoFixture) List(context.Context, string, string, int) (ListResult, error) {
 	return ListResult{}, nil
 }
-func (r *submissionRepoFixture) ScreenshotKey(context.Context, int64) (*string, error) {
-	return nil, nil
+
+/** Looks up the attachment key associated with one feedback row. */
+func (r *submissionRepoFixture) ScreenshotKey(_ context.Context, id int64) (*string, error) {
+	row, ok := r.rows[id]
+	if !ok {
+		return nil, nil
+	}
+	return row.ScreenshotKey, nil
 }
 func (r *submissionRepoFixture) Update(context.Context, int64, Patch, string) (map[string]any, bool, error) {
 	return nil, false, nil
 }
-func (r *submissionRepoFixture) Erase(context.Context, int64, string, string) (bool, error) {
-	return false, nil
+
+/** Records the feedback row whose private data was erased. */
+func (r *submissionRepoFixture) Erase(_ context.Context, id int64, _, _ string) (bool, error) {
+	r.erased = append(r.erased, id)
+	return true, nil
 }
 func (r *submissionRepoFixture) Ban(context.Context, string, string, string) error { return nil }
 func (r *submissionRepoFixture) Unban(context.Context, string, string) error       { return nil }
@@ -104,15 +115,19 @@ type forwarderFixture struct {
 	filename   string
 	uploadErr  error
 	sendErr    error
+	uploads    int
+	sends      int
 	sent       []any
 }
 
 func (f *forwarderFixture) UploadImage(_ context.Context, data []byte, filename string) (string, error) {
+	f.uploads++
 	f.imageBytes, f.filename = append([]byte(nil), data...), filename
 	return f.imageKey, f.uploadErr
 }
 
 func (f *forwarderFixture) SendFeedback(_ context.Context, chat string, id int64, content, pageURL, email, note string, imageKey, imageNote *string) error {
+	f.sends++
 	f.sent = []any{chat, id, content, pageURL, email, note, imageKey, imageNote}
 	return f.sendErr
 }
@@ -206,10 +221,47 @@ func TestSubmitStoresDecodedScreenshotAndForwardRemovesItAfterUpload(t *testing.
 	}
 }
 
+/** Erasing a feedback removes only its own copy of an identical screenshot. */
+func TestErasingOneSubmissionPreservesIdenticalScreenshotOwnedByAnother(t *testing.T) {
+	root := t.TempDir()
+	repo := newSubmissionRepoFixture()
+	service := NewService(repo, Config{DataDir: root})
+	screenshot := pngFixture(t)
+	first, err := service.Submit(context.Background(), SubmitInput{Content: "first copy", Screenshot: screenshot, HasScreenshot: true, IP: "203.0.113.21"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.Submit(context.Background(), SubmitInput{Content: "second copy", Screenshot: screenshot, HasScreenshot: true, IP: "203.0.113.22"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstKey := repo.rows[first.ID].ScreenshotKey
+	secondKey := repo.rows[second.ID].ScreenshotKey
+	if firstKey == nil || secondKey == nil || *firstKey == *secondKey {
+		t.Fatalf("identical submissions must own distinct attachment paths: first=%#v second=%#v", firstKey, secondKey)
+	}
+	firstPath := filepath.Join(root, "feedback-screenshots", (*firstKey)[len("local:"):])
+	secondPath := filepath.Join(root, "feedback-screenshots", (*secondKey)[len("local:"):])
+
+	if erased, err := service.Erase(context.Background(), first.ID, "reader requested erasure", "test"); err != nil || !erased {
+		t.Fatalf("first feedback was not erased: erased=%t err=%v", erased, err)
+	}
+	if _, err := os.Stat(firstPath); !os.IsNotExist(err) {
+		t.Fatalf("erased feedback attachment should be removed: stat err=%v", err)
+	}
+	stored, err := os.ReadFile(secondPath)
+	if err != nil || !bytes.Equal(stored, screenshot) {
+		t.Fatalf("other feedback attachment was affected: stored=%d expected=%d err=%v", len(stored), len(screenshot), err)
+	}
+	if len(repo.erased) != 1 || repo.erased[0] != first.ID {
+		t.Fatalf("erase reached the wrong feedback row: %v", repo.erased)
+	}
+}
+
 func TestForwardTransientUploadFailureLeavesScreenshotForRetry(t *testing.T) {
 	root := t.TempDir()
 	repo := newSubmissionRepoFixture()
-	forwarder := &forwarderFixture{uploadErr: errors.New("temporarily unavailable")}
+	forwarder := &forwarderFixture{imageKey: "img_fixture", uploadErr: errors.New("temporarily unavailable")}
 	service := NewService(repo, Config{DataDir: root, FeishuInternalEnabled: true, FeishuInternalChatID: "chat"}, forwarder)
 	pngData := pngFixture(t)
 	result, err := service.Submit(context.Background(), SubmitInput{Content: "retry", Screenshot: pngData, HasScreenshot: true, IP: "192.0.2.44"})
@@ -226,6 +278,98 @@ func TestForwardTransientUploadFailureLeavesScreenshotForRetry(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("screenshot was removed before a successful upload: %v", err)
+	}
+	row := repo.rows[result.ID]
+	row.CreatedAt = time.Now().UTC().Add(-10 * time.Minute)
+	repo.rows[result.ID] = row
+	forwarder.uploadErr = nil
+	sent, failed, err := service.ForwardPending(context.Background(), time.Now().UTC())
+	if err != nil || sent != 1 || failed != 0 {
+		t.Fatalf("pending sweep did not recover the transient upload: sent=%d failed=%d err=%v", sent, failed, err)
+	}
+	if repo.rows[result.ID].ScreenshotKey == nil || *repo.rows[result.ID].ScreenshotKey != "feishu:img_fixture" || forwarder.uploads != 2 || forwarder.sends != 1 {
+		key := "<nil>"
+		if repo.rows[result.ID].ScreenshotKey != nil {
+			key = *repo.rows[result.ID].ScreenshotKey
+		}
+		t.Fatalf("retry did not forward the recovered screenshot: key=%q uploads=%d sends=%d", key, forwarder.uploads, forwarder.sends)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("local image should be removed after successful retry: stat err=%v", err)
+	}
+}
+
+/** A failed Feishu message send retries with the uploaded image key and does not upload twice. */
+func TestForwardSendFailureReusesUploadedScreenshotOnRetry(t *testing.T) {
+	root := t.TempDir()
+	repo := newSubmissionRepoFixture()
+	forwarder := &forwarderFixture{imageKey: "img_fixture", sendErr: errors.New("temporarily unavailable")}
+	service := NewService(repo, Config{DataDir: root, FeishuInternalEnabled: true, FeishuInternalChatID: "chat"}, forwarder)
+	pngData := pngFixture(t)
+	result, err := service.Submit(context.Background(), SubmitInput{Content: "send retry", Screenshot: pngData, HasScreenshot: true, IP: "192.0.2.45"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := *repo.rows[result.ID].ScreenshotKey
+	path := filepath.Join(root, "feedback-screenshots", key[len("local:"):])
+	if err := service.Forward(context.Background(), result.ID); err == nil {
+		t.Fatal("transient message-send failure unexpectedly succeeded")
+	}
+	if repo.rows[result.ID].ScreenshotKey == nil || *repo.rows[result.ID].ScreenshotKey != "feishu:img_fixture" {
+		t.Fatalf("uploaded image key was not retained after send failure: %#v", repo.rows[result.ID].ScreenshotKey)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("uploaded local image should be removed after upload: stat err=%v", err)
+	}
+	forwarder.sendErr = nil
+	if err := service.Forward(context.Background(), result.ID); err != nil {
+		t.Fatal(err)
+	}
+	if forwarder.uploads != 1 || forwarder.sends != 2 || forwarder.sent[6] == nil || *(forwarder.sent[6].(*string)) != "img_fixture" {
+		t.Fatalf("retry did not reuse the uploaded image: uploads=%d sends=%d sent=%#v", forwarder.uploads, forwarder.sends, forwarder.sent)
+	}
+}
+
+/** A refused or day-old screenshot is dropped while its feedback text is still forwarded. */
+func TestForwardDropsRefusedOrExpiredScreenshotAndSendsText(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		uploadErr error
+		age       time.Duration
+	}{
+		{name: "permanent refusal", uploadErr: ErrImageRefused},
+		{name: "expired transient failure", uploadErr: errors.New("temporarily unavailable"), age: 25 * time.Hour},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			repo := newSubmissionRepoFixture()
+			forwarder := &forwarderFixture{imageKey: "img_fixture", uploadErr: test.uploadErr}
+			service := NewService(repo, Config{DataDir: root, FeishuInternalEnabled: true, FeishuInternalChatID: "chat"}, forwarder)
+			pngData := pngFixture(t)
+			result, err := service.Submit(context.Background(), SubmitInput{Content: "text survives", Screenshot: pngData, HasScreenshot: true, IP: "192.0.2.46"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			row := repo.rows[result.ID]
+			row.CreatedAt = time.Now().UTC().Add(-test.age)
+			repo.rows[result.ID] = row
+			path := filepath.Join(root, "feedback-screenshots", (*row.ScreenshotKey)[len("local:"):])
+
+			if err := service.Forward(context.Background(), result.ID); err != nil {
+				t.Fatal(err)
+			}
+			if repo.rows[result.ID].ScreenshotKey == nil || *repo.rows[result.ID].ScreenshotKey != "gone:upload" || forwarder.uploads != 1 || forwarder.sends != 1 {
+				t.Fatalf("failed screenshot was not dropped after forwarding text: row=%#v uploads=%d sends=%d", repo.rows[result.ID], forwarder.uploads, forwarder.sends)
+			}
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatalf("unusable screenshot should be removed: stat err=%v", err)
+			}
+			imageKey, imageKeyOK := forwarder.sent[6].(*string)
+			imageNote, imageNoteOK := forwarder.sent[7].(*string)
+			if forwarder.sent[2] != "text survives" || !imageKeyOK || imageKey != nil || !imageNoteOK || imageNote == nil || !strings.Contains(*imageNote, "截图未能上传") {
+				t.Fatalf("text fallback did not describe the missing screenshot: %#v", forwarder.sent)
+			}
+		})
 	}
 }
 

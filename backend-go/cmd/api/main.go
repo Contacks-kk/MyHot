@@ -11,11 +11,14 @@ import (
 
 	"aihot/backend-go/internal/admincontent"
 	"aihot/backend-go/internal/adminmodels"
+	"aihot/backend-go/internal/adminruns"
 	"aihot/backend-go/internal/config"
 	"aihot/backend-go/internal/db"
+	"aihot/backend-go/internal/feedback"
 	"aihot/backend-go/internal/httpapi"
 	"aihot/backend-go/internal/interests"
 	"aihot/backend-go/internal/jobs"
+	"aihot/backend-go/internal/operationsalerts"
 	"aihot/backend-go/internal/reports"
 	"aihot/backend-go/internal/topics"
 )
@@ -44,6 +47,14 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.CloseGORM(orm)
+	adminruns.StartHeartbeat(ctx, orm, "api")
+	workerWatchdog := operationsalerts.NewWorkerWatchdog(operationsalerts.NewRepository(orm), feedback.NewFeishuForwarder(cfg.FeishuAppID, cfg.FeishuAppSecret), operationsalerts.Config{
+		FeishuInternalEnabled: cfg.FeishuInternalEnabled,
+		AlertChatID:           cfg.FeishuAlertChatID,
+		InternalChatID:        cfg.FeishuInternalChatID,
+		EnvironmentName:       cfg.EnvironmentName,
+	})
+	go workerWatchdog.Run(ctx)
 	entities, err := interests.LoadEntities()
 	if err != nil {
 		log.Fatal(err)
@@ -111,9 +122,12 @@ func main() {
 		MaxHeaderBytes:    1 << 20}
 	go func() {
 		<-ctx.Done()
+		api.ShutdownMCP()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = server.Shutdown(shutdown)
+		if err := server.Shutdown(shutdown); err != nil {
+			_ = server.Close()
+		}
 	}()
 	log.Printf("MyHOT Go API listening on %s", cfg.Addr)
 	if err = server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

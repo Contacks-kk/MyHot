@@ -90,6 +90,38 @@ func TestExtractUsesJinaFallbackAndCompletesReceipt(t *testing.T) {
 	}
 }
 
+/** TestExtractDoesNotUseJinaAfterRedirectToVideo keeps player pages out of article extraction. */
+func TestExtractDoesNotUseJinaAfterRedirectToVideo(t *testing.T) {
+	repository := testRepository()
+	player := strings.Repeat("Video unavailable. Watch later. Sign in. Recommended videos. ", 12)
+	fetcher := &fakeFetcher{
+		finalURL: "https://www.youtube.com/watch?v=video123",
+		content:  "text/html",
+		body:     []byte("<html><body><article><p>" + player + "</p></article></body></html>"),
+	}
+	reader := &fakePaidReader{markdown: strings.Repeat("This player page must not be read as article text. ", 8)}
+	service := NewService(repository, fetcher, reader)
+
+	outcome, err := service.Extract(context.Background(), repository.candidate.ID)
+	if err != nil || outcome.State != "unconfirmed" || fetcher.calls != 1 || reader.read != 0 || !repository.saved || repository.body != nil {
+		t.Fatalf("outcome=%#v err=%v fetches=%d reader=%#v saved=%t body=%#v", outcome, err, fetcher.calls, reader, repository.saved, repository.body)
+	}
+}
+
+/** TestExtractSkipsDirectVideoBeforeNetworkOrPaidFallback keeps video URLs out of extraction. */
+func TestExtractSkipsDirectVideoBeforeNetworkOrPaidFallback(t *testing.T) {
+	repository := testRepository()
+	repository.candidate.URL = "https://www.youtube.com/watch?v=video123"
+	fetcher := &fakeFetcher{}
+	reader := &fakePaidReader{markdown: strings.Repeat("Video player controls are not an article transcript. ", 8)}
+	service := NewService(repository, fetcher, reader)
+
+	outcome, err := service.Extract(context.Background(), repository.candidate.ID)
+	if err != nil || outcome.State != "skipped" || fetcher.calls != 0 || reader.read != 0 || repository.saved {
+		t.Fatalf("outcome=%#v err=%v fetches=%d paid reads=%d saved=%t", outcome, err, fetcher.calls, reader.read, repository.saved)
+	}
+}
+
 func TestExtractRetriesTransientFailureAndStopsAfterThreeAttempts(t *testing.T) {
 	repository := testRepository()
 	fetcher := &fakeFetcher{err: errors.New("private request detail")}

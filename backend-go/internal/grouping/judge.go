@@ -116,6 +116,43 @@ func (s *JudgeService) ConfirmMerge(ctx context.Context, articleID string, query
 	return PairJudgement{Relation: parsed.Relation, Difference: parsed.Difference, Confidence: parsed.Confidence, ReceiptID: result.ReceiptID}, nil
 }
 
+/** CompareStoryRoots judges one root pair, reversing the reports for the independent review model. */
+func (s *JudgeService) CompareStoryRoots(ctx context.Context, first, second StoryRoot, review bool) (PairJudgement, error) {
+	if review {
+		return s.callStoryPair(ctx, "groupReview", "group_story_review", second, first)
+	}
+	return s.callStoryPair(ctx, "group", "group_story", first, second)
+}
+
+/** callStoryPair executes and audits one model comparison between two event roots. */
+func (s *JudgeService) callStoryPair(ctx context.Context, capability, purpose string, first, second StoryRoot) (PairJudgement, error) {
+	if err := validateJudgeService(s); err != nil {
+		return PairJudgement{}, err
+	}
+	version, err := s.prompts.Version("group-pair", "group-signal")
+	if err != nil {
+		return PairJudgement{}, err
+	}
+	system, err := s.prompts.Render("group-pair", nil)
+	if err != nil {
+		return PairJudgement{}, err
+	}
+	result, err := s.models.Call(ctx, modelcall.Request{Capability: capability, Purpose: purpose,
+		Subject: fmt.Sprintf("story:%d:%d", first.StoryID, second.StoryID), PromptVersion: version,
+		System: system, User: pairPrompt(first.Report, second.Report), Temperature: floatPointer(0), MaxTokens: 400})
+	if err != nil {
+		return PairJudgement{}, err
+	}
+	parsed, err := ParsePairResult([]byte(result.Completion.Text))
+	if err != nil {
+		return PairJudgement{}, s.rejectResult(ctx, result.ReceiptID, err)
+	}
+	if err := s.models.Complete(ctx, result.ReceiptID); err != nil {
+		return PairJudgement{}, fmt.Errorf("complete story comparison receipt %d: %w", result.ReceiptID, err)
+	}
+	return PairJudgement{Relation: parsed.Relation, Difference: parsed.Difference, Confidence: parsed.Confidence, ReceiptID: result.ReceiptID}, nil
+}
+
 /** EvaluatePair judges one labelled pair using the production prompt and evaluation receipt identity. */
 func (s *JudgeService) EvaluatePair(ctx context.Context, caseID, modelKey string, a, b Report) (EvaluationPairJudgement, error) {
 	if err := validateJudgeService(s); err != nil {

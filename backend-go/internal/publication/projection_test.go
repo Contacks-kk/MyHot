@@ -45,6 +45,35 @@ func TestDeriveProjectionPreservesPendingSelectionUntilGroupingCompletes(t *test
 	}
 }
 
+/** TestDeriveProjectionKeepsFailedAndRedundantSelectionOutUntilExplicitlySelected locks the grouping and editorial override gate. */
+func TestDeriveProjectionKeepsFailedAndRedundantSelectionOutUntilExplicitlySelected(t *testing.T) {
+	now := time.Date(2026, 10, 9, 2, 0, 0, 0, time.UTC)
+	input := fixtureProjectionInput(now)
+	input.Article.GroupingStatus = "failed"
+
+	failed := DeriveProjection(input).Projection
+	if !failed.Eligible || !failed.SelectionCandidate || failed.Selected || failed.VisibleAfter != nil {
+		t.Fatalf("failed grouping escaped the selection gate: %+v", failed)
+	}
+
+	input.Previous = &failed
+	input.Article.GroupingStatus = "complete"
+	input.Article.SelectionAddsValue = boolPointer(false)
+	input.Now = now.Add(time.Hour)
+	redundant := DeriveProjection(input).Projection
+	if !redundant.SelectionCandidate || redundant.Selected || redundant.VisibleAfter != nil {
+		t.Fatalf("redundant explanation entered selection: %+v", redundant)
+	}
+
+	input.Previous = &redundant
+	input.Override = &Override{Fields: OverrideFields{Selected: boolPointer(true)}}
+	input.Now = now.Add(2 * time.Hour)
+	manual := DeriveProjection(input).Projection
+	if !manual.Selected || manual.VisibleAfter == nil || !manual.VisibleAfter.Equal(input.Now) {
+		t.Fatalf("explicit editorial selection did not publish: %+v", manual)
+	}
+}
+
 func TestDeriveProjectionUsesOverridesAndReleaseSemantics(t *testing.T) {
 	now := time.Date(2026, 10, 9, 2, 0, 0, 0, time.UTC)
 	releasedAt := now.Add(-30 * time.Minute)

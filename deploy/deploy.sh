@@ -120,6 +120,16 @@ command = ['docker', 'compose', '-p', 'aihot', '--project-directory', release,
            '-f', overlay, '--profile', 'https', 'config', '--format', 'json']
 config = json.loads(subprocess.check_output(command))
 services = config['services']
+retired_path_settings = (
+    'INDUSTRY_ENTITIES_FILE', 'INDUSTRY_CATEGORIES_FILE', 'MODEL_CATALOG_FILE',
+    'INDUSTRY_PROMPT_DIR', 'INDUSTRY_SELECTION_FILE', 'INDUSTRY_VOCABULARY_FILE',
+    'INDUSTRY_REPORTING_FILE', 'INDUSTRY_TOPICS_FILE', 'SITE_PUBLICATION_FILE',
+    'SITE_PUBLIC_DIR', 'SITE_CONTACT_DIR', 'SITE_CHANGELOG_PATH',
+)
+for setting in retired_path_settings:
+    value = str(services['go-api']['environment'].get(setting, '')).replace('\\', '/')
+    if 'shared/' in value:
+        raise SystemExit('Remove the retired shared/ path from server .env setting ' + setting)
 running = json.loads(subprocess.check_output(['docker', 'inspect', 'aihot-go-api-1']))[0]
 environment = dict(item.split('=', 1) for item in running['Config']['Env'] if '=' in item)
 expected = environment.get('DATABASE_URL', '')
@@ -212,8 +222,7 @@ for required in .dockerignore package.json package-lock.json deploy/compose.yaml
   frontend/brand/Logo.tsx frontend/brand/logo.svg \
   backend-go/config/model-catalog.json backend-go/config/publication.json backend-go/config/changelog.json backend-go/config/public/openapi-v1.json \
   backend-go/config/topics.json backend-go/config/selection.json backend-go/config/reporting.json backend-go/config/entities.json backend-go/config/vocabulary.json backend-go/config/categories.json \
-  frontend/packages/site/package.json shared/industry/package.json frontend/packages/contracts/package.json \
-  tooling/package.json legacy/ts-compat/api/package.json legacy/ts-compat/backend/package.json; do
+  frontend/packages/site/package.json frontend/packages/contracts/package.json tooling/package.json; do
   [[ -f "$RELEASE/$required" ]] || { printf 'Missing build file: %s\n' "$required" >&2; exit 1; }
 done
 ln -s "$ENV_FILE" "$RELEASE/.env"

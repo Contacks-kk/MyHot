@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestLoadPublicationSettingsReadsSharedSiteConfig(t *testing.T) {
+func TestLoadPublicationSettingsReadsConfiguredPublication(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "publication.json")
 	if err := os.WriteFile(path, []byte(`{"subject":"Law","allFeedLeavesOut":["drafts"],"communityFeeds":{"dev":["dev-community"],"hn":["hn-community"]},"publicCategories":{"merge":{"security":"research"},"feedLabels":{"research":"Research"}}}`), 0o600); err != nil {
 		t.Fatal(err)

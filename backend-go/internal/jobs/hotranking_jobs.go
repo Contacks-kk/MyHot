@@ -5,14 +5,13 @@ import (
 	"time"
 
 	"aihot/backend-go/internal/hotranking"
+	"aihot/backend-go/internal/jobargs"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"gorm.io/gorm"
 )
 
-type HotRankingArgs struct{}
-
-func (HotRankingArgs) Kind() string { return "myhot_hot_ranking" }
+type HotRankingArgs = jobargs.HotRankingArgs
 
 type HotRankingWorker struct {
 	river.WorkerDefaults[HotRankingArgs]

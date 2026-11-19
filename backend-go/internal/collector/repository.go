@@ -62,6 +62,64 @@ func (r *Repository) DueSourceIDs(ctx context.Context) ([]string, error) {
 	return ids, err
 }
 
+/** ExistingIdentityKeys finds stored materials without exceeding PostgreSQL's parameter limit. */
+func (r *Repository) ExistingIdentityKeys(ctx context.Context, identities []string) (map[string]bool, error) {
+	existing := make(map[string]bool)
+	for start := 0; start < len(identities); start += 500 {
+		end := min(start+500, len(identities))
+		var found []string
+		if err := r.orm.WithContext(ctx).Model(&model.Article{}).Where("identity_key IN ?", identities[start:end]).Pluck("identity_key", &found).Error; err != nil {
+			return nil, err
+		}
+		for _, identity := range found {
+			existing[identity] = true
+		}
+	}
+	return existing, nil
+}
+
+type storedDetail struct {
+	Title       string     `gorm:"column:title"`
+	PublishedAt *time.Time `gorm:"column:published_at"`
+	Excerpt     *string    `gorm:"column:excerpt"`
+	BodyText    *string    `gorm:"column:body_text"`
+	Rules       *string    `gorm:"column:detail_rules"`
+}
+
+/** StoredDetails loads previously enriched article fields and their detail-rule version. */
+func (r *Repository) StoredDetails(ctx context.Context, identities []string) (map[string]storedDetail, error) {
+	out := make(map[string]storedDetail, len(identities))
+	for start := 0; start < len(identities); start += 500 {
+		end := min(start+500, len(identities))
+		var rows []struct {
+			IdentityKey string     `gorm:"column:identity_key"`
+			Title       string     `gorm:"column:title"`
+			PublishedAt *time.Time `gorm:"column:published_at"`
+			Excerpt     *string    `gorm:"column:excerpt"`
+			BodyText    *string    `gorm:"column:body_text"`
+			Rules       *string    `gorm:"column:detail_rules"`
+		}
+		if err := r.orm.WithContext(ctx).Raw(`SELECT identity_key,title,published_at,excerpt,body_text,raw->'collectionDetail'->>'rules' AS detail_rules
+			FROM articles WHERE identity_key IN ?`, identities[start:end]).Scan(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			out[row.IdentityKey] = storedDetail{Title: row.Title, PublishedAt: row.PublishedAt, Excerpt: row.Excerpt, BodyText: row.BodyText, Rules: row.Rules}
+		}
+	}
+	return out, nil
+}
+
+/** RecordDetailRules marks a successful detail-page read while preserving other raw article data. */
+func (r *Repository) RecordDetailRules(ctx context.Context, articleID, sourceID, rules string) error {
+	return r.orm.WithContext(ctx).Model(&model.Article{}).Where("id=? AND source_id=?", articleID, sourceID).Update("raw", gorm.Expr(`jsonb_set(
+		CASE WHEN jsonb_typeof(raw)='object' THEN raw ELSE '{}'::jsonb END,
+		'{collectionDetail}',
+		(CASE WHEN jsonb_typeof(raw->'collectionDetail')='object' THEN raw->'collectionDetail' ELSE '{}'::jsonb END)||jsonb_build_object('rules',?::text),
+		true
+	)`, rules)).Error
+}
+
 /** BeginSourceRun claims a source and records the start or reuse of a fetch. */
 func (r *Repository) BeginSourceRun(ctx context.Context, id string, force bool) (*sourceRun, bool, error) {
 	conn, err := r.pool.Acquire(ctx)
@@ -217,12 +275,12 @@ func (r *Repository) FinishFailure(ctx context.Context, run *sourceRun, found, c
 }
 
 /** FinishSuccess records a validated upstream response and advances the current schedule. */
-func (r *Repository) FinishSuccess(ctx context.Context, run *sourceRun, found, created int, cursorUpdates map[string]string, notModified bool, userID int64) error {
-	cursor := gorm.Expr("COALESCE(cursor,'{}'::jsonb)||jsonb_build_object('goCollectedAt',now())")
+func (r *Repository) FinishSuccess(ctx context.Context, run *sourceRun, found, created int, cursorUpdates map[string]string, notModified bool, userID int64, detail json.RawMessage, receiptIDs []int64) error {
+	cursor := gorm.Expr("COALESCE(cursor,'{}'::jsonb)||jsonb_build_object('goCollectedAt',now(),'initializedAt',coalesce(nullif(cursor->>'initializedAt',''),now()::text))")
 	if notModified {
-		cursor = gorm.Expr("COALESCE(cursor,'{}'::jsonb)||jsonb_build_object('rssETag',coalesce(?,cursor->>'rssETag'),'rssLastModified',coalesce(?,cursor->>'rssLastModified'))", nullable(cursorUpdates["rssETag"]), nullable(cursorUpdates["rssLastModified"]))
+		cursor = gorm.Expr("COALESCE(cursor,'{}'::jsonb)||jsonb_build_object('goCollectedAt',now(),'initializedAt',coalesce(nullif(cursor->>'initializedAt',''),now()::text),'rssETag',coalesce(?,cursor->>'rssETag'),'rssLastModified',coalesce(?,cursor->>'rssLastModified'),'rssURL',?::text,'rssResponseURL',?::text,'rssConfigHash',?::text,'detailRules',NULLIF(?,''),'detailPending',NULLIF(?,''))", nullable(cursorUpdates["rssETag"]), nullable(cursorUpdates["rssLastModified"]), cursorUpdates["rssURL"], cursorUpdates["rssResponseURL"], cursorUpdates["rssConfigHash"], cursorUpdates["detailRules"], cursorUpdates["detailPending"])
 	} else if len(cursorUpdates) > 0 {
-		cursor = gorm.Expr("COALESCE(cursor,'{}'::jsonb)||jsonb_build_object('goCollectedAt',now(),'rssETag',NULLIF(?,''),'rssLastModified',NULLIF(?,''),'rssURL',?::text,'rssTitle',?::text)", cursorUpdates["rssETag"], cursorUpdates["rssLastModified"], cursorUpdates["rssURL"], cursorUpdates["rssTitle"])
+		cursor = gorm.Expr("COALESCE(cursor,'{}'::jsonb)||jsonb_build_object('goCollectedAt',now(),'initializedAt',coalesce(nullif(cursor->>'initializedAt',''),now()::text),'rssETag',NULLIF(?,''),'rssLastModified',NULLIF(?,''),'rssURL',?::text,'rssResponseURL',?::text,'rssConfigHash',?::text,'rssTitle',?::text,'detailRules',NULLIF(?,''),'detailPending',NULLIF(?,''))", cursorUpdates["rssETag"], cursorUpdates["rssLastModified"], cursorUpdates["rssURL"], cursorUpdates["rssResponseURL"], cursorUpdates["rssConfigHash"], cursorUpdates["rssTitle"], cursorUpdates["detailRules"], cursorUpdates["detailPending"])
 	}
 	updates := map[string]any{
 		"fail_count":    0,
@@ -234,13 +292,20 @@ func (r *Repository) FinishSuccess(ctx context.Context, run *sourceRun, found, c
 		"updated_at":    gorm.Expr("now()"),
 		"next_fetch_at": gorm.Expr("CASE WHEN " + sourceIsActive + " THEN now() + interval_minutes * interval '1 minute' END"),
 	}
-	return r.finishRun(ctx, run, updates, map[string]any{
+	runUpdates := map[string]any{
 		"status":      "ok",
 		"finished_at": gorm.Expr("now()"),
 		"found_count": found,
 		"new_count":   created,
-	}, func(tx *gorm.DB) error {
-		return sourcenaming.RecordCollection(tx, run.Source.ID, userID)
+	}
+	if len(detail) > 0 {
+		runUpdates["detail"] = gorm.Expr("?::jsonb", string(detail))
+	}
+	return r.finishRun(ctx, run, updates, runUpdates, func(tx *gorm.DB) error {
+		if err := sourcenaming.RecordCollection(tx, run.Source.ID, userID); err != nil {
+			return err
+		}
+		return completeReceipts(tx, receiptIDs)
 	})
 }
 

@@ -16,7 +16,7 @@ func TestSiteVisionPresetRemainsAvailableToUnderstand(t *testing.T) {
 		t.Fatal("runtime.Caller failed")
 	}
 	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", ".."))
-	t.Setenv("MODEL_CATALOG_FILE", filepath.Join(repositoryRoot, "shared", "site", "model-catalog.json"))
+	t.Setenv("MODEL_CATALOG_FILE", filepath.Join(repositoryRoot, "backend-go", "config", "model-catalog.json"))
 
 	loaded, err := adminmodels.LoadCatalog()
 	if err != nil {

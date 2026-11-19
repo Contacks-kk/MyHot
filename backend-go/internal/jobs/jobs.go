@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"log/slog"
 	"strings"
 	"time"
 	_ "time/tzdata"
 
+	"aihot/backend-go/internal/admincontent"
 	"aihot/backend-go/internal/admindeliveries"
 	"aihot/backend-go/internal/adminmodels"
 	"aihot/backend-go/internal/adminselectbench"
@@ -25,6 +28,7 @@ import (
 	"aihot/backend-go/internal/hotranking"
 	"aihot/backend-go/internal/indexnow"
 	"aihot/backend-go/internal/interests"
+	"aihot/backend-go/internal/jobargs"
 	"aihot/backend-go/internal/materials"
 	"aihot/backend-go/internal/media"
 	"aihot/backend-go/internal/modelcall"
@@ -123,11 +127,7 @@ type SharedBodyScanArgs struct{}
 
 func (SharedBodyScanArgs) Kind() string { return "myhot_shared_body_scan" }
 
-type SharedBodyArgs struct {
-	ArticleID string `json:"articleId" river:"unique"`
-}
-
-func (SharedBodyArgs) Kind() string { return "myhot_shared_body_extract" }
+type SharedBodyArgs = jobargs.SharedBodyArgs
 
 type SelectedNotifyArgs struct {
 	ArticleID string `json:"articleId" river:"unique"`
@@ -503,8 +503,9 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 	), receiptService, nil)
 	service.SharedModels = sharedModelClient
 	var pipelineService *contentpipeline.Service
-	var pipelineEffects *publicationRiverEffects
-	var publicationRepository *publicationdomain.Repository
+	pipelineEffects := &publicationRiverEffects{storyDigest: cfg.SharedPipelineEnabled && cfg.StoryDigestEnabled}
+	publicationRepository := publicationdomain.NewRepository(pool, entities, publication, cfg.SiteName, cfg.SiteURL)
+	publicationRepository.SetEffects(pipelineEffects)
 	var sourceRepublishService *publicationdomain.Service
 	if cfg.SharedPipelineEnabled {
 		prompts, err := editorial.LoadPrompts(cfg.SiteName)
@@ -531,9 +532,6 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 		if err != nil {
 			return nil, err
 		}
-		publicationRepository = publicationdomain.NewRepository(pool, entities, publication, cfg.SiteName, cfg.SiteURL)
-		pipelineEffects = &publicationRiverEffects{storyDigest: cfg.StoryDigestEnabled}
-		publicationRepository.SetEffects(pipelineEffects)
 		publisher := publicationdomain.NewService(publicationRepository)
 		sourceRepublishService = publicationdomain.NewService(publicationRepository)
 		groupRepository := grouping.NewRepository(orm)
@@ -541,6 +539,13 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 		recall := grouping.NewRecallService(groupRepository, embeddings, nil)
 		judge := grouping.NewJudgeService(sharedModelClient, prompts)
 		groupingService := grouping.NewService(groupRepository, recall, judge, embeddings, publisher, grouping.WorkflowConfig{Entities: entities})
+		transactionClient, err := NewTransactionClient(pool)
+		if err != nil {
+			return nil, err
+		}
+		groupingService.SetStoryMerger(admincontent.NewCommandsRepository(pool, publicationRepository, transactionClient,
+			cfg.StoryDigestEnabled, admincontent.ReportCorrectionConfig{}))
+		groupingService.SetSignalTaskEnqueuer(signalGroupEnqueuer{client: transactionClient})
 		analysisService := editorial.NewProcessingService(editorial.NewRepository(orm), analysis, entities)
 		pipelineService = contentpipeline.NewService(contentpipeline.NewRepository(orm, cfg.SharedPipelineEnabled), analysisService, groupingService, publisher, nil)
 	}
@@ -602,12 +607,20 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 	dailyScanWorker := &DailyScanWorker{Service: service, Enabled: cfg.PersonalizationEnabled}
 	translationScanWorker := &TranslationScanWorker{Service: translationService, DB: orm}
 	materialService := materials.NewService(materials.NewRepository(orm))
+	materialService.SetSourceAttributor(materials.NewAttributionRepository(pool, publicationRepository))
+	egressDialer, err := media.NewEgressDialer(cfg.EgressProxyURL, cfg.DirectFetchHosts)
+	if err != nil {
+		return nil, fmt.Errorf("configure public fetch egress: %w", err)
+	}
+	publicFetchClient := collector.NewHTTPClientWithDialer(25*time.Second, egressDialer)
+	slowPublicFetchClient := collector.NewHTTPClientWithDialer(60*time.Second, egressDialer)
 	if cfg.CollectorEnabled {
 		if err := sourceschedule.Reconcile(ctx, orm, cfg.SourceSchedule); err != nil {
 			return nil, fmt.Errorf("reconcile source schedules: %w", err)
 		}
 	}
-	collectorService := collector.NewService(collector.NewRepository(orm, pool, cfg.SourceSchedule), collector.NewHTTPClient(), materialService)
+	collectorService := collector.NewService(collector.NewRepository(orm, pool, cfg.SourceSchedule), publicFetchClient, materialService)
+	collectorService.Jina = collector.NewJina(cfg.JinaAPIKey, cfg.JinaBaseURL, slowPublicFetchClient, receiptService)
 	var xArticleReader articlebody.XArticleReader
 	var xShardWorker *XShardWorker
 	if strings.TrimSpace(cfg.SocialDataKey) != "" {
@@ -620,8 +633,8 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 	if publicationRepository != nil {
 		bodyRepository = articlebody.NewTransactionalRepository(orm, pool, publicationRepository, xArticleReader != nil || cfg.SharedPipelineEnabled, cfg.SharedPipelineEnabled)
 	}
-	sharedBodyService := articlebody.NewService(bodyRepository, articlebody.NewPageFetcher(collector.NewHTTPClient()),
-		articlebody.NewJinaReader(cfg.JinaAPIKey, cfg.JinaBaseURL, collector.NewHTTPClientWithTimeout(60*time.Second), receiptService), xArticleReader)
+	sharedBodyService := articlebody.NewService(bodyRepository, articlebody.NewPageFetcher(publicFetchClient),
+		articlebody.NewJinaReader(cfg.JinaAPIKey, cfg.JinaBaseURL, slowPublicFetchClient, receiptService), xArticleReader)
 	sharedBodyScanWorker := &SharedBodyScanWorker{Service: sharedBodyService, Enabled: cfg.SharedBodyEnabled && cfg.CollectorEnabled}
 	var mpScanWorker *MPScanWorker
 	var mpCheckWorker *MPCheckWorker
@@ -658,7 +671,7 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 	})
 	sourceHealthScanWorker := &SourceHealthScanWorker{Service: sourceHealthService}
 	sourceHealthWorker := &SourceHealthWorker{Service: sourceHealthService, DB: orm}
-	sourceIconsService := sourceicons.NewService(sourceicons.NewRepository(orm), collector.NewHTTPClient(), "Mozilla/5.0 (compatible; source icon fetcher)")
+	sourceIconsService := sourceicons.NewService(sourceicons.NewRepository(orm), publicFetchClient, "Mozilla/5.0 (compatible; source icon fetcher)")
 	sourceIconsScanWorker := &SourceIconsScanWorker{Service: sourceIconsService}
 	sourceIconsWorker := &SourceIconsWorker{Service: sourceIconsService, DB: orm}
 	indexNowService := indexnow.NewService(indexnow.NewRepository(orm), indexnow.NewHTTPSubmitter(nil), indexnow.Config{
@@ -971,15 +984,15 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 	if sourceScanWorker.Naming != nil {
 		queues["source_naming"] = river.QueueConfig{MaxWorkers: 1}
 	}
-	client, err := river.NewClient(driver, &river.Config{Queues: queues, Workers: workers, JobTimeout: 75 * time.Second, RescueStuckJobsAfter: retention.StuckRunGrace, PeriodicJobs: periodicJobs})
+	client, err := river.NewClient(driver, &river.Config{Queues: queues, Workers: workers, Logger: newWorkerLogger(log.Writer()), JobTimeout: 75 * time.Second, RescueStuckJobsAfter: retention.StuckRunGrace, PeriodicJobs: periodicJobs})
 	if err != nil {
 		return nil, err
 	}
 	scanWorker.Client = client
 	triageBatchWorker.Client = client
+	pipelineEffects.client = client
 	if sharedPipelineScanWorker != nil {
 		sharedPipelineScanWorker.Client = client
-		pipelineEffects.client = client
 	}
 	if sourceRepublishScanWorker != nil {
 		sourceRepublishScanWorker.Client = client
@@ -1027,6 +1040,58 @@ func callJobError(err error) error {
 		return river.JobCancel(err)
 	}
 	return err
+}
+
+/** newWorkerLogger creates a River logger that removes unsafe error details. */
+func newWorkerLogger(output io.Writer) *slog.Logger {
+	return slog.New(slog.NewJSONHandler(output, &slog.HandlerOptions{ReplaceAttr: sanitizeWorkerLogAttribute}))
+}
+
+/** sanitizeWorkerLogAttribute preserves safe error identifiers and drops raw error text. */
+func sanitizeWorkerLogAttribute(_ []string, attribute slog.Attr) slog.Attr {
+	if attribute.Key != "err" && attribute.Key != "error" {
+		return attribute
+	}
+	if attribute.Value.Kind() != slog.KindString {
+		return attribute
+	}
+	return slog.String(attribute.Key, safeWorkerError(attribute.Value.String()))
+}
+
+/** safeWorkerError retains database or HTTP status codes without exposing error values. */
+func safeWorkerError(message string) string {
+	if index := strings.Index(message, "SQLSTATE "); index >= 0 {
+		start := index + len("SQLSTATE ")
+		if len(message) >= start+5 {
+			code := message[start : start+5]
+			if safeSQLState(code) {
+				return "database operation failed (SQLSTATE " + code + ")"
+			}
+		}
+	}
+	if index := strings.Index(message, "HTTP "); index >= 0 {
+		start := index + len("HTTP ")
+		if len(message) >= start+3 {
+			status := message[start : start+3]
+			if status[0] >= '1' && status[0] <= '5' && status[1] >= '0' && status[1] <= '9' && status[2] >= '0' && status[2] <= '9' {
+				return "upstream operation failed (HTTP " + status + ")"
+			}
+		}
+	}
+	return "worker operation failed"
+}
+
+/** safeSQLState checks that a database error code contains only its fixed-width ASCII alphabet. */
+func safeSQLState(code string) bool {
+	if len(code) != 5 {
+		return false
+	}
+	for _, char := range code {
+		if !(char >= '0' && char <= '9') && !(char >= 'A' && char <= 'Z') {
+			return false
+		}
+	}
+	return true
 }
 
 func stripFence(value string) string {

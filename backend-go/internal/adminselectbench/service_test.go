@@ -5,18 +5,27 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
+
+	"aihot/backend-go/internal/editorial"
+	"aihot/backend-go/internal/receipts"
 )
 
 type memoryRepository struct {
 	imported ImportData
 	actor    string
 	called   bool
+	imports  int
 }
 
 func (r *memoryRepository) List(context.Context) ([]RunListEntry, error)          { return nil, nil }
 func (*memoryRepository) Run(context.Context, string, Filters) (*RunCases, error) { return nil, nil }
 func (r *memoryRepository) Import(_ context.Context, data ImportData, actor string) error {
+	if data.Idempotent && r.called && r.imported.ID == data.ID {
+		return nil
+	}
 	r.imported, r.actor, r.called = data, actor, true
+	r.imports++
 	return nil
 }
 
@@ -45,6 +54,56 @@ func TestImportRejectsReportsWithoutModelSummaries(t *testing.T) {
 	_, err := NewService(repo).Import(context.Background(), "fixture", json.RawMessage(`{"models":{"empty":{"cases":[]}}}`), "admin:7")
 	if err == nil || err.Error() != "report has no model summaries" || repo.called {
 		t.Fatalf("invalid report reached repository: called=%v err=%v", repo.called, err)
+	}
+}
+
+type selectionReportUsage struct{}
+
+/** EvaluationUsage supplies deterministic receipt totals for the import contract. */
+func (selectionReportUsage) EvaluationUsage(context.Context, []int64) (receipts.EvaluationUsage, error) {
+	return receipts.EvaluationUsage{TokensIn: 10}, nil
+}
+
+/** TestImportAcceptsGoSelectionReport checks the generated report against the real import service. */
+func TestImportAcceptsGoSelectionReport(t *testing.T) {
+	rows, err := editorial.ParseSelectionGold(`{"caseId":"one","material":{"title":"Event","sourceName":"Source"},"sourceFacts":{"sourceKind":"rss"},"gold":{"decision":"select"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	score := 65
+	result := editorial.SelectionEvaluationResult{
+		Row:        rows[0],
+		Output:     &editorial.AnalysisOutput{Selected: true, Relevance: "pass", Score: &score},
+		ReceiptIDs: []int64{11},
+	}
+	model, err := editorial.BuildSelectionModelReport(context.Background(), selectionReportUsage{}, "model", []editorial.SelectionEvaluationResult{result}, 40, 42, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(map[string]any{
+		"meta": map[string]any{
+			"split":         "all",
+			"n":             1,
+			"seed":          7,
+			"promptVersion": "v1",
+		},
+		"models": map[string]editorial.SelectionModelReport{"model": model},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := &memoryRepository{}
+	service := NewService(repo)
+	id, err := service.ImportWithID(context.Background(), "sb-eval-123", "fixture", raw, "script:eval-selection")
+	if err != nil {
+		t.Fatal(err)
+	}
+	retryID, err := service.ImportWithID(context.Background(), "sb-eval-123", "fixture", raw, "script:eval-selection")
+	if err != nil || id != retryID || repo.imports != 1 {
+		t.Fatalf("retry duplicated SelectBench run: first=%q retry=%q imports=%d err=%v", id, retryID, repo.imports, err)
+	}
+	if len(repo.imported.Results) != 1 || repo.imported.Results[0].Decision == nil || *repo.imported.Results[0].Decision != "select" || repo.imported.Results[0].ReceiptID == nil || *repo.imported.Results[0].ReceiptID != 11 || repo.imported.SampleSize != 1 {
+		t.Fatalf("generated report did not retain case fields: %#v", repo.imported)
 	}
 }
 

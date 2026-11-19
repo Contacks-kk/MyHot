@@ -2,6 +2,7 @@ package grouping
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"aihot/backend-go/internal/receipts"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -35,6 +37,120 @@ func openGroupingTestDB(t *testing.T) (*gorm.DB, *GormRepository) {
 	sqlDB.SetMaxOpenConns(2)
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	return db, NewRepository(db)
+}
+
+/** TestSignalRevisitQueriesKeepOnlyUnattachedRecentDiscussionPosts verifies the legacy eligibility gates. */
+func TestSignalRevisitQueriesKeepOnlyUnattachedRecentDiscussionPosts(t *testing.T) {
+	db, repository := openGroupingTestDB(t)
+	ctx := context.Background()
+	fixture := fmt.Sprintf("grouping_signal_revisit_%d", time.Now().UnixNano())
+	sourceID := "source_" + fixture
+	now := time.Now().UTC().Truncate(time.Second)
+	ids := map[string]string{}
+	var storyID int64
+	t.Cleanup(func() {
+		for _, id := range ids {
+			_ = db.Exec("DELETE FROM articles WHERE id=?", id).Error
+		}
+		if storyID != 0 {
+			_ = db.Exec("DELETE FROM stories WHERE id=?", storyID).Error
+		}
+		_ = db.Exec("DELETE FROM sources WHERE id=?", sourceID).Error
+	})
+	if err := db.Exec(`INSERT INTO sources(id,name,kind,participation_mode)
+		VALUES (?, 'Signal revisit fixture', 'x_search', 'hot_signal')`, sourceID).Error; err != nil {
+		t.Fatal(err)
+	}
+	publicID := fmt.Sprintf("00000000-0000-4000-8000-%012x", time.Now().UnixNano()&0xffffffffffff)
+	if err := db.Raw("INSERT INTO stories(public_id,title) VALUES (?,'attached fixture') RETURNING id", publicID).Scan(&storyID).Error; err != nil {
+		t.Fatal(err)
+	}
+	insert := func(name string, discovered time.Time, backfill bool, published *time.Time, xPost string) string {
+		t.Helper()
+		id := "article_" + fixture + "_" + name
+		ids[name] = id
+		articleURL := "https://example.invalid/" + id
+		if err := db.Exec(`INSERT INTO articles(id,source_id,identity_key,url,title,discovered_at,timeline_at,
+			backfill,published_at,processing_state,x_post,body_text)
+			VALUES (?,?,?,?,?,?,?,?,?,'skipped',?::jsonb,'reaction body')`,
+			id, sourceID, "url:"+articleURL, articleURL, name, discovered, discovered, backfill, published, xPost).Error; err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	replyID := insert("reply", now.Add(-time.Hour), false, nil, `{"replyTo":"tweet-123"}`)
+	quoteID := insert("quote", now.Add(-2*time.Hour), false, nil, `{"quoted":{"url":"https://x.com/acme/status/tweet-123"}}`)
+	insert("unmatched", now.Add(-3*time.Hour), false, nil, `{"replyTo":"tweet-123"}`)
+	insert("other-recent", now.Add(-3*time.Hour), false, nil, `{}`)
+	insert("too-old", now.Add(-7*time.Hour), false, nil, `{"replyTo":"tweet-123"}`)
+	stalePublished := now.Add(-50 * time.Hour)
+	insert("stale-backfill", now.Add(-time.Hour), true, &stalePublished, `{"replyTo":"tweet-123"}`)
+	attachedID := insert("attached", now.Add(-time.Hour), false, nil, `{"replyTo":"tweet-123"}`)
+	overriddenID := insert("overridden", now.Add(-time.Hour), false, nil, `{"replyTo":"tweet-123"}`)
+	judgedID := insert("judged", now.Add(-time.Hour), false, nil, `{"replyTo":"tweet-123"}`)
+	if err := db.Exec(`INSERT INTO grouping_decisions(article_id,verdict) VALUES (?,'signal-unmatched'),(?,'signal')`, ids["unmatched"], judgedID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`INSERT INTO grouping_overrides(article_id,reason) VALUES (?,'manual')`, overriddenID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`INSERT INTO story_signals(story_id,article_id,participant_key,source_id,kind,observed_at)
+		VALUES (?,?,'participant',?,'signal',?)`, storyID, attachedID, sourceID, now).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	waiting, err := repository.WaitingSignals(ctx, "tweet-123", now.Add(-signalWaitWindow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitingIDs := map[string]bool{}
+	for _, row := range waiting {
+		waitingIDs[row.ArticleID] = true
+	}
+	if len(waitingIDs) != 3 || !waitingIDs[replyID] || !waitingIDs[quoteID] || !waitingIDs[ids["unmatched"]] {
+		t.Fatalf("reply/quote reclaim eligibility changed: %#v", waitingIDs)
+	}
+	unattached, err := repository.UnattachedSignals(ctx, now.Add(-signalRevisitWindow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unattachedIDs := map[string]bool{}
+	for _, row := range unattached {
+		unattachedIDs[row.ArticleID] = true
+	}
+	want := []string{replyID, quoteID, ids["unmatched"], ids["other-recent"]}
+	if len(unattachedIDs) != len(want) {
+		t.Fatalf("semantic rematch eligibility changed: %#v", unattachedIDs)
+	}
+	for _, id := range want {
+		if !unattachedIDs[id] {
+			t.Fatalf("eligible signal %q missing from rematch pool: %#v", id, unattachedIDs)
+		}
+	}
+}
+
+/** TestEvaluationUsageSumsDistinctReceipts checks token fallback fields and latency averaging. */
+func TestEvaluationUsageSumsDistinctReceipts(t *testing.T) {
+	db, _ := openGroupingTestDB(t)
+	tx := db.Begin()
+	if tx.Error != nil {
+		t.Fatal(tx.Error)
+	}
+	defer tx.Rollback()
+	if err := tx.Exec(`CREATE TEMP TABLE receipt_attempts (receipt_id bigint, usage jsonb, latency_ms integer) ON COMMIT DROP`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Exec(`INSERT INTO receipt_attempts(receipt_id, usage, latency_ms) VALUES
+		(11, '{"prompt_tokens":10,"completion_tokens":4}'::jsonb, 100),
+		(11, '{"input_tokens":5,"output_tokens":2}'::jsonb, 101),
+		(12, NULL, NULL),
+		(13, '{"prompt_tokens":99}'::jsonb, 999)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	usage, err := NewRepository(tx).EvaluationUsage(context.Background(), []int64{11, 11, 12})
+	if err != nil || usage != (EvaluationUsage{TokensIn: 15, TokensOut: 6, AvgLatencyMS: 101}) {
+		t.Fatalf("receipt usage = %#v, err=%v", usage, err)
+	}
 }
 
 func TestRecallRepositoryFiltersLiveRecentNonCompositeEvidence(t *testing.T) {
@@ -120,13 +236,15 @@ func TestRecallRepositorySelectedContextAndRelatedXIdentity(t *testing.T) {
 	ctx := context.Background()
 	fixture := fmt.Sprintf("grouping_context_%d", time.Now().UnixNano())
 	sourceID := "source_" + fixture
-	selectedID, futureID, factIDArticle, referencedID, candidateID := "article_"+fixture+"_selected", "article_"+fixture+"_future", "article_"+fixture+"_fact", "article_"+fixture+"_ref", "article_"+fixture+"_candidate"
+	selectedID, futureID, unselectedID, withdrawnID, oldID := "article_"+fixture+"_selected", "article_"+fixture+"_future", "article_"+fixture+"_unselected", "article_"+fixture+"_withdrawn", "article_"+fixture+"_old"
+	factIDArticle, referencedID, candidateID := "article_"+fixture+"_fact", "article_"+fixture+"_ref", "article_"+fixture+"_candidate"
+	articleIDs := []string{selectedID, futureID, unselectedID, withdrawnID, oldID, factIDArticle, referencedID, candidateID}
 	var storyID, factID int64
 	t.Cleanup(func() {
-		_ = db.Exec("DELETE FROM publications WHERE article_id IN ?", []string{selectedID, futureID, factIDArticle, referencedID, candidateID}).Error
-		_ = db.Exec("DELETE FROM fact_articles WHERE article_id IN ?", []string{selectedID, futureID, factIDArticle, referencedID, candidateID}).Error
-		_ = db.Exec("DELETE FROM analyses WHERE article_id IN ?", []string{selectedID, futureID, factIDArticle, referencedID, candidateID}).Error
-		_ = db.Exec("DELETE FROM articles WHERE id IN ?", []string{selectedID, futureID, factIDArticle, referencedID, candidateID}).Error
+		_ = db.Exec("DELETE FROM publications WHERE article_id IN ?", articleIDs).Error
+		_ = db.Exec("DELETE FROM fact_articles WHERE article_id IN ?", articleIDs).Error
+		_ = db.Exec("DELETE FROM analyses WHERE article_id IN ?", articleIDs).Error
+		_ = db.Exec("DELETE FROM articles WHERE id IN ?", articleIDs).Error
 		if storyID != 0 {
 			_ = db.Exec("DELETE FROM facts WHERE story_id = ?", storyID).Error
 			_ = db.Exec("DELETE FROM stories WHERE id = ?", storyID).Error
@@ -158,9 +276,18 @@ func TestRecallRepositorySelectedContextAndRelatedXIdentity(t *testing.T) {
 	}
 	insertArticle(selectedID, "url:"+selectedID, "selected", true, now.Add(-time.Minute), nil)
 	insertArticle(futureID, "url:"+futureID, "future", true, now.Add(time.Hour), nil)
+	insertArticle(unselectedID, "url:"+unselectedID, "unselected", false, now.Add(-time.Minute), nil)
+	insertArticle(withdrawnID, "url:"+withdrawnID, "withdrawn", true, now.Add(-time.Minute), nil)
+	insertArticle(oldID, "url:"+oldID, "old", true, now.Add(-time.Minute), nil)
 	insertArticle(factIDArticle, "url:"+factIDArticle, "has fact", true, now.Add(-time.Minute), &factID)
 	insertArticle(referencedID, "x:tweet-123", "referenced", false, now, nil)
 	insertArticle(candidateID, "url:"+candidateID, "candidate", true, now.Add(-time.Minute), &factID)
+	if err := db.Exec("UPDATE publications SET visibility='withdrawn' WHERE article_id=?", withdrawnID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("UPDATE publications SET discovered_at=? WHERE article_id=?", now.Add(-16*24*time.Hour), oldID).Error; err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Exec("INSERT INTO fact_articles (fact_id,article_id,role) VALUES (?,?,'report')", factID, referencedID).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -197,6 +324,88 @@ func TestRecallRepositorySelectedContextAndRelatedXIdentity(t *testing.T) {
 	}
 }
 
+/** TestCandidateViewsUsesChronologicalStoryRoot preserves roots after imported fact IDs diverge from time. */
+func TestCandidateViewsUsesChronologicalStoryRoot(t *testing.T) {
+	db, repository := openGroupingTestDB(t)
+	ctx := context.Background()
+	fixture := fmt.Sprintf("grouping_root_%d", time.Now().UnixNano())
+	sourceID := "source_" + fixture
+	firstArticleID, secondArticleID := "article_"+fixture+"_first", "article_"+fixture+"_second"
+	var storyID, emptyStoryID, firstFactID, secondFactID int64
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM articles WHERE id IN ?", []string{firstArticleID, secondArticleID}).Error
+		_ = db.Exec("DELETE FROM facts WHERE story_id = ?", storyID).Error
+		_ = db.Exec("DELETE FROM stories WHERE id = ?", emptyStoryID).Error
+		_ = db.Exec("DELETE FROM stories WHERE id = ?", storyID).Error
+		_ = db.Exec("DELETE FROM sources WHERE id = ?", sourceID).Error
+	})
+
+	if err := db.Exec("INSERT INTO sources (id,name,kind) VALUES (?, 'Root chronology fixture', 'rss')", sourceID).Error; err != nil {
+		t.Fatal(err)
+	}
+	publicID := fmt.Sprintf("00000000-0000-4000-8000-%012x", time.Now().UnixNano()&0xffffffffffff)
+	if err := db.Raw("INSERT INTO stories (public_id,title) VALUES (?,'root chronology fixture') RETURNING id", publicID).Scan(&storyID).Error; err != nil {
+		t.Fatal(err)
+	}
+	emptyPublicID := fmt.Sprintf("00000000-0000-4000-8000-%012x", (time.Now().UnixNano()+1)&0xffffffffffff)
+	if err := db.Raw("INSERT INTO stories (public_id,title) VALUES (?,'empty redirect fixture') RETURNING id", emptyPublicID).Scan(&emptyStoryID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Raw("INSERT INTO facts (public_id,story_id,title) VALUES (?,?,'lower fact id') RETURNING id", fixture+"_first", storyID).Scan(&firstFactID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Raw("INSERT INTO facts (public_id,story_id,title) VALUES (?,?,'earlier reported fact') RETURNING id", fixture+"_second", storyID).Scan(&secondFactID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	earlier, later := now.Add(-2*time.Hour), now.Add(-time.Hour)
+	for _, article := range []struct {
+		id, title string
+		factID    int64
+		at        time.Time
+	}{
+		{id: firstArticleID, title: "first fact report", factID: firstFactID, at: later},
+		{id: secondArticleID, title: "earlier fact report", factID: secondFactID, at: earlier},
+	} {
+		articleURL := "https://example.invalid/" + article.id
+		if err := db.Exec(`INSERT INTO articles(id,source_id,identity_key,url,title,discovered_at,timeline_at)
+			VALUES(?,?,?,?,?,?,?)`, article.id, sourceID, "url:"+article.id, articleURL, article.title, now, now).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Exec(`INSERT INTO publications(article_id,title,source_id,channel,url,published_at,discovered_at,timeline_at)
+			VALUES(?,?,?,'news',?,?,?,?)`, article.id, article.title, sourceID, articleURL, article.at, now, now).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Exec("INSERT INTO fact_articles(fact_id,article_id,role) VALUES (?,?,'report')", article.factID, article.id).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	candidates, err := repository.CandidateViews(ctx, []Recalled{
+		{FactID: firstFactID, StoryID: storyID, Score: 0.9},
+		{FactID: secondFactID, StoryID: storyID, Score: 0.8},
+	}, nil, now)
+	if err != nil || len(candidates) != 2 {
+		t.Fatalf("candidate roots = %#v, err=%v", candidates, err)
+	}
+	if candidates[0].StoryRoot || !candidates[1].StoryRoot {
+		t.Fatalf("story root followed fact ID instead of report chronology: %#v", candidates)
+	}
+	roots, err := repository.StoryRoots(ctx, []int64{storyID})
+	if err != nil || len(roots) != 1 || roots[0].StoryID != storyID || roots[0].At != earlier || roots[0].Report.Title != "earlier fact report" || roots[0].Roundup {
+		t.Fatalf("story root comparison input changed: roots=%#v err=%v", roots, err)
+	}
+	if err := db.Exec(`INSERT INTO grouping_decisions(article_id,story_id,verdict,candidates)
+		VALUES (? ,?,'new-story','[]'::jsonb)`, firstArticleID, emptyStoryID).Error; err != nil {
+		t.Fatal(err)
+	}
+	empty, err := repository.EmptyStories(ctx, firstArticleID, storyID)
+	if err != nil || len(empty) != 1 || empty[0] != emptyStoryID {
+		t.Fatalf("prior empty story candidates = %v, err=%v", empty, err)
+	}
+}
+
 func TestEmbeddingRepositoryRoundTripsRealArrayAndCompletesReceiptAtomically(t *testing.T) {
 	db, repository := openGroupingTestDB(t)
 	ctx := context.Background()
@@ -227,5 +436,71 @@ func TestEmbeddingRepositoryRoundTripsRealArrayAndCompletesReceiptAtomically(t *
 	var status string
 	if err := db.Raw("SELECT status FROM receipts WHERE id = ?", receiptID).Scan(&status).Error; err != nil || status != "completed" {
 		t.Fatalf("embedding receipt was not completed with its vectors: status=%q err=%v", status, err)
+	}
+}
+
+/** TestEmbeddingRepositoryReusesPaidResponseAfterAtomicSaveRollback protects receipt recovery. */
+func TestEmbeddingRepositoryReusesPaidResponseAfterAtomicSaveRollback(t *testing.T) {
+	db, repository := openGroupingTestDB(t)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	modelName := "embedding-retry-model"
+	firstID, secondID := "article_retry_a_"+suffix, "article_retry_b_"+suffix
+	functionName, triggerName := "test_embedding_rollback_"+suffix, "test_embedding_trigger_"+suffix
+	t.Cleanup(func() {
+		_ = db.Exec(fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON embeddings", triggerName)).Error
+		_ = db.Exec(fmt.Sprintf("DROP FUNCTION IF EXISTS %s()", functionName)).Error
+		_ = db.Exec("DELETE FROM embeddings WHERE kind = 'article' AND model = ? AND ref_id IN ?", modelName, []string{firstID, secondID}).Error
+		_ = db.Exec(`DELETE FROM receipt_attempts WHERE receipt_id IN (
+			SELECT id FROM receipts WHERE service = 'embedding' AND purpose = 'embedding' AND subject = ?
+		)`, "article:"+firstID).Error
+		_ = db.Exec("DELETE FROM receipts WHERE service = 'embedding' AND purpose = 'embedding' AND subject = ?", "article:"+firstID).Error
+	})
+	if err := db.Exec(fmt.Sprintf(`CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.ref_id = '%s' THEN RAISE EXCEPTION 'intentional embedding rollback'; END IF;
+			RETURN NEW;
+		END $$`, functionName, secondID)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(fmt.Sprintf("CREATE TRIGGER %s BEFORE INSERT OR UPDATE ON embeddings FOR EACH ROW EXECUTE FUNCTION %s()", triggerName, functionName)).Error; err != nil {
+		t.Fatal(err)
+	}
+	provider := &embeddingProviderStub{result: func([]string) EmbeddingResponse {
+		body, _ := json.Marshal(map[string]any{"data": []map[string]any{
+			{"index": 1, "embedding": []float32{0, 1}},
+			{"index": 0, "embedding": []float32{1, 0}},
+		}})
+		return EmbeddingResponse{Body: body, RequestID: "fake-embedding-request"}
+	}}
+	store := NewEmbeddingStore(repository, receipts.NewService(receipts.NewRepository(db)), EmbeddingConfig{
+		Enabled: true, Service: "embedding", Model: modelName, APIKey: "fake-key", Dimensions: 2,
+	}, provider)
+	inputs := []VectorInput{{ID: firstID, Text: "first"}, {ID: secondID, Text: "second"}}
+	if _, err := store.Ensure(ctx, inputs); err == nil || !strings.Contains(err.Error(), "intentional embedding rollback") || provider.calls != 1 {
+		t.Fatalf("failed batch did not preserve its single paid response: calls=%d err=%v", provider.calls, err)
+	}
+	var embeddingCount int
+	if err := db.Raw("SELECT count(*) FROM embeddings WHERE kind = 'article' AND model = ? AND ref_id IN ?", modelName, []string{firstID, secondID}).Scan(&embeddingCount).Error; err != nil || embeddingCount != 0 {
+		t.Fatalf("failed embedding batch left partial rows: count=%d err=%v", embeddingCount, err)
+	}
+	var status string
+	var response []byte
+	var completedAt *time.Time
+	if err := db.Raw("SELECT status, response, completed_at FROM receipts WHERE service = 'embedding' AND purpose = 'embedding' AND subject = ?", "article:"+firstID).Row().Scan(&status, &response, &completedAt); err != nil || status != "received" || len(response) == 0 || completedAt != nil {
+		t.Fatalf("failed batch did not retain a reusable receipt: status=%q response=%s completed=%v err=%v", status, response, completedAt, err)
+	}
+	if err := db.Exec(fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON embeddings", triggerName)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(fmt.Sprintf("DROP FUNCTION IF EXISTS %s()", functionName)).Error; err != nil {
+		t.Fatal(err)
+	}
+	vectors, err := store.Ensure(ctx, inputs)
+	if err != nil || provider.calls != 1 || vectors[firstID][0] != 1 || vectors[secondID][0] != 1 {
+		t.Fatalf("retry did not reuse the paid response in input order: vectors=%v calls=%d err=%v", vectors, provider.calls, err)
+	}
+	if err := db.Raw("SELECT status, completed_at FROM receipts WHERE service = 'embedding' AND purpose = 'embedding' AND subject = ?", "article:"+firstID).Row().Scan(&status, &completedAt); err != nil || status != "completed" || completedAt == nil {
+		t.Fatalf("successful retry did not complete its receipt: status=%q completed=%v err=%v", status, completedAt, err)
 	}
 }

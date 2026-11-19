@@ -94,9 +94,9 @@ func TestSiteReportIndexPreservesEntriesAndReplacesWithdrawnHeadline(t *testing.
 		index: map[string][]V1ReportIndexRecord{"daily": {{
 			Key: "2026-10-07", IssueNumber: 42, GeneratedAt: now,
 			Content: map[string]any{
-				"leadItemId": "withdrawn", "highlights": []any{"replacement"},
 				"sections": []any{map[string]any{"items": []any{
 					map[string]any{"itemId": "withdrawn", "title": "Withdrawn title"},
+					map[string]any{"title": "Historical citation"},
 					map[string]any{"itemId": "replacement", "title": "Replacement headline"},
 				}}},
 			},
@@ -114,7 +114,7 @@ func TestSiteReportIndexPreservesEntriesAndReplacesWithdrawnHeadline(t *testing.
 		t.Fatalf("response = %#v", response)
 	}
 	item := response.Items[0]
-	if item.Key != "2026-10-07" || item.IssueNumber != 42 || item.Title == nil || *item.Title != "Replacement headline" || item.Count != 2 {
+	if item.Key != "2026-10-07" || item.IssueNumber != 42 || item.Title == nil || *item.Title != "Historical citation" || item.Count != 3 {
 		t.Fatalf("site report entry = %#v", item)
 	}
 	wire, err := json.Marshal(response)
@@ -126,7 +126,7 @@ func TestSiteReportIndexPreservesEntriesAndReplacesWithdrawnHeadline(t *testing.
 		t.Fatal(err)
 	}
 	entry := decoded["items"].([]any)[0].(map[string]any)
-	if decoded["kind"] != "daily" || entry["issueNumber"] != float64(42) || entry["title"] != "Replacement headline" || entry["count"] != float64(2) {
+	if decoded["kind"] != "daily" || entry["issueNumber"] != float64(42) || entry["title"] != "Historical citation" || entry["count"] != float64(3) {
 		t.Fatalf("wire response = %s", wire)
 	}
 }
@@ -291,6 +291,7 @@ func TestV1DailyAndPeriodDetailsKeepWireFieldsAndWithdrawnFiltering(t *testing.T
 		reports: map[string]*V1ReportRecord{
 			"daily:2026-10-07": {Kind: "daily", Key: "2026-10-07", WindowStart: generated.Add(-24 * time.Hour), WindowEnd: generated, Content: content, GeneratedAt: generated},
 			"weekly:2026-W41":  {Kind: "weekly", Key: "2026-W41", WindowStart: generated.Add(-7 * 24 * time.Hour), WindowEnd: generated, Content: weekly, GeneratedAt: generated},
+			"monthly:2026-10":  {Kind: "monthly", Key: "2026-10", WindowStart: generated.Add(-30 * 24 * time.Hour), WindowEnd: generated, Content: weekly, GeneratedAt: generated},
 		},
 		availability: map[string]V1ReportAvailabilityRecord{
 			"gone": {Available: false},
@@ -336,6 +337,13 @@ func TestV1DailyAndPeriodDetailsKeepWireFieldsAndWithdrawnFiltering(t *testing.T
 	}
 	if repository.requestedKind != "weekly" || repository.requestedKey != "2026-W41" || repository.latest {
 		t.Fatalf("requested report = %s %s latest=%v", repository.requestedKind, repository.requestedKey, repository.latest)
+	}
+	monthly, err := service.V1Period(context.Background(), "monthly", "2026-10", false, now, "https://myhot.example", "Example", "件", "大事")
+	if err != nil || monthly == nil {
+		t.Fatalf("monthly=%#v err=%v", monthly, err)
+	}
+	if monthly.Report.Month == nil || *monthly.Report.Month != "2026-10" || monthly.Report.Headline == nil || *monthly.Report.Headline != "Kept title" || monthly.Report.Overview == nil || *monthly.Report.Overview != "本月 1 件大事，最受关注的是：Kept title。" || len(monthly.Report.Sections) != 1 || monthly.Report.Sections[0].Summary != nil || len(monthly.Report.Sections[0].Items) != 1 {
+		t.Fatalf("withdrawn monthly output = %#v", monthly.Report)
 	}
 }
 

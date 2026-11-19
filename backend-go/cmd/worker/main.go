@@ -8,11 +8,13 @@ import (
 	"syscall"
 	"time"
 
+	"aihot/backend-go/internal/adminruns"
 	"aihot/backend-go/internal/config"
 	"aihot/backend-go/internal/db"
 	"aihot/backend-go/internal/interests"
 	"aihot/backend-go/internal/jobs"
 	"aihot/backend-go/internal/provider"
+	"aihot/backend-go/internal/receipts"
 	"aihot/backend-go/internal/topics"
 )
 
@@ -33,6 +35,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.CloseGORM(orm)
+	adminruns.StartHeartbeat(ctx, orm, "worker")
 	entities, err := interests.LoadEntities()
 	if err != nil {
 		log.Fatal(err)
@@ -61,6 +64,9 @@ func main() {
 		return
 	case <-ctx.Done():
 	}
+
+	// Block new paid calls before River drains the jobs already in flight.
+	receipts.BeginWorkerShutdown()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 195*time.Second)
 	defer cancel()
 	if err := client.Stop(shutdownCtx); err != nil {

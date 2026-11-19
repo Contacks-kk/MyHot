@@ -1,5 +1,5 @@
 // Read-only whole-site check: anonymous boundaries are always checked. Optionally read a local
-// verified user's Cookie file to check personal SSR/API and legacy authenticated exits as well.
+// verified user's Cookie file to check personal SSR/API and public content endpoints as well.
 // node tooling/scripts/smoke.ts --base http://localhost:3000 [--cookie-file path] [--registration-open]
 import { readFileSync } from 'node:fs';
 import { SITE } from '@aihot/site';
@@ -46,15 +46,15 @@ await check('anonymous', '/api/auth/registration-status', 200, (_res, body) => {
 for (const [path, type] of [['/logo.svg', /svg/], ['/icon.png', /png/], ['/favicon.ico', /icon/], ['/manifest.webmanifest', /manifest/], ['/robots.txt', /text\/plain/]] as const) await check('brand', path, 200, (res) => type.test(res.headers.get('content-type') ?? '') ? null : 'unexpected content type');
 for (const path of ['/hot', '/daily', '/model', '/interests', '/history', '/all', '/topics', '/agent']) await check('anonymous denied', path, 302, (res) => res.headers.get('location')?.startsWith('/login?') && noStore(res) ? null : 'expected uncached login redirect');
 const privateEndpoints = ['/api/me', '/api/me/model', '/api/me/interests', '/api/me/entities', '/api/me/feed', '/api/me/hot', '/api/me/daily', '/api/me/history'];
-const legacy: Array<[string, RegExp]> = [['/api/v1/items', /json/], ['/api/v1/hot-topics', /json/], ['/api/v1/selected/snapshot', /json/], ['/api/v1/agent', /text\/markdown/], ['/feed.xml', /xml/], ['/feed/all.xml', /xml/], ['/llms.txt', /text\/plain/], ['/sitemap.xml', /xml/], ['/openapi-v1.json', /json/], ['/og/site.png', /image\/png/]];
-for (const path of [...privateEndpoints, ...legacy.map(([path]) => path)]) await check('anonymous denied', path, 401, (res) => noStore(res) ? null : 'authentication denial must be no-store');
+const publicContentEndpoints: Array<[string, RegExp]> = [['/api/v1/items', /json/], ['/api/v1/hot-topics', /json/], ['/api/v1/selected/snapshot', /json/], ['/api/v1/agent', /text\/markdown/], ['/feed.xml', /xml/], ['/feed/all.xml', /xml/], ['/llms.txt', /text\/plain/], ['/sitemap.xml', /xml/], ['/openapi-v1.json', /json/], ['/og/site.png', /image\/png/]];
+for (const path of [...privateEndpoints, ...publicContentEndpoints.map(([path]) => path)]) await check('anonymous denied', path, 401, (res) => noStore(res) ? null : 'authentication denial must be no-store');
 const initialize: RequestInit = { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'myhot-smoke', version: '1' } } }) };
 await check('anonymous denied', '/api/mcp', 401, (res) => noStore(res) ? null : 'MCP denial must be no-store', initialize);
 if (cookie) {
   const headers = { cookie };
   for (const path of ['/', '/hot', '/daily', '/model', '/interests', '/history']) await check('signed in', path, 200, namedPage, { headers });
   for (const path of privateEndpoints) await check('signed in', path, 200, (res, body) => !noStore(res) ? 'personal API must be no-store' : !/json/.test(res.headers.get('content-type') ?? '') ? 'expected JSON' : /"apiKey"\s*:/.test(body) ? 'personal API must not return the API Key' : null, { headers });
-  for (const [path, type] of legacy) await check('signed in', path, 200, (res) => !noStore(res) ? 'legacy content must be no-store' : !type.test(res.headers.get('content-type') ?? '') ? 'unexpected content type' : null, { headers });
+  for (const [path, type] of publicContentEndpoints) await check('signed in', path, 200, (res) => !noStore(res) ? 'authenticated content must be no-store' : !type.test(res.headers.get('content-type') ?? '') ? 'unexpected content type' : null, { headers });
   await check('signed in', '/api/mcp', 200, (res, body) => !noStore(res) ? 'MCP must be no-store' : !body.includes(`"name":"${SITE.mcpPrefix}"`) ? 'MCP server identity missing' : null, { ...initialize, headers: { ...initialize.headers, cookie } });
 }
 console.log(`\n${passed} passed, ${failed} failed${cookie ? '' : '; authenticated checks skipped (no Cookie file)'}`);

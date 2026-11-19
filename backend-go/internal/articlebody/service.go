@@ -89,8 +89,13 @@ func (s *Service) Extract(ctx context.Context, articleID string) (Outcome, error
 
 	var body *Extracted
 	finalURL, contentType, raw, fetchErr := s.fetcher.Fetch(ctx, candidate.URL)
-	if fetchErr == nil && strings.Contains(strings.ToLower(contentType), "html") && pageFetchable(finalURL, candidate.SourceKind) {
-		body, _ = ParseHTML(string(raw), finalURL, sourceUTCOffset(candidate.SourceConfig))
+	if fetchErr == nil {
+		if !pageFetchable(finalURL, candidate.SourceKind) {
+			return s.saveUnconfirmed(ctx, candidate)
+		}
+		if strings.Contains(strings.ToLower(contentType), "html") {
+			body, _ = ParseHTML(string(raw), finalURL, sourceUTCOffset(candidate.SourceConfig))
+		}
 	}
 	var receiptID int64
 	if body == nil {

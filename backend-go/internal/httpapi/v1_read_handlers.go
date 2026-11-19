@@ -57,9 +57,9 @@ func (s *Server) v1Items(w http.ResponseWriter, r *http.Request) {
 	}
 	var category *string
 	if raw, ok := query["category"]; ok {
-		if _, found := s.CategoryKeys[raw]; !found {
-			allowed := s.CategoryOrder
-			if len(allowed) == 0 {
+		if _, found := s.resolvePublicCategory(raw); !found {
+			allowed := s.publicCategoryOptions()
+			if len(allowed) == 0 && len(s.PublicCategoryMembers) == 0 {
 				for key := range s.CategoryKeys {
 					allowed = append(allowed, key)
 				}

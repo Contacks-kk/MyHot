@@ -17,11 +17,12 @@ var trackingParameterPattern = regexp.MustCompile(`(?i)^(utm_[a-z]+|spm|from|ref
 var tweetHostPattern = regexp.MustCompile(`^(?:(?:www|mobile|m)\.)?(?:x|twitter)\.com$`)
 
 var (
-	ErrSEORepositoryUnavailable = errors.New("content SEO repository is unavailable")
-	ErrInvalidSEO               = errors.New("reason must not be empty")
-	ErrCommandsUnavailable      = errors.New("content command repository is unavailable")
-	ErrInvalidCommand           = errors.New("invalid content command")
-	ErrCommandConflict          = errors.New("这条内容的人工设置已被修改，请刷新后再操作")
+	ErrSEORepositoryUnavailable   = errors.New("content SEO repository is unavailable")
+	ErrInvalidSEO                 = errors.New("reason must not be empty")
+	ErrCommandsUnavailable        = errors.New("content command repository is unavailable")
+	ErrInvalidCommand             = errors.New("invalid content command")
+	ErrCommandConflict            = errors.New("这条内容的人工设置已被修改，请刷新后再操作")
+	ErrXEncodingRepairUnavailable = errors.New("X encoding repair repository is unavailable")
 )
 
 type Repository interface {
@@ -31,9 +32,11 @@ type Repository interface {
 }
 
 type Service struct {
-	repository Repository
-	commands   CommandRepository
-	categories map[string]struct{}
+	repository      Repository
+	commands        CommandRepository
+	xEncoding       XEncodingRepairRepository
+	publicationDate PublicationDateCorrectionRepository
+	categories      map[string]struct{}
 }
 
 func NewService(repository Repository) *Service { return &Service{repository: repository} }
@@ -44,6 +47,11 @@ func (s *Service) SetCommands(repository CommandRepository, categories []string)
 	for _, category := range categories {
 		s.categories[category] = struct{}{}
 	}
+}
+
+/** SetXEncodingRepairRepository installs the reviewed one-time X material repair path. */
+func (s *Service) SetXEncodingRepairRepository(repository XEncodingRepairRepository) {
+	s.xEncoding = repository
 }
 
 type SEOInput struct {

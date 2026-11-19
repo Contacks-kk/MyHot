@@ -3,6 +3,8 @@ package jobs
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/riverqueue/river/rivertype"
 )
 
 func TestSharedPipelineRiverKindsPreserveLegacyQueueContracts(t *testing.T) {
@@ -23,6 +25,23 @@ func TestSharedPipelineRiverKindsPreserveLegacyQueueContracts(t *testing.T) {
 	encoded, err = json.Marshal(EventGroupArgs{ArticleID: "article-3"})
 	if err != nil || string(encoded) != `{"articleId":"article-3"}` {
 		t.Fatalf("editorial grouping args = %s err=%v", encoded, err)
+	}
+}
+
+/** TestSignalRevisitUsesLowPriorityUniqueGroupingJobs keeps revived discussion work behind reports. */
+func TestSignalRevisitUsesLowPriorityUniqueGroupingJobs(t *testing.T) {
+	opts := eventGroupInsertOpts(-1)
+	if opts.Queue != "shared_grouping" || opts.Priority != -1 || opts.MaxAttempts != 5 || !opts.UniqueOpts.ByArgs {
+		t.Fatalf("signal revisit job options changed: %+v", opts)
+	}
+	states := map[rivertype.JobState]bool{}
+	for _, state := range opts.UniqueOpts.ByState {
+		states[state] = true
+	}
+	for _, state := range []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRunning, rivertype.JobStateRetryable, rivertype.JobStateScheduled} {
+		if !states[state] {
+			t.Fatalf("signal revisit no longer deduplicates queued state %q: %+v", state, opts.UniqueOpts.ByState)
+		}
 	}
 }
 

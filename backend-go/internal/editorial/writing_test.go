@@ -8,11 +8,12 @@ import (
 	"time"
 )
 
-func TestWritingPromptBuildersUseSharedIndustryPrompts(t *testing.T) {
+/** TestWritingPromptBuildersUseBackendPrompts verifies prompts load from the Go runtime configuration. */
+func TestWritingPromptBuildersUseBackendPrompts(t *testing.T) {
 	vocabulary := loadCurrentVocabulary(t)
 	_, source, _, _ := runtime.Caller(0)
 	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", ".."))
-	pack, err := LoadPromptsFrom(filepath.Join(repositoryRoot, "shared", "industry", "prompts"), "MyHOT")
+	pack, err := LoadPromptsFrom(filepath.Join(repositoryRoot, "backend-go", "config", "prompts"), "MyHOT")
 	if err != nil {
 		t.Fatal(err)
 	}

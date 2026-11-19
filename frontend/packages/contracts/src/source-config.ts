@@ -1,7 +1,6 @@
 export type SourceKind = "rss" | "web_list" | "json_list" | "x_search" | "mp_account" | "external";
 
-// Keep this allowlist in the shared contract so setup tooling and the legacy API validate the same
-// source configuration without making setup depend on the old backend package.
+// Keep accepted source keys beside the HTTP contract so Web validation stays aligned with Go.
 const PUBLISHER = ["publisherRole", "publisherUrlPrefixes"];
 const COLLECTED = [...PUBLISHER, "_aihot", "allowUrlPrefixes", "denyUrlPrefixes", "ingestNoiseFilter", "itemUrlPrefixRewrite", "sortByPublishedAt", "detail", "fetchPublicContent", "publishedAfter"];
 
@@ -16,7 +15,7 @@ const KEYS: Record<SourceKind, string[]> = {
     "titlePaths", "summaryPaths", "summaryIsBody", "authorPaths", "publishedAtPath", "publishedAtUnit", "publishedAtUtcOffset", "externalIdPath",
     "urlTemplate", "urlTemplateFallback", "rawDropKeys", "requireBoolean", "minNumeric",
   ],
-  // Scheduled X account searches run in Go; the legacy single-source path accepts these same keys.
+  // Scheduled X account searches run in Go and accept this source-specific key set.
   x_search: [...PUBLISHER, "_aihot", "ingestNoiseFilter", "itemUrlPrefixRewrite", "query", "searchType"],
   mp_account: [...PUBLISHER, "wxid", "ghid", "nickname"],
   external: [...PUBLISHER],

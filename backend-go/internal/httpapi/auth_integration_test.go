@@ -48,8 +48,8 @@ func authTestPools(t *testing.T) (*pgxpool.Pool, *gorm.DB) {
 		t.Skip("MYHOT_TEST_DATABASE_URL is not configured")
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1") || !strings.HasSuffix(parsed.Path, "_test") {
-		t.Fatal("integration database must be localhost and end in _test")
+	if err != nil || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1") || !(strings.HasSuffix(parsed.Path, "_test") || strings.HasSuffix(parsed.Path, "_ci")) {
+		t.Fatal("integration database must be localhost and end in _test or _ci")
 	}
 	pool, err := pgxpool.New(context.Background(), raw)
 	if err != nil {
@@ -115,7 +115,15 @@ func TestAuthLifecycleAndPrivateSettingsIntegration(t *testing.T) {
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM user_accounts WHERE email=ANY($1)", emails) })
 	sender := &captureMail{}
 	cfg := config.Config{PublicURL: "http://localhost", SiteURL: "https://myhot.example", UserAPIKeyEncryptionKey: []byte(strings.Repeat("e", 32)), SMTPHost: "mail.example.invalid", SMTPFrom: "noreply@example.invalid", SMTPPort: 587}
-	server := New(cfg, pool, orm, map[string]interests.Entity{"openai": {Name: "OpenAI"}})
+	server := New(cfg, pool, orm, map[string]interests.Entity{"openai": {Name: "OpenAI", Aliases: []string{"ChatGPT"}}})
+	server.Catalog = interests.NewCatalogService(
+		[]string{"research"},
+		map[string]string{"research": "Research"},
+		nil,
+		interests.PublicationSettings{Subject: "Technology"},
+		nil,
+		nil,
+	)
 	server.Topics = topicListStub{}
 	server.MailSender = sender
 	clients := []authClient{{handler: server.Handler()}, {handler: server.Handler()}}
@@ -199,6 +207,56 @@ func TestAuthLifecycleAndPrivateSettingsIntegration(t *testing.T) {
 		}
 		if i != 0 {
 			clients[i].login(t, emails[i], password)
+		}
+	}
+	for _, path := range []string{"/api/v1", "/api/v1/items", "/openapi-v1.json"} {
+		for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, "TRACE"} {
+			for _, contentType := range []string{"application/json", "application/octet-stream"} {
+				request := httptest.NewRequest(method, "http://localhost"+path, strings.NewReader("{"))
+				request.AddCookie(clients[0].cookie)
+				request.Header.Set("Content-Type", contentType)
+				response := httptest.NewRecorder()
+				server.Handler().ServeHTTP(response, request)
+				var body map[string]any
+				if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || response.Code != http.StatusMethodNotAllowed || body["code"] != "method_not_allowed" || response.Header().Get("Access-Control-Allow-Origin") != "*" || response.Header().Get("Allow") != "GET, HEAD, OPTIONS" || response.Header().Get("Cache-Control") != "private, no-store" {
+					t.Fatalf("%s %s %s method contract changed: status=%d headers=%v body=%s err=%v", method, path, contentType, response.Code, response.Header(), response.Body.String(), err)
+				}
+			}
+		}
+	}
+
+	// Both verified users receive the same display-only catalog.
+	for i := range clients {
+		response := clients[i].request(t, http.MethodGet, "/api/me/catalog", nil, http.StatusOK)
+		var catalog interests.Catalog
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(response.Body.Bytes(), &catalog); err != nil || catalog.Subject != "Technology" || len(catalog.Categories) != 1 || catalog.Categories[0].Key != "research" || catalog.Categories[0].Label != "Research" || response.Header().Get("Cache-Control") != "private, no-store" {
+			t.Fatalf("user catalog: headers=%v body=%s err=%v", response.Header(), response.Body.String(), err)
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &fields); err != nil || len(fields) != 4 {
+			t.Fatalf("user catalog must contain only its display fields: body=%s err=%v", response.Body.String(), err)
+		}
+		for _, key := range []string{"subject", "categories", "topicGroups", "topics"} {
+			if _, ok := fields[key]; !ok {
+				t.Fatalf("user catalog is missing %q: body=%s", key, response.Body.String())
+			}
+		}
+	}
+	anonymousClient := authClient{handler: server.Handler()}
+	unauthenticatedEntities := anonymousClient.request(t, http.MethodGet, "/api/me/entities", nil, http.StatusUnauthorized)
+	if unauthenticatedEntities.Header().Get("Cache-Control") != "private, no-store" {
+		t.Fatalf("anonymous entity catalog must remain private: headers=%v", unauthenticatedEntities.Header())
+	}
+	for i := range clients {
+		response := clients[i].request(t, http.MethodGet, "/api/me/entities", nil, http.StatusOK)
+		var directory struct {
+			Entities []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"entities"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &directory); err != nil || len(directory.Entities) != 1 || directory.Entities[0].ID != "openai" || directory.Entities[0].Name != "OpenAI" || strings.Contains(response.Body.String(), "ChatGPT") {
+			t.Fatalf("user entity catalog exposed unsupported fields: body=%s err=%v", response.Body.String(), err)
 		}
 	}
 

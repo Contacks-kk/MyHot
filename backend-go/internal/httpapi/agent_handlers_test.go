@@ -82,3 +82,20 @@ func TestAgentLatestAndSearchRejectInvalidQueryContracts(t *testing.T) {
 		}
 	}
 }
+
+/** TestAgentCategoryUsesPublicKeys verifies that merged keys are hidden from public agent filters. */
+func TestAgentCategoryUsesPublicKeys(t *testing.T) {
+	server := &Server{
+		CategoryKeys:          map[string]struct{}{"security": {}, "research": {}},
+		CategoryOrder:         []string{"security", "research"},
+		PublicCategoryOrder:   []string{"research"},
+		PublicCategoryMembers: map[string][]string{"research": {"security", "research"}},
+	}
+	parsed, err := server.parseAgentItemsRequest(httptest.NewRequest(http.MethodGet, "/api/v1/agent/latest?category=research", nil), false)
+	if err != nil || parsed.Category == nil || *parsed.Category != "research" {
+		t.Fatalf("public category parse = %#v, error=%v", parsed, err)
+	}
+	if _, err := server.parseAgentItemsRequest(httptest.NewRequest(http.MethodGet, "/api/v1/agent/latest?category=security", nil), false); err == nil {
+		t.Fatal("merged internal category should not be accepted")
+	}
+}

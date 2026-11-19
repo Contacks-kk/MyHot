@@ -31,6 +31,21 @@ func (r *v1ItemsRepo) V1Items(_ context.Context, query V1ItemsQuery, now time.Ti
 	return r.rows, r.err
 }
 
+/** TestV1ItemsExpandsPublicCategoryKeepsMergedStoredCategoriesInScope verifies public category expansion. */
+func TestV1ItemsExpandsPublicCategoryKeepsMergedStoredCategoriesInScope(t *testing.T) {
+	repository := &v1ItemsRepo{}
+	service := NewService(repository)
+	service.SetPublicCategoryMembers(map[string][]string{"research": {"security", "research"}})
+	category := "research"
+	query := V1ItemsQuery{Mode: "all", Window: "7d", By: "timeline", Category: &category, Limit: 10}
+	if _, err := service.V1Items(context.Background(), query, time.Now(), "https://example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(repository.query.CategoryKeys, []string{"security", "research"}) {
+		t.Fatalf("category keys = %#v, want merged stored categories", repository.query.CategoryKeys)
+	}
+}
+
 func TestV1ItemsBuildsCompatibleResponseAndBoundCursor(t *testing.T) {
 	now := time.Date(2026, 10, 7, 3, 4, 5, 678_901_000, time.FixedZone("local", 8*60*60))
 	sortAt := time.Date(2026, 10, 7, 3, 4, 5, 678_000_000, time.UTC)

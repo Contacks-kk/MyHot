@@ -195,7 +195,7 @@ func TestDueUsesBeijingTimeAndOneRunPerDate(t *testing.T) {
 	if err != nil || !due || date != "2026-11-02" {
 		t.Fatalf("backup due at the Beijing slot: date=%q due=%t err=%v", date, due, err)
 	}
-	repository.runs[date] = []runRecord{{status: "ok", started: time.Now()}}
+	repository.runs[date] = []runRecord{{status: "ok", started: before.Add(time.Minute)}}
 	if _, due, err := service.Due(context.Background(), before.Add(time.Minute)); err != nil || due {
 		t.Fatalf("completed daily backup was scheduled again: due=%t err=%v", due, err)
 	}

@@ -92,6 +92,29 @@ func New(cfg config.Config, db *pgxpool.Pool, orm *gorm.DB, entities map[string]
 	}
 	server.CategoryOrder = append([]string(nil), categoryKeys...)
 	server.ReportSubject = publicationSettings.Subject
+	server.PublicCategoryMembers = make(map[string][]string, len(categoryKeys))
+	server.PublicCategoryLabels = make(map[string]string, len(categoryKeys))
+	for _, key := range categoryKeys {
+		publicKey := key
+		if merged, exists := publicationSettings.PublicCategories.Merge[key]; exists {
+			publicKey = merged
+		}
+		server.PublicCategoryMembers[publicKey] = append(server.PublicCategoryMembers[publicKey], key)
+	}
+	for _, key := range categoryKeys {
+		if _, merged := publicationSettings.PublicCategories.Merge[key]; merged {
+			continue
+		}
+		server.PublicCategoryOrder = append(server.PublicCategoryOrder, key)
+		label := publicationSettings.PublicCategories.FeedLabels[key]
+		if label == "" {
+			label = feedLabels[key]
+		}
+		if label == "" {
+			label = server.CategoryLabels[key]
+		}
+		server.PublicCategoryLabels[key] = label
+	}
 	var topicGroups []interests.CatalogTopicGroup
 	var topicEntries []interests.CatalogTopic
 	if len(catalogs) > 0 {
@@ -124,17 +147,24 @@ func New(cfg config.Config, db *pgxpool.Pool, orm *gorm.DB, entities map[string]
 	server.SiteInfo = siteinfo.NewService(changelogPath, siteinfo.OpenAPIConfig{
 		Path: cfg.SitePublicDir + string(os.PathSeparator) + "openapi-v1.json", SiteName: cfg.SiteName, SiteURL: cfg.SiteURL,
 		Description: cfg.SiteDescription, Tagline: cfg.SiteTagline, Locale: cfg.SiteLocale, Version: cfg.SiteInterfaceVersion,
-		DailyTime: cfg.SiteEditionDaily, WeeklyTime: cfg.SiteEditionWeekly, MonthlyTime: cfg.SiteEditionMonthly, Categories: categoryKeys,
+		DailyTime: cfg.SiteEditionDaily, WeeklyTime: cfg.SiteEditionWeekly, MonthlyTime: cfg.SiteEditionMonthly, Categories: server.PublicCategoryOrder,
 	})
 	server.Accounts = account.NewService(account.NewRepository(orm), cfg, accountMailer{server: server})
 	server.AdminAuth = adminauth.NewService(adminauth.NewRepository(orm), cfg, nil)
+	transactionClient, transactionErr := jobs.NewTransactionClient(db)
+	publicationRepository := publicationdomain.NewRepository(db, entities, publicationSettings, cfg.SiteName, cfg.SiteURL)
+	if transactionErr == nil {
+		publicationRepository.SetEffects(jobs.NewPublicationEffects(transactionClient, cfg.StoryDigestEnabled))
+	}
 	materialService := materials.NewService(materials.NewRepository(orm))
+	materialService.SetSourceAttributor(materials.NewAttributionRepository(db, publicationRepository))
 	server.Ingest = ingest.NewService(ingest.NewRepository(orm), materialService)
 	server.AdminContent = admincontent.NewService(admincontent.NewRepository(orm))
-	if transactionClient, err := jobs.NewTransactionClient(db); err == nil {
-		publicationRepository := publicationdomain.NewRepository(db, entities, publicationSettings, cfg.SiteName, cfg.SiteURL)
-		publicationRepository.SetEffects(jobs.NewPublicationEffects(transactionClient, cfg.StoryDigestEnabled))
-		server.AdminContent.SetCommands(admincontent.NewCommandsRepository(db, publicationRepository, transactionClient, cfg.StoryDigestEnabled, reportCorrection), categoryKeys)
+	if transactionErr == nil {
+		commands := admincontent.NewCommandsRepository(db, publicationRepository, transactionClient, cfg.StoryDigestEnabled, reportCorrection)
+		server.AdminContent.SetCommands(commands, categoryKeys)
+		server.AdminContent.SetXEncodingRepairRepository(commands)
+		server.AdminContent.SetPublicationDateCorrectionRepository(commands)
 	}
 	server.AdminDeliveries = admindeliveries.NewService(admindeliveries.NewRepository(orm), admindeliveries.Config{
 		ContentPushEnabled: cfg.FeishuContentPushEnabled,
@@ -176,6 +206,7 @@ func New(cfg config.Config, db *pgxpool.Pool, orm *gorm.DB, entities map[string]
 	}
 	publicRepository := publiccontent.NewRepository(orm)
 	server.PublicContent = publiccontent.NewService(publicRepository, entities)
+	server.PublicContent.SetPublicCategoryMembers(server.PublicCategoryMembers)
 	var sitemapTopics []topics.Definition
 	if len(catalogs) > 0 {
 		sitemapTopics = catalogs[0].Topics
@@ -191,15 +222,16 @@ func New(cfg config.Config, db *pgxpool.Pool, orm *gorm.DB, entities map[string]
 		AllLeavesOut: publicationSettings.AllFeedLeavesOut, DailyTime: cfg.SiteEditionDaily, WeeklyTime: cfg.SiteEditionWeekly, MonthlyTime: cfg.SiteEditionMonthly,
 		ReportMeasure: cfg.SiteReportEntryMeasure, ReportNoun: cfg.SiteReportEntryNoun, ImageProxySecret: cfg.ImageProxySignSecret,
 	})
-	server.Agent = agentmd.NewService(server.PublicContent, cfg.SiteName, cfg.SiteURL, server.CategoryLabels)
+	server.Agent = agentmd.NewService(server.PublicContent, cfg.SiteName, cfg.SiteURL, server.PublicCategoryLabels)
 	server.Agent.SetReportTerms(cfg.SiteReportEntryMeasure, cfg.SiteReportEntryNoun)
-	server.Agent.SetCategoryOrder(server.CategoryOrder)
-	server.MCPHandler = mcpapi.NewService(server.PublicContent, mcpapi.Config{
+	server.Agent.SetCategoryOrder(server.PublicCategoryOrder)
+	server.MCPService = mcpapi.NewService(server.PublicContent, mcpapi.Config{
 		Prefix: cfg.SiteMCPPrefix, Version: cfg.SiteInterfaceVersion, SiteName: cfg.SiteName, SiteURL: cfg.SiteURL,
 		DailyTime: cfg.SiteEditionDaily, WeeklyTime: cfg.SiteEditionWeekly, MonthlyTime: cfg.SiteEditionMonthly,
 		ReportMeasure: cfg.SiteReportEntryMeasure, ReportNoun: cfg.SiteReportEntryNoun,
-		Categories: server.CategoryLabels, CategoryOrder: server.CategoryOrder,
-	}).Handler()
+		Categories: server.PublicCategoryLabels, CategoryOrder: server.PublicCategoryOrder,
+	})
+	server.MCPHandler = server.MCPService.Handler()
 	if len(catalogs) > 0 && len(catalogs[0].TopicGroups) > 0 && len(catalogs[0].Topics) > 0 {
 		server.TopicGroups = append([]topics.Group(nil), catalogs[0].TopicGroups...)
 		server.Topics = topics.NewService(publicRepository, catalogs[0].TopicGroups, catalogs[0].Topics, topics.RuntimeConfig{

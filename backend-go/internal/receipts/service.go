@@ -8,12 +8,46 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
 const PendingStaleAfter = 10 * time.Minute
 
 var ErrBusy = errors.New("paid request is already in flight")
+var ErrShuttingDown = errors.New("paid request rejected while worker is shutting down")
+
+var workerCallGate = newCallGate()
+
+/** callGate prevents new paid provider requests after graceful shutdown begins. */
+type callGate struct {
+	mu     sync.Mutex
+	closed bool
+}
+
+/** newCallGate creates an admission gate for paid provider requests. */
+func newCallGate() *callGate {
+	return &callGate{}
+}
+
+/** admit reports whether a paid request may start before shutdown. */
+func (g *callGate) admit() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return !g.closed
+}
+
+/** beginShutdown prevents new paid requests from being admitted. */
+func (g *callGate) beginShutdown() {
+	g.mu.Lock()
+	g.closed = true
+	g.mu.Unlock()
+}
+
+/** BeginWorkerShutdown closes paid-request admission for the worker process. */
+func BeginWorkerShutdown() {
+	workerCallGate.beginShutdown()
+}
 
 type OutcomeUnknownError struct{ ReceiptID int64 }
 
@@ -73,11 +107,33 @@ type Repository interface {
 	Reject(context.Context, int64, string) error
 }
 
+/** reusableRepository reads a receipt without claiming budget or changing state. */
+type reusableRepository interface {
+	Reuse(context.Context, string) (Claim, error)
+}
+
 type Caller func(context.Context) (Outcome, error)
 
-type Service struct{ repository Repository }
+type Service struct {
+	repository Repository
+	gate       *callGate
+}
 
-func NewService(repository Repository) *Service { return &Service{repository: repository} }
+/** NewService creates the worker's paid-request service with process-wide shutdown admission. */
+func NewService(repository Repository) *Service {
+	return newServiceWithGate(repository, workerCallGate)
+}
+
+/** newServiceWithGate creates a paid-request service with the supplied admission gate. */
+func newServiceWithGate(repository Repository, gate *callGate) *Service {
+	if gate == nil {
+		gate = workerCallGate
+	}
+	return &Service{
+		repository: repository,
+		gate:       gate,
+	}
+}
 
 // Do persists the request identity before calling a paid provider. Received responses
 // are reusable until the caller commits its business result with Complete or Reject.
@@ -88,6 +144,9 @@ func (s *Service) Do(ctx context.Context, request Request, call Caller) (Result,
 	key, err := LogicalKeyFor(request)
 	if err != nil {
 		return Result{}, err
+	}
+	if !s.gate.admit() {
+		return s.reuseAfterShutdown(ctx, key)
 	}
 	claim, err := s.repository.Claim(ctx, request, key)
 	if err != nil {
@@ -100,7 +159,11 @@ func (s *Service) Do(ctx context.Context, request Request, call Caller) (Result,
 		return Result{}, &OutcomeUnknownError{ReceiptID: claim.ReceiptID}
 	}
 	if claim.Reused {
-		return Result{ReceiptID: claim.ReceiptID, Response: claim.Response, Reused: true}, nil
+		return Result{
+			ReceiptID: claim.ReceiptID,
+			Response:  claim.Response,
+			Reused:    true,
+		}, nil
 	}
 
 	started := time.Now()
@@ -132,6 +195,32 @@ func (s *Service) Do(ctx context.Context, request Request, call Caller) (Result,
 		return Result{}, err
 	}
 	return Result{ReceiptID: claim.ReceiptID, Response: outcome.Response}, nil
+}
+
+/** Reuses an existing response without claiming budget or starting a provider call. */
+func (s *Service) reuseAfterShutdown(ctx context.Context, logicalKey string) (Result, error) {
+	repository, ok := s.repository.(reusableRepository)
+	if !ok {
+		return Result{}, ErrShuttingDown
+	}
+
+	// Read only so shutdown cannot reserve budget or mutate the receipt.
+	claim, err := repository.Reuse(ctx, logicalKey)
+	if err != nil {
+		return Result{}, err
+	}
+	if claim.Reused {
+		return Result{ReceiptID: claim.ReceiptID, Response: claim.Response, Reused: true}, nil
+	}
+
+	// Preserve the existing busy/unknown semantics for receipts that cannot be reused.
+	if claim.Busy {
+		return Result{}, ErrBusy
+	}
+	if claim.Unknown {
+		return Result{}, &OutcomeUnknownError{ReceiptID: claim.ReceiptID}
+	}
+	return Result{}, ErrShuttingDown
 }
 
 func (s *Service) Complete(ctx context.Context, receiptID int64) error {

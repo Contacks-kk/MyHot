@@ -2,6 +2,7 @@ package publiccontent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -19,6 +20,28 @@ type siteTimelineFixtureRepository struct {
 	items   []topics.PageItemRow
 	days    map[string]int
 	query   SiteTimelineQuery
+	itemIDs []string
+}
+
+/** TestSiteTimelineGroupsDatesByBeijingMidnight keeps leap-day and year boundaries stable. */
+func TestSiteTimelineGroupsDatesByBeijingMidnight(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		at   time.Time
+		want string
+	}{
+		{name: "before year boundary", at: time.Date(2023, time.December, 31, 15, 59, 59, 999_000_000, time.UTC), want: "2023-12-31"},
+		{name: "year boundary", at: time.Date(2023, time.December, 31, 16, 0, 0, 0, time.UTC), want: "2024-01-01"},
+		{name: "leap day starts", at: time.Date(2024, time.February, 28, 16, 0, 0, 0, time.UTC), want: "2024-02-29"},
+		{name: "before leap day ends", at: time.Date(2024, time.February, 29, 15, 59, 59, 999_000_000, time.UTC), want: "2024-02-29"},
+		{name: "after leap day", at: time.Date(2024, time.February, 29, 16, 0, 0, 0, time.UTC), want: "2024-03-01"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := beijingDate(test.at); got != test.want {
+				t.Fatalf("beijingDate(%s) = %q, want %q", test.at.Format(time.RFC3339Nano), got, test.want)
+			}
+		})
+	}
 }
 
 func (r *siteTimelineFixtureRepository) SiteTimelineAnchors(_ context.Context, query SiteTimelineQuery, _ time.Time, after *siteTimelineCursor, limit int) ([]SiteTimelineAnchor, error) {
@@ -40,7 +63,9 @@ func (r *siteTimelineFixtureRepository) SiteTimelineFacts(context.Context, SiteT
 	return r.facts, nil
 }
 
+/** SiteTimelineItems records the service's hydration scope and returns matching fixtures. */
 func (r *siteTimelineFixtureRepository) SiteTimelineItems(_ context.Context, _ SiteTimelineQuery, _ time.Time, ids []string) ([]topics.PageItemRow, error) {
+	r.itemIDs = append([]string(nil), ids...)
 	wanted := map[string]bool{}
 	for _, id := range ids {
 		wanted[id] = true
@@ -58,6 +83,7 @@ func (r *siteTimelineFixtureRepository) SiteTimelineDayCounts(context.Context, S
 	return r.days, nil
 }
 
+/** TestSiteTimelineBuildsCursorAndKeepsFilteredCardContract protects the compact card wire shape. */
 func TestSiteTimelineBuildsCursorAndKeepsFilteredCardContract(t *testing.T) {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 	first := now.Add(-time.Minute).Truncate(time.Millisecond)
@@ -77,11 +103,31 @@ func TestSiteTimelineBuildsCursorAndKeepsFilteredCardContract(t *testing.T) {
 	if len(got.Cards) != 1 || got.Cards[0].Key != "aarticle-1" || got.Cards[0].Item.Title != "First selected article" || got.Cards[0].Group != nil {
 		t.Fatalf("timeline cards = %#v", got.Cards)
 	}
+	if !reflect.DeepEqual(repository.itemIDs, []string{"article-1"}) {
+		t.Fatalf("hydrated item IDs = %v, want only the representative on this page", repository.itemIDs)
+	}
 	if got.NextCursor == nil || got.Filters.Channel != "news" || got.Filters.Category == nil || *got.Filters.Category != category || got.Filters.Tag == nil || *got.Filters.Tag != tag || !reflect.DeepEqual(got.DayCounts, repository.days) {
 		t.Fatalf("timeline metadata = %#v", got)
 	}
 	if got.Cards[0].Item.SameEvent != nil {
 		t.Fatalf("timeline added a field the TypeScript timeline does not return: %#v", got.Cards[0].Item.SameEvent)
+	}
+	encoded, err := json.Marshal(got.Cards[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var card map[string]any
+	if err := json.Unmarshal(encoded, &card); err != nil {
+		t.Fatal(err)
+	}
+	item, ok := card["item"].(map[string]any)
+	if !ok {
+		t.Fatalf("timeline card item = %T", card["item"])
+	}
+	for _, field := range []string{"links", "originalTitle", "revision", "discoveredAt", "story", "body"} {
+		if _, exists := item[field]; exists {
+			t.Errorf("timeline card unexpectedly serialized detail field %q: %s", field, encoded)
+		}
 	}
 	decoded, err := decodeSiteTimelineCursor(*got.NextCursor)
 	if err != nil || decoded.Anchor != first.UnixMilli() || decoded.GroupKey != "aarticle-1" || decoded.Binding != siteTimelineBindingHash(query) {
@@ -89,35 +135,79 @@ func TestSiteTimelineBuildsCursorAndKeepsFilteredCardContract(t *testing.T) {
 	}
 }
 
+/** TestSiteTimelineKeepsRepresentativeAndFactGroupCounts hydrates only selected group representatives. */
 func TestSiteTimelineKeepsRepresentativeAndFactGroupCounts(t *testing.T) {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
-	anchor := now.Add(-time.Minute)
+	firstAnchor := now.Add(-time.Minute)
+	secondAnchor := now.Add(-10 * 24 * time.Hour)
 	organization, person := "organization", "person"
 	owner := "openai"
+	reports := []struct {
+		factID    int64
+		articleID string
+		sourceID  string
+		role      string
+		at        time.Time
+	}{
+		{factID: 42, articleID: "person-report-42", sourceID: "source-person-42", role: person, at: firstAnchor},
+		{factID: 42, articleID: "official-report-42", sourceID: "source-official-42", role: organization, at: firstAnchor},
+		{factID: 42, articleID: "other-report-42-1", sourceID: "source-other-42-1", role: person, at: firstAnchor},
+		{factID: 42, articleID: "other-report-42-2", sourceID: "source-other-42-2", role: person, at: firstAnchor},
+		{factID: 42, articleID: "other-report-42-3", sourceID: "source-other-42-3", role: person, at: firstAnchor},
+		{factID: 42, articleID: "other-report-42-4", sourceID: "source-other-42-4", role: person, at: firstAnchor},
+		{factID: 43, articleID: "person-report-43", sourceID: "source-person-43", role: person, at: secondAnchor},
+		{factID: 43, articleID: "official-report-43", sourceID: "source-official-43", role: organization, at: secondAnchor},
+		{factID: 43, articleID: "other-report-43-1", sourceID: "source-other-43-1", role: person, at: secondAnchor},
+		{factID: 43, articleID: "other-report-43-2", sourceID: "source-other-43-2", role: person, at: secondAnchor},
+		{factID: 43, articleID: "other-report-43-3", sourceID: "source-other-43-3", role: person, at: secondAnchor},
+		{factID: 43, articleID: "other-report-43-4", sourceID: "source-other-43-4", role: person, at: secondAnchor},
+	}
+	members := make([]SiteTimelineMember, 0, len(reports))
+	pool := make([]SiteTimelinePoolReport, 0, len(reports))
+	items := make([]topics.PageItemRow, 0, len(reports))
+	for _, report := range reports {
+		role := report.role
+		bodyMode := "full"
+		if report.role == organization {
+			bodyMode = "summary"
+		}
+		members = append(members, SiteTimelineMember{
+			FactID: report.factID, ArticleID: report.articleID, SourceID: report.sourceID,
+			SourceTier: "T2", PublisherRole: &role, OwnerEntityID: &owner,
+			FactSubject: stringPointer("OpenAI"),
+			Item:        topics.PageItemRow{ID: report.articleID, Title: report.articleID, BodyMode: bodyMode, TimelineAt: report.at},
+		})
+		pool = append(pool, SiteTimelinePoolReport{FactID: report.factID, ArticleID: report.articleID, SourceID: report.sourceID})
+		items = append(items, topics.PageItemRow{
+			ID: report.articleID, Title: report.articleID, Channel: "news", BodyMode: bodyMode, TimelineAt: report.at,
+		})
+	}
 	repository := &siteTimelineFixtureRepository{
 		fakeRepository: &fakeRepository{},
-		anchors:        []SiteTimelineAnchor{{Key: "f42", AnchorAt: anchor}},
+		anchors:        []SiteTimelineAnchor{{Key: "f42", AnchorAt: firstAnchor}, {Key: "f43", AnchorAt: secondAnchor}},
 		facts: SiteTimelineFactData{
-			Members: []SiteTimelineMember{
-				{FactID: 42, ArticleID: "person-report", SourceID: "source-person", SourceTier: "T2", PublisherRole: &person, OwnerEntityID: &owner, FactSubject: stringPointer("OpenAI"), Item: topics.PageItemRow{ID: "person-report", Title: "Person", BodyMode: "full", TimelineAt: anchor}},
-				{FactID: 42, ArticleID: "official-report", SourceID: "source-official", SourceTier: "T2", PublisherRole: &organization, OwnerEntityID: &owner, FactSubject: stringPointer("OpenAI"), Item: topics.PageItemRow{ID: "official-report", Title: "Official", BodyMode: "summary", TimelineAt: anchor}},
-			},
-			Pool:  []SiteTimelinePoolReport{{FactID: 42, ArticleID: "official-report", SourceID: "source-official"}, {FactID: 42, ArticleID: "other-report", SourceID: "source-other"}, {FactID: 42, ArticleID: "third-report", SourceID: "source-third"}},
-			Facts: []SiteTimelineFact{{ID: 42, PublicID: "public-fact-42"}},
+			Members: members,
+			Pool:    pool,
+			Facts:   []SiteTimelineFact{{ID: 42, PublicID: "public-fact-42"}, {ID: 43, PublicID: "public-fact-43"}},
 		},
-		items: []topics.PageItemRow{{ID: "official-report", Title: "Official", Channel: "news", BodyMode: "summary", TimelineAt: anchor}},
+		items: items,
 	}
 	entities := map[string]interests.Entity{"openai": {Name: "OpenAI", Aliases: []string{"Open AI"}}}
 	got, err := NewService(repository, entities).SiteTimeline(context.Background(), SiteTimelineQuery{Channel: "news", Limit: 20}, now, "", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Cards) != 1 || got.Cards[0].Item.ID != "official-report" {
+	if len(got.Cards) != 2 || got.Cards[0].Item.ID != "official-report-42" || got.Cards[1].Item.ID != "official-report-43" {
 		t.Fatalf("representative card = %#v", got.Cards)
 	}
-	want := &SiteTimelineGroup{FactID: "public-fact-42", ReportCount: 3, AdditionalSourceCount: 2}
-	if !reflect.DeepEqual(got.Cards[0].Group, want) {
-		t.Fatalf("fact group = %#v, want %#v", got.Cards[0].Group, want)
+	if !reflect.DeepEqual(repository.itemIDs, []string{"official-report-42", "official-report-43"}) {
+		t.Fatalf("hydrated item IDs = %v, want only the two representatives", repository.itemIDs)
+	}
+	for index, factID := range []string{"public-fact-42", "public-fact-43"} {
+		want := &SiteTimelineGroup{FactID: factID, ReportCount: 6, AdditionalSourceCount: 5}
+		if !reflect.DeepEqual(got.Cards[index].Group, want) {
+			t.Fatalf("fact group %d = %#v, want %#v", index, got.Cards[index].Group, want)
+		}
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -36,6 +37,7 @@ import (
 	"aihot/backend-go/internal/ingest"
 	"aihot/backend-go/internal/interests"
 	"aihot/backend-go/internal/mailer"
+	"aihot/backend-go/internal/mcpapi"
 	"aihot/backend-go/internal/personal"
 	"aihot/backend-go/internal/publiccontent"
 	"aihot/backend-go/internal/receiptrecovery"
@@ -49,42 +51,47 @@ const sessionCookie = "myhot_session"
 const sessionLifetime = 30 * 24 * time.Hour
 
 type Server struct {
-	Config           config.Config
-	ContactDir       string
-	Entities         map[string]interests.Entity
-	CategoryKeys     map[string]struct{}
-	CategoryOrder    []string
-	CategoryLabels   map[string]string
-	Catalog          *interests.CatalogService
-	TopicDefinitions []topics.Definition
-	TopicGroups      []topics.Group
-	ReportSubject    string
-	limiter          *rateLimiter
-	MailSender       mailer.Sender
-	Accounts         *account.Service
-	Agent            *agentmd.Service
-	AdminAuth        *adminauth.Service
-	AdminContent     *admincontent.Service
-	AdminDeliveries  *admindeliveries.Service
-	ReceiptRecovery  *receiptrecovery.Service
-	AdminOps         *adminops.Service
-	AdminRuns        *adminruns.Service
-	AdminSources     *adminsources.Service
-	AdminLabels      *adminlabels.Service
-	UserSources      *usersources.Service
-	FeedDiscovery    *feeddiscovery.Service
-	AdminSelectBench *adminselectbench.Service
-	AdminSettings    *adminsettings.Service
-	AdminModels      *adminmodels.Service
-	Feedback         *feedback.Service
-	Ingest           *ingest.Service
-	Feeds            *feeds.Service
-	Discovery        *discovery.Service
-	Personal         *personal.Service
-	PublicContent    *publiccontent.Service
-	MCPHandler       http.Handler
-	MediaProxy       http.Handler
-	Topics           interface {
+	Config                config.Config
+	Logger                *slog.Logger
+	ContactDir            string
+	Entities              map[string]interests.Entity
+	CategoryKeys          map[string]struct{}
+	CategoryOrder         []string
+	CategoryLabels        map[string]string
+	PublicCategoryOrder   []string
+	PublicCategoryLabels  map[string]string
+	PublicCategoryMembers map[string][]string
+	Catalog               *interests.CatalogService
+	TopicDefinitions      []topics.Definition
+	TopicGroups           []topics.Group
+	ReportSubject         string
+	limiter               *rateLimiter
+	MailSender            mailer.Sender
+	Accounts              *account.Service
+	Agent                 *agentmd.Service
+	AdminAuth             *adminauth.Service
+	AdminContent          *admincontent.Service
+	AdminDeliveries       *admindeliveries.Service
+	ReceiptRecovery       *receiptrecovery.Service
+	AdminOps              *adminops.Service
+	AdminRuns             *adminruns.Service
+	AdminSources          *adminsources.Service
+	AdminLabels           *adminlabels.Service
+	UserSources           *usersources.Service
+	FeedDiscovery         *feeddiscovery.Service
+	AdminSelectBench      *adminselectbench.Service
+	AdminSettings         *adminsettings.Service
+	AdminModels           *adminmodels.Service
+	Feedback              *feedback.Service
+	Ingest                *ingest.Service
+	Feeds                 *feeds.Service
+	Discovery             *discovery.Service
+	Personal              *personal.Service
+	PublicContent         *publiccontent.Service
+	MCPService            *mcpapi.Service
+	MCPHandler            http.Handler
+	MediaProxy            http.Handler
+	Topics                interface {
 		List(context.Context, time.Time) (topics.Response, error)
 		Page(context.Context, string, float64, time.Time) (*topics.TopicPage, error)
 	}
@@ -100,6 +107,34 @@ type Server struct {
 	EnqueueConnectionTest personal.ConnectionTestEnqueuer
 	EnqueueManualDaily    func(context.Context, int64) (int64, error)
 	ConnectionTestKind    string
+}
+
+/** ShutdownMCP closes active MCP streams before the HTTP server drains requests. */
+func (s *Server) ShutdownMCP() {
+	if s.MCPService != nil {
+		s.MCPService.Close()
+	}
+}
+
+/** resolvePublicCategory validates a public category and returns the stored categories it covers. */
+func (s *Server) resolvePublicCategory(category string) ([]string, bool) {
+	if members, exists := s.PublicCategoryMembers[category]; exists && len(members) > 0 {
+		return append([]string(nil), members...), true
+	}
+	if len(s.PublicCategoryMembers) == 0 {
+		if _, exists := s.CategoryKeys[category]; exists {
+			return []string{category}, true
+		}
+	}
+	return nil, false
+}
+
+/** publicCategoryOptions returns the stable categories accepted by public API filters. */
+func (s *Server) publicCategoryOptions() []string {
+	if len(s.PublicCategoryMembers) > 0 || len(s.PublicCategoryOrder) > 0 {
+		return s.PublicCategoryOrder
+	}
+	return s.CategoryOrder
 }
 
 /** Handler builds the API routing and middleware. */
@@ -196,6 +231,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/admin/processing/requeue", s.adminProcessingRequeue)
 	mux.HandleFunc("GET /api/admin/content", s.adminContentSearch)
 	mux.HandleFunc("GET /api/admin/content/{id}", s.adminContentDetail)
+	mux.HandleFunc("GET /api/admin/content/{id}/x-encoding", s.adminContentXEncodingPreview)
+	mux.HandleFunc("POST /api/admin/content/{id}/x-encoding", s.adminContentXEncodingNormalize)
+	mux.HandleFunc("GET /api/admin/content/{id}/publication-date", s.adminContentPublicationDatePreview)
+	mux.HandleFunc("POST /api/admin/content/{id}/publication-date", s.adminContentPublicationDateCorrect)
 	mux.HandleFunc("POST /api/admin/content/{id}/seo", s.adminContentSEO)
 	mux.HandleFunc("POST /api/admin/content/{id}/visibility", s.adminContentVisibility)
 	mux.HandleFunc("POST /api/admin/content/{id}/override", s.adminContentOverride)
@@ -259,7 +298,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/me/sources/{id}/fetch", s.withUser(s.userSourceFetch))
 	mux.HandleFunc("GET /api/me/sources/{id}/fetch/{jobId}", s.withUser(s.userSourceFetchStatus))
 	mux.HandleFunc("/api/", s.apiFallback)
-	return securityHeaders(mux)
+	return logServerFailures(s.Logger, securityHeaders(mux))
 }
 
 func (s *Server) apiFallback(w http.ResponseWriter, r *http.Request) {

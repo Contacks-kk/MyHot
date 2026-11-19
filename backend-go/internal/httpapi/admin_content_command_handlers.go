@@ -8,6 +8,123 @@ import (
 	"aihot/backend-go/internal/admincontent"
 )
 
+/** adminContentXEncodingPreview returns the current X repair plan to an authenticated administrator. */
+func (s *Server) adminContentXEncodingPreview(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
+	if s.AdminContent == nil {
+		writeAdminProblem(w, http.StatusServiceUnavailable, "temporarily_unavailable", "Temporarily unavailable.")
+		return
+	}
+	plan, err := s.AdminContent.PreviewXEncodingRepair(r.Context(), r.PathValue("id"))
+	if err != nil {
+		switch {
+		case errors.Is(err, admincontent.ErrInvalidCommand):
+			writeAdminProblem(w, http.StatusBadRequest, "invalid_request", err.Error())
+		case errors.Is(err, admincontent.ErrXEncodingRepairUnavailable):
+			writeAdminProblem(w, http.StatusServiceUnavailable, "temporarily_unavailable", "Temporarily unavailable.")
+		default:
+			writeAdminProblem(w, http.StatusUnprocessableEntity, "invalid_material", err.Error())
+		}
+		return
+	}
+	if plan == nil {
+		writeAdminProblem(w, http.StatusNotFound, "not_found", "Not found.")
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
+}
+
+/** adminContentXEncodingNormalize commits the exact preview approved by the operator. */
+func (s *Server) adminContentXEncodingNormalize(w http.ResponseWriter, r *http.Request) {
+	admin, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	if s.AdminContent == nil {
+		writeAdminProblem(w, http.StatusServiceUnavailable, "temporarily_unavailable", "Temporarily unavailable.")
+		return
+	}
+	var input admincontent.XEncodingRepairInput
+	if !readAdminJSON(w, r, &input) {
+		return
+	}
+	result, found, err := s.AdminContent.NormalizeXEncoding(r.Context(), r.PathValue("id"), input, adminActor(admin))
+	if !adminContentCommandResult(w, err, found) {
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+/** adminContentPublicationDatePreview returns the proof-bound plan for an administrator-reviewed date change. */
+func (s *Server) adminContentPublicationDatePreview(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
+	if s.AdminContent == nil {
+		writeAdminProblem(w, http.StatusServiceUnavailable, "temporarily_unavailable", "Temporarily unavailable.")
+		return
+	}
+	publishedAt := r.URL.Query().Get("publishedAt")
+	if publishedAt == "" {
+		writeAdminProblem(w, http.StatusBadRequest, "invalid_request", "publishedAt is required")
+		return
+	}
+	plan, err := s.AdminContent.PreviewPublicationDateCorrection(r.Context(), r.PathValue("id"), publishedAt)
+	if err != nil {
+		switch {
+		case errors.Is(err, admincontent.ErrInvalidCommand), errors.Is(err, admincontent.ErrInvalidPublicationDateCorrection):
+			writeAdminProblem(w, http.StatusBadRequest, "invalid_request", err.Error())
+		case errors.Is(err, admincontent.ErrPublicationDateCorrectionUnavailable):
+			writeAdminProblem(w, http.StatusServiceUnavailable, "temporarily_unavailable", "Temporarily unavailable.")
+		default:
+			writeAdminProblem(w, http.StatusInternalServerError, "internal_error", err.Error())
+		}
+		return
+	}
+	if plan == nil {
+		writeAdminProblem(w, http.StatusNotFound, "not_found", "Not found.")
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
+}
+
+/** adminContentPublicationDateCorrect commits the date approved through the preview endpoint. */
+func (s *Server) adminContentPublicationDateCorrect(w http.ResponseWriter, r *http.Request) {
+	admin, ok := s.requireAdmin(w, r)
+	if !ok {
+		return
+	}
+	if s.AdminContent == nil {
+		writeAdminProblem(w, http.StatusServiceUnavailable, "temporarily_unavailable", "Temporarily unavailable.")
+		return
+	}
+	var input admincontent.PublicationDateCorrectionInput
+	if !readAdminJSON(w, r, &input) {
+		return
+	}
+	result, found, err := s.AdminContent.CorrectPublicationDate(r.Context(), r.PathValue("id"), input, adminActor(admin))
+	if err != nil {
+		switch {
+		case errors.Is(err, admincontent.ErrInvalidCommand), errors.Is(err, admincontent.ErrInvalidPublicationDateCorrection):
+			writeAdminProblem(w, http.StatusBadRequest, "invalid_request", err.Error())
+		case errors.Is(err, admincontent.ErrCommandConflict):
+			writeAdminProblem(w, http.StatusConflict, "conflict", err.Error())
+		case errors.Is(err, admincontent.ErrPublicationDateCorrectionUnavailable):
+			writeAdminProblem(w, http.StatusServiceUnavailable, "temporarily_unavailable", "Temporarily unavailable.")
+		default:
+			writeAdminProblem(w, http.StatusInternalServerError, "internal_error", err.Error())
+		}
+		return
+	}
+	if !found {
+		writeAdminProblem(w, http.StatusNotFound, "not_found", "Not found.")
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) adminContentVisibility(w http.ResponseWriter, r *http.Request) {
 	admin, ok := s.requireAdmin(w, r)
 	if !ok {
@@ -159,6 +276,10 @@ func adminContentCommandResult(w http.ResponseWriter, err error, found bool) boo
 		case errors.Is(err, admincontent.ErrCommandConflict):
 			writeAdminProblem(w, http.StatusConflict, "conflict", err.Error())
 		case errors.Is(err, admincontent.ErrCommandsUnavailable):
+			writeAdminProblem(w, http.StatusServiceUnavailable, "temporarily_unavailable", "Temporarily unavailable.")
+		case errors.Is(err, admincontent.ErrXEncodingRepairUnavailable):
+			writeAdminProblem(w, http.StatusServiceUnavailable, "temporarily_unavailable", "Temporarily unavailable.")
+		case errors.Is(err, admincontent.ErrPublicationDateCorrectionUnavailable):
 			writeAdminProblem(w, http.StatusServiceUnavailable, "temporarily_unavailable", "Temporarily unavailable.")
 		default:
 			writeAdminProblem(w, http.StatusInternalServerError, "internal_error", err.Error())

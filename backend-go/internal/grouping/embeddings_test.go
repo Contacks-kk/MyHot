@@ -51,13 +51,16 @@ func (r *embeddingRepositoryStub) SaveEmbeddingsAndComplete(_ context.Context, _
 
 type embeddingReceiptRepositoryStub struct {
 	request  receipts.Request
+	requests []receipts.Request
 	response json.RawMessage
 	rejected int64
 	err      error
 }
 
+/** Claim records the receipt identity used by each embedding request. */
 func (r *embeddingReceiptRepositoryStub) Claim(_ context.Context, request receipts.Request, _ string) (receipts.Claim, error) {
 	r.request = request
+	r.requests = append(r.requests, request)
 	return receipts.Claim{ReceiptID: 42, AttemptID: 43}, r.err
 }
 func (*embeddingReceiptRepositoryStub) RecordFailure(context.Context, receipts.Claim, string, string, time.Duration) error {
@@ -74,14 +77,17 @@ func (r *embeddingReceiptRepositoryStub) Reject(_ context.Context, id int64, _ s
 }
 
 type embeddingProviderStub struct {
-	calls  int
-	texts  [][]string
-	result func([]string) EmbeddingResponse
-	err    error
+	calls   int
+	texts   [][]string
+	configs []EmbeddingConfig
+	result  func([]string) EmbeddingResponse
+	err     error
 }
 
-func (p *embeddingProviderStub) Embed(_ context.Context, _ EmbeddingConfig, texts []string) (EmbeddingResponse, error) {
+/** Embed records the requested dimensions and returns the configured fake provider response. */
+func (p *embeddingProviderStub) Embed(_ context.Context, config EmbeddingConfig, texts []string) (EmbeddingResponse, error) {
 	p.calls++
+	p.configs = append(p.configs, config)
 	p.texts = append(p.texts, append([]string(nil), texts...))
 	if p.err != nil {
 		return EmbeddingResponse{}, p.err
@@ -99,6 +105,36 @@ func TestEmbeddingConfigMatchesOpenAIAndDashScopeDefaults(t *testing.T) {
 	dashscope := EmbeddingConfigFromRuntime(false, func(key string) string { return values[key] })
 	if dashscope.Service != "dashscope" || dashscope.Model != "text-embedding-v4" || dashscope.BaseURL != "https://dashscope.aliyuncs.com/compatible-mode/v1" || dashscope.Dimensions != 1024 || dashscope.Enabled {
 		t.Fatalf("DashScope defaults changed: %#v", dashscope)
+	}
+}
+
+/** TestEmbeddingRequestDimensionsFollowProviderConfiguration keeps provider-selected sizing explicit. */
+func TestEmbeddingRequestDimensionsFollowProviderConfiguration(t *testing.T) {
+	for _, fixture := range []struct {
+		name       string
+		dimensions int
+		wantField  bool
+	}{
+		{name: "provider selected", dimensions: 0},
+		{name: "configured", dimensions: 4, wantField: true},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			encoded, err := json.Marshal(embeddingRequestBody(EmbeddingConfig{Model: "model", Dimensions: fixture.dimensions}, []string{"text"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var request map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &request); err != nil {
+				t.Fatal(err)
+			}
+			_, hasDimensions := request["dimensions"]
+			if hasDimensions != fixture.wantField {
+				t.Fatalf("dimensions field presence = %t, want %t: %s", hasDimensions, fixture.wantField, encoded)
+			}
+			if fixture.wantField && string(request["dimensions"]) != "4" {
+				t.Fatalf("configured dimensions = %s, want 4", request["dimensions"])
+			}
+		})
 	}
 }
 
@@ -169,17 +205,156 @@ func TestEmbeddingMemoryCacheTracksArticleRevision(t *testing.T) {
 	}
 }
 
+/** TestEmbeddingStoreRejectsMalformedReceivedResponse keeps invalid paid vectors out of storage. */
 func TestEmbeddingStoreRejectsMalformedReceivedResponse(t *testing.T) {
-	stored := &embeddingRepositoryStub{}
+	invalidResponses := []struct {
+		name string
+		body string
+	}{
+		{name: "null response", body: `null`},
+		{name: "wrong response type", body: `"not a response object"`},
+		{name: "empty data", body: `{"data":[]}`},
+		{name: "duplicate indices", body: `{"data":[{"index":0,"embedding":[1,0]},{"index":0,"embedding":[0,1]}]}`},
+		{name: "wrong dimensions", body: `{"data":[{"index":0,"embedding":[1,0]},{"index":1,"embedding":[1]}]}`},
+		{name: "null coordinate", body: `{"data":[{"index":0,"embedding":[1,null]},{"index":1,"embedding":[0,1]}]}`},
+	}
+	for _, fixture := range invalidResponses {
+		t.Run(fixture.name, func(t *testing.T) {
+			stored := &embeddingRepositoryStub{}
+			receiptRepository := &embeddingReceiptRepositoryStub{}
+			provider := &embeddingProviderStub{result: func([]string) EmbeddingResponse {
+				return EmbeddingResponse{Body: json.RawMessage(fixture.body)}
+			}}
+			store := NewEmbeddingStore(stored, receipts.NewService(receiptRepository), EmbeddingConfig{
+				Enabled: true, Service: "embedding", Model: "m", APIKey: "key", Dimensions: 2,
+			}, provider)
+			_, err := store.Ensure(context.Background(), []VectorInput{{ID: "a", Text: "a"}, {ID: "b", Text: "b"}})
+			var outputError *EmbeddingOutputError
+			if !errors.As(err, &outputError) || outputError.ReceiptID != 42 || receiptRepository.rejected != 42 || len(receiptRepository.response) == 0 || stored.saves != 0 {
+				t.Fatalf("malformed embeddings were accepted: err=%v rejected=%d response=%s saves=%d", err, receiptRepository.rejected, receiptRepository.response, stored.saves)
+			}
+		})
+	}
+}
+
+/** TestEmbeddingStoreRecomputesStaleDimensionsAcrossConfiguredStores rejects vectors from another configured dimension. */
+func TestEmbeddingStoreRecomputesStaleDimensionsAcrossConfiguredStores(t *testing.T) {
+	text := "same embedding input"
+	stored := &embeddingRepositoryStub{stored: map[string]StoredEmbedding{
+		"article": {ID: "article", Hash: hashEmbeddingText(text), Vector: []float32{1, 0}},
+	}}
 	receiptRepository := &embeddingReceiptRepositoryStub{}
 	provider := &embeddingProviderStub{result: func([]string) EmbeddingResponse {
-		return EmbeddingResponse{Body: json.RawMessage(`{"data":[{"index":0,"embedding":[1,0]},{"index":0,"embedding":[0,1]}]}`)}
+		encoded, _ := json.Marshal(map[string]any{"data": []map[string]any{{"index": 0, "embedding": []float32{0, 1, 0, 1}}}})
+		return EmbeddingResponse{Body: encoded}
 	}}
-	store := NewEmbeddingStore(stored, receipts.NewService(receiptRepository), EmbeddingConfig{Enabled: true, Service: "embedding", Model: "m", APIKey: "key"}, provider)
-	_, err := store.Ensure(context.Background(), []VectorInput{{ID: "a", Text: "a"}, {ID: "b", Text: "b"}})
-	var outputError *EmbeddingOutputError
-	if !errors.As(err, &outputError) || outputError.ReceiptID != 42 || receiptRepository.rejected != 42 || stored.saves != 0 {
-		t.Fatalf("malformed embeddings were accepted: err=%v rejected=%d saves=%d", err, receiptRepository.rejected, stored.saves)
+	fourDimensions := NewEmbeddingStore(stored, receipts.NewService(receiptRepository), EmbeddingConfig{
+		Enabled:    true,
+		Service:    "embedding",
+		Model:      "m",
+		APIKey:     "key",
+		Dimensions: 4,
+	}, provider)
+	first, err := fourDimensions.Ensure(context.Background(), []VectorInput{{ID: "article", Text: text}})
+	if err != nil || len(first["article"]) != 4 || provider.calls != 1 {
+		t.Fatalf("stale stored dimensions were reused: vector=%v calls=%d err=%v", first["article"], provider.calls, err)
+	}
+	provider.result = func([]string) EmbeddingResponse {
+		encoded, _ := json.Marshal(map[string]any{"data": []map[string]any{{"index": 0, "embedding": []float32{1, 0}}}})
+		return EmbeddingResponse{Body: encoded}
+	}
+	twoDimensions := NewEmbeddingStore(stored, receipts.NewService(receiptRepository), EmbeddingConfig{
+		Enabled:    true,
+		Service:    "embedding",
+		Model:      "m",
+		APIKey:     "key",
+		Dimensions: 2,
+	}, provider)
+	second, err := twoDimensions.Ensure(context.Background(), []VectorInput{{ID: "article", Text: text}})
+	if err != nil || len(second["article"]) != 2 || provider.calls != 2 || stored.saves != 2 {
+		t.Fatalf("dimension change did not refresh the stored vector: vector=%v calls=%d saves=%d err=%v", second["article"], provider.calls, stored.saves, err)
+	}
+	if len(provider.configs) != 2 || provider.configs[0].Dimensions != 4 || provider.configs[1].Dimensions != 2 {
+		t.Fatalf("provider dimensions = %#v", provider.configs)
+	}
+	if len(receiptRepository.requests) != 2 {
+		t.Fatalf("unexpected embedding receipt count: %#v", receiptRepository.requests)
+	}
+	firstIdentity, firstOK := receiptRepository.requests[0].Identity.(map[string]any)
+	secondIdentity, secondOK := receiptRepository.requests[1].Identity.(map[string]any)
+	if !firstOK || !secondOK || firstIdentity["dims"] != 4 || secondIdentity["dims"] != 2 {
+		t.Fatalf("dimension-specific paid receipt identity changed: %#v", receiptRepository.requests)
+	}
+}
+
+/** TestEmbeddingStoreAcceptsProviderSelectedDimensions keeps old vectors and rejects cross-size similarity. */
+func TestEmbeddingStoreAcceptsProviderSelectedDimensions(t *testing.T) {
+	oldText := "stored provider-sized vector"
+	stored := &embeddingRepositoryStub{stored: map[string]StoredEmbedding{
+		"old": {ID: "old", Hash: hashEmbeddingText(oldText), Vector: []float32{1, 0}},
+	}}
+	receiptRepository := &embeddingReceiptRepositoryStub{}
+	provider := &embeddingProviderStub{result: func([]string) EmbeddingResponse {
+		encoded, _ := json.Marshal(map[string]any{"data": []map[string]any{{"index": 0, "embedding": []float32{1, 0, 0, 0, 0, 0}}}})
+		return EmbeddingResponse{Body: encoded}
+	}}
+	store := NewEmbeddingStore(stored, receipts.NewService(receiptRepository), EmbeddingConfig{
+		Enabled: true, Service: "embedding", Model: "m", APIKey: "key", Dimensions: 0,
+	}, provider)
+	vectors, err := store.Ensure(context.Background(), []VectorInput{
+		{ID: "old", Text: oldText},
+		{ID: "fresh", Text: "fresh provider-sized vector"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vectors["old"]) != 2 || len(vectors["fresh"]) != 6 || provider.calls != 1 || len(provider.texts[0]) != 1 {
+		t.Fatalf("provider-selected vector sizes changed: vectors=%v calls=%d texts=%v", vectors, provider.calls, provider.texts)
+	}
+	if Cosine32(vectors["old"], vectors["fresh"]) != 0 {
+		t.Fatalf("different provider-selected dimensions compared as similar: old=%v fresh=%v", vectors["old"], vectors["fresh"])
+	}
+	if len(receiptRepository.requests) != 1 {
+		t.Fatalf("unexpected provider receipt count: %#v", receiptRepository.requests)
+	}
+	identity, ok := receiptRepository.requests[0].Identity.(map[string]any)
+	if !ok || identity["dims"] != 0 {
+		t.Fatalf("provider-selected dimensions are missing from receipt identity: %#v", receiptRepository.requests[0].Identity)
+	}
+}
+
+/** TestEmbeddingStoreRecomputesStoredNonFiniteVectors rejects NaN and infinity from persisted embeddings. */
+func TestEmbeddingStoreRecomputesStoredNonFiniteVectors(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		vector []float32
+	}{
+		{name: "nan", vector: []float32{1, math.Float32frombits(0x7fc00000), 0, 0}},
+		{name: "positive infinity", vector: []float32{1, math.Float32frombits(0x7f800000), 0, 0}},
+		{name: "negative infinity", vector: []float32{1, math.Float32frombits(0xff800000), 0, 0}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			text := "persisted embedding"
+			stored := &embeddingRepositoryStub{stored: map[string]StoredEmbedding{
+				"article": {ID: "article", Hash: hashEmbeddingText(text), Vector: test.vector},
+			}}
+			receiptRepository := &embeddingReceiptRepositoryStub{}
+			provider := &embeddingProviderStub{result: func([]string) EmbeddingResponse {
+				encoded, _ := json.Marshal(map[string]any{"data": []map[string]any{{"index": 0, "embedding": []float32{0, 1, 0, 0}}}})
+				return EmbeddingResponse{Body: encoded}
+			}}
+			store := NewEmbeddingStore(stored, receipts.NewService(receiptRepository), EmbeddingConfig{
+				Enabled:    true,
+				Service:    "embedding",
+				Model:      "m",
+				APIKey:     "key",
+				Dimensions: 4,
+			}, provider)
+			vectors, err := store.Ensure(context.Background(), []VectorInput{{ID: "article", Text: text}})
+			if err != nil || provider.calls != 1 || stored.saves != 1 || !validVector(vectors["article"], 4) {
+				t.Fatalf("non-finite vector was reused: vectors=%v calls=%d saves=%d err=%v", vectors, provider.calls, stored.saves, err)
+			}
+		})
 	}
 }
 
@@ -206,7 +381,7 @@ func TestEmbeddingStoreBatchesAtProviderLimit(t *testing.T) {
 }
 
 func TestDecodePostgresFloatArray(t *testing.T) {
-	vector := []float32{1.5, -2}
+	vector := []float32{1.5, -2, math.Float32frombits(0x80000000), math.Float32frombits(1)}
 	data := make([]byte, 20+len(vector)*8)
 	binary.BigEndian.PutUint32(data[0:4], 1)
 	binary.BigEndian.PutUint32(data[4:8], 0)
@@ -218,10 +393,30 @@ func TestDecodePostgresFloatArray(t *testing.T) {
 		binary.BigEndian.PutUint32(data[24+index*8:28+index*8], math.Float32bits(value))
 	}
 	decoded, ok := decodePostgresFloatArray(data)
-	if !ok || len(decoded) != len(vector) || decoded[0] != vector[0] || decoded[1] != vector[1] {
+	if !ok || len(decoded) != len(vector) {
 		t.Fatalf("PostgreSQL real[] decode changed: %v %t", decoded, ok)
+	}
+	for index, value := range vector {
+		if math.Float32bits(decoded[index]) != math.Float32bits(value) {
+			t.Fatalf("PostgreSQL real[] coordinate %d changed bits: got %08x want %08x", index, math.Float32bits(decoded[index]), math.Float32bits(value))
+		}
 	}
 	if _, ok := decodePostgresFloatArray(data[:len(data)-1]); ok {
 		t.Fatal("truncated PostgreSQL real[] was accepted")
+	}
+	wrongLowerBound := append([]byte(nil), data...)
+	binary.BigEndian.PutUint32(wrongLowerBound[16:20], 0)
+	if _, ok := decodePostgresFloatArray(wrongLowerBound); ok {
+		t.Fatal("PostgreSQL real[] with a non-one lower bound was accepted")
+	}
+	empty := append([]byte(nil), data[:20]...)
+	binary.BigEndian.PutUint32(empty[12:16], 0)
+	if _, ok := decodePostgresFloatArray(empty); ok {
+		t.Fatal("empty PostgreSQL real[] was accepted")
+	}
+	multidimensional := append([]byte(nil), data...)
+	binary.BigEndian.PutUint32(multidimensional[0:4], 2)
+	if _, ok := decodePostgresFloatArray(multidimensional); ok {
+		t.Fatal("multidimensional PostgreSQL real[] was accepted")
 	}
 }

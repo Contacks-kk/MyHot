@@ -37,10 +37,11 @@ func TestGroupingWorkflowCommitIsAtomicAndPreservesArticleIdentity(t *testing.T)
 	ctx := context.Background()
 	prefix := fmt.Sprintf("grouping_workflow_%d", time.Now().UnixNano())
 	sourceID, articleID := prefix+"_source", prefix+"_article"
+	manualRaceArticleID := prefix + "_manual_race_article"
 	createdStoryTitle := prefix + " committed story"
 	rollbackStoryTitle := prefix + " rolled back story"
 	t.Cleanup(func() {
-		_ = db.Exec(`DELETE FROM articles WHERE id IN (?,?)`, articleID, prefix+"_rollback_article").Error
+		_ = db.Exec(`DELETE FROM articles WHERE id IN (?,?,?)`, articleID, manualRaceArticleID, prefix+"_rollback_article").Error
 		_ = db.Exec(`DELETE FROM facts WHERE public_id LIKE ?`, prefix+"_%").Error
 		_ = db.Exec(`DELETE FROM stories WHERE title IN (?,?)`, createdStoryTitle, rollbackStoryTitle).Error
 		_ = db.Exec(`DELETE FROM sources WHERE id=?`, sourceID).Error
@@ -107,8 +108,59 @@ func TestGroupingWorkflowCommitIsAtomicAndPreservesArticleIdentity(t *testing.T)
 		t.Fatalf("persisted grouping differs: %+v", persisted)
 	}
 
+	insertArticle(manualRaceArticleID)
+	if err := db.Exec(`INSERT INTO grouping_overrides(article_id,reason,actor) VALUES (?,'discussion post detached','test-editor')`, manualRaceArticleID).Error; err != nil {
+		t.Fatal(err)
+	}
+	manualCommit, err := repository.CommitGrouping(ctx, CommitInput{Article: ArticleInput{ID: manualRaceArticleID, Revision: 1, SourceID: sourceID},
+		Verdict: "signal", FactID: committed.FactID, StoryID: committed.StoryID, AddMembership: true, Signal: true, ObservedAt: now})
+	if err != nil || !manualCommit.Manual.Found {
+		t.Fatalf("manual discussion detach lost the grouping race: result=%+v err=%v", manualCommit, err)
+	}
+	var raceMemberships, raceSignals, raceDecisions int
+	if err := db.Raw(`SELECT count(*) FROM fact_articles WHERE article_id=?`, manualRaceArticleID).Scan(&raceMemberships).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Raw(`SELECT count(*) FROM story_signals WHERE article_id=?`, manualRaceArticleID).Scan(&raceSignals).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Raw(`SELECT count(*) FROM grouping_decisions WHERE article_id=?`, manualRaceArticleID).Scan(&raceDecisions).Error; err != nil {
+		t.Fatal(err)
+	}
+	if raceMemberships != 0 || raceSignals != 0 || raceDecisions != 0 {
+		t.Fatalf("manual discussion detach was overwritten: memberships=%d signals=%d decisions=%d", raceMemberships, raceSignals, raceDecisions)
+	}
+
 	rollbackArticle := prefix + "_rollback_article"
+	staleStoryTitle := prefix + " stale story"
+	currentStoryTitle := prefix + " current story"
+	t.Cleanup(func() {
+		_ = db.Exec(`DELETE FROM stories WHERE title IN (?,?)`, staleStoryTitle, currentStoryTitle).Error
+	})
 	insertArticle(rollbackArticle)
+	stalePublicID, err := newUUID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentPublicID, err := newUUID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var staleStoryID, currentStoryID int64
+	if err := db.Raw(`INSERT INTO stories (public_id,title) VALUES (?,?) RETURNING id`, stalePublicID, staleStoryTitle).Scan(&staleStoryID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Raw(`INSERT INTO stories (public_id,title) VALUES (?,?) RETURNING id`, currentPublicID, currentStoryTitle).Scan(&currentStoryID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`UPDATE stories SET merged_into=? WHERE id=?`, currentStoryID, staleStoryID).Error; err != nil {
+		t.Fatal(err)
+	}
+	staleInput := CommitInput{Article: ArticleInput{ID: rollbackArticle, Revision: 1, SourceID: sourceID}, Verdict: "same-fact",
+		StoryID: &staleStoryID, ObservedAt: now}
+	if _, err := repository.CommitGrouping(ctx, staleInput); err == nil || !strings.Contains(err.Error(), "retry") {
+		t.Fatalf("merged story target should request a fresh grouping decision: %v", err)
+	}
 	rollbackInput := CommitInput{Article: ArticleInput{ID: rollbackArticle, Revision: 1, SourceID: sourceID}, Verdict: "same-fact",
 		FactID: int64Pointer(9223372036854770000), CreateStory: true, CreateFact: true, AddMembership: true,
 		FactTitle: rollbackStoryTitle, ObservedAt: now}

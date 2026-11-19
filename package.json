@@ -5,9 +5,6 @@
   "workspaces": [
     "frontend",
     "frontend/packages/*",
-    "shared/industry",
-    "legacy/ts-compat/api",
-    "legacy/ts-compat/backend",
     "tooling"
   ],
   "engines": {
@@ -21,8 +18,8 @@
     "sources:retire-unsubscribed": "node tooling/scripts/retire-unsubscribed-sources.ts",
     "dev:web": "npm run dev -w @aihot/web",
     "dev:local": "node --env-file=.env.development tooling/scripts/dev-local.mjs",
-    "typecheck": "tsc -p frontend/packages/contracts && tsc -p frontend/packages/og-renderer && tsc -p frontend/packages/site && tsc -p legacy/ts-compat/backend && tsc -p legacy/ts-compat/api && tsc -p legacy/ts-compat/tests && tsc -p tooling/tests && tsc -p shared/modules && tsc -p shared/industry && npm run typecheck -w @aihot/web",
-    "test": "node --test-global-setup=legacy/ts-compat/tests/databases.ts --import ./legacy/ts-compat/tests/databases.ts --test --test-concurrency=6 --test-timeout=120000 \"legacy/ts-compat/tests/*.test.ts\" \"tooling/tests/*.test.ts\""
+    "typecheck": "tsc -p frontend/packages/contracts && tsc -p frontend/packages/og-renderer && tsc -p frontend/packages/site && tsc -p tooling/tests && npm run typecheck -w @aihot/web",
+    "test": "node --test-global-setup=tooling/tests/databases.ts --import ./tooling/tests/databases.ts --test --test-concurrency=6 --test-timeout=120000 \"tooling/tests/*.test.ts\""
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.1.0",

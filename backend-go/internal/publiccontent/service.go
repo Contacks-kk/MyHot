@@ -42,13 +42,25 @@ type SelectedSyncRepository interface {
 }
 
 type Service struct {
-	repository Repository
-	entities   map[string]interests.Entity
-	topics     []topics.Definition
+	repository            Repository
+	entities              map[string]interests.Entity
+	topics                []topics.Definition
+	publicCategoryMembers map[string][]string
 }
 
 func (s *Service) SetTopics(definitions []topics.Definition) {
 	s.topics = append([]topics.Definition(nil), definitions...)
+}
+
+/** SetPublicCategoryMembers maps each external category to its stored category keys. */
+func (s *Service) SetPublicCategoryMembers(categories map[string][]string) {
+	if s == nil {
+		return
+	}
+	s.publicCategoryMembers = make(map[string][]string, len(categories))
+	for category, members := range categories {
+		s.publicCategoryMembers[category] = append([]string(nil), members...)
+	}
 }
 
 func NewService(repository Repository, entities ...map[string]interests.Entity) *Service {

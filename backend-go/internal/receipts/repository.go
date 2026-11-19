@@ -15,6 +15,47 @@ type GormRepository struct{ db *gorm.DB }
 
 func NewRepository(db *gorm.DB) *GormRepository { return &GormRepository{db: db} }
 
+/** Reuse returns a receipt result without changing receipt or budget state. */
+func (r *GormRepository) Reuse(ctx context.Context, logicalKey string) (Claim, error) {
+	var receipt model.PaidReceipt
+	result := r.db.WithContext(ctx).Select("id", "status", "response", "updated_at").Where("logical_key = ?", logicalKey).Take(&receipt)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return Claim{}, nil
+	}
+	if result.Error != nil {
+		return Claim{}, result.Error
+	}
+
+	switch receipt.Status {
+	case "received", "completed":
+		return Claim{
+			ReceiptID: receipt.ID,
+			Response:  receipt.Response,
+			Reused:    true,
+		}, nil
+	case "pending":
+		if time.Since(receipt.UpdatedAt) >= PendingStaleAfter {
+			return Claim{
+				ReceiptID: receipt.ID,
+				Unknown:   true,
+			}, nil
+		}
+		return Claim{
+			ReceiptID: receipt.ID,
+			Busy:      true,
+		}, nil
+	case "unknown":
+		return Claim{
+			ReceiptID: receipt.ID,
+			Unknown:   true,
+		}, nil
+	case "failed":
+		return Claim{}, nil
+	default:
+		return Claim{}, errors.New("paid receipt has an unsupported status")
+	}
+}
+
 func (r *GormRepository) Claim(ctx context.Context, request Request, logicalKey string) (Claim, error) {
 	var claim Claim
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

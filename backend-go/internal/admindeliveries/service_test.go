@@ -218,6 +218,38 @@ func TestPushSelectedReservesAndSendsOneCardAcrossTargets(t *testing.T) {
 	}
 }
 
+/** TestPushSelectedAllowsNearFirstPartySourcesAndRejectsOtherTiers locks the content-group source boundary. */
+func TestPushSelectedAllowsNearFirstPartySourcesAndRejectsOtherTiers(t *testing.T) {
+	now := time.Now()
+	for _, test := range []struct {
+		name       string
+		tier       string
+		wantPushed bool
+	}{
+		{name: "near-first-party", tier: "T1_5", wantPushed: true},
+		{name: "other tier", tier: "T2", wantPushed: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			content := &SelectedContent{ArticleID: "article-1", Selected: true, Visibility: "public", Title: "Headline", SourceTier: test.tier,
+				URL: "https://example.invalid/story", TimelineAt: now.Add(-time.Hour), PublishedAt: &now, DiscoveredAt: now}
+			repository := &selectedPushFixture{content: content, targets: []ContentTarget{{Key: "main", Kind: "feishu_webhook", ConfigRef: "push"}}, claimed: true, claimedID: 21}
+			sender := &webhookFixture{result: WebhookResult{Status: "sent", Body: `{"code":0}`}}
+			service := NewService(repository, Config{ContentPushEnabled: true, WebhookURLs: map[string]string{"push": "https://hooks.example.invalid"}}, sender)
+
+			result, err := service.PushSelected(context.Background(), "article-1", now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.wantPushed && (result.Status != "pushed" || sender.url == "") {
+				t.Fatalf("near-first-party item was not sent: result=%#v sender=%#v", result, sender)
+			}
+			if !test.wantPushed && (result.Status != "skipped" || sender.url != "" || repository.claim.ArticleID != "") {
+				t.Fatalf("other-tier item was not rejected before delivery: result=%#v sender=%#v repository=%#v", result, sender, repository)
+			}
+		})
+	}
+}
+
 func TestPushSelectedWaitsForUnresolvedSameTitleAndNeverRetriesUnknown(t *testing.T) {
 	now := time.Now()
 	content := &SelectedContent{ArticleID: "article-1", Selected: true, Visibility: "public", Title: "Same title", SourceTier: "T1", URL: "https://example.invalid/story", TimelineAt: now.Add(-time.Hour), PublishedAt: &now, DiscoveredAt: now}

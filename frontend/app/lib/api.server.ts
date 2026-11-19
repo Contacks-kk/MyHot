@@ -1,4 +1,4 @@
-// SSR loaders read legacy content through HTTP with the current user Cookie.
+// SSR loaders read Go API content through HTTP with the current user Cookie.
 // The web process never touches the database; account responses are never cached.
 import { data, redirect } from "react-router";
 import { logError } from "./errors.server.ts";

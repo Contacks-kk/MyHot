@@ -394,6 +394,7 @@ func cleanAttributes(node *xhtml.Node, baseURL string) error {
 
 func renderHTML(w io.Writer, node *xhtml.Node) error { return xhtml.Render(w, node) }
 
+/** proxyImages removes tracking media and assigns signed URLs to article images. */
 func proxyImages(body *goquery.Selection, now time.Time, secret string) error {
 	var proxyErr error
 	body.Find("img").Each(func(_ int, selection *goquery.Selection) {
@@ -429,6 +430,17 @@ func proxyImages(body *goquery.Selection, now time.Time, secret string) error {
 			return
 		}
 		selection.SetAttr("src", *proxied)
+		if widthValue != nil && *widthValue >= 720 {
+			candidates, err := mediaurl.ProxyURLSet(&src, []string{"image-720", "image-1200", "image-1600"}, []int{720, 1200, 1600}, now, 48*time.Hour, secret)
+			if err != nil {
+				proxyErr = err
+				return
+			}
+			if candidates != nil {
+				selection.SetAttr("srcset", *candidates)
+				selection.SetAttr("sizes", "(min-width: 1536px) 760px, (min-width: 1024px) calc(100vw - 524px), (min-width: 640px) 608px, calc(100vw - 32px)")
+			}
+		}
 		selection.SetAttr("loading", "lazy")
 		selection.SetAttr("decoding", "async")
 	})

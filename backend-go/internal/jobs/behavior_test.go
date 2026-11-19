@@ -1,16 +1,122 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"aihot/backend-go/internal/config"
+	"aihot/backend-go/internal/editorial"
+	"aihot/backend-go/internal/grouping"
 	"aihot/backend-go/internal/provider"
 	"github.com/riverqueue/river"
 )
+
+/** TestRiverWorkerLogsRedactErrorValues preserves safe database and HTTP diagnostics. */
+func TestRiverWorkerLogsRedactErrorValues(t *testing.T) {
+	var output bytes.Buffer
+	logger := newWorkerLogger(&output)
+	logger.Error("job failed",
+		"error", "ERROR: invalid input value private-marker (SQLSTATE 22P02)",
+		"err", "HTTP 502 upstream body private-marker",
+	)
+	logged := output.String()
+	if strings.Contains(logged, "private-marker") {
+		t.Fatalf("worker log leaked raw error data: %s", logged)
+	}
+	if !strings.Contains(logged, "SQLSTATE 22P02") || !strings.Contains(logged, "HTTP 502") {
+		t.Fatalf("worker log lost safe failure codes: %s", logged)
+	}
+}
+
+/** TestRelationEvaluationArgsPreserveTheWorkerPayload verifies the persisted task contract. */
+func TestRelationEvaluationArgsPreserveTheWorkerPayload(t *testing.T) {
+	args := RelationEvaluationArgs{
+		Options: grouping.RelationEvaluationOptions{
+			Gold:   "gold data",
+			Models: []string{"default"},
+			Limit:  10,
+		},
+	}
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded RelationEvaluationArgs
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if args.Kind() != "eval.relations" || decoded.Options.Gold != args.Options.Gold || decoded.Options.Models[0] != "default" {
+		t.Fatalf("unexpected evaluation task payload: %s", encoded)
+	}
+	if timeout := (&RelationEvaluationWorker{}).Timeout(nil); timeout != 30*time.Minute {
+		t.Fatalf("unexpected evaluation timeout: %s", timeout)
+	}
+	if opts := args.InsertOpts(); opts.Queue != "evaluations" || opts.MaxAttempts != 2 {
+		t.Fatalf("unexpected evaluation queue options: %#v", opts)
+	}
+}
+
+type relationEvaluationModelStub struct {
+	capability string
+}
+
+/** ResolveKey records the capability requested by the evaluation worker. */
+func (s *relationEvaluationModelStub) ResolveKey(_ context.Context, capability string) (string, error) {
+	s.capability = capability
+	return "configured-model", nil
+}
+
+/** TestRelationEvaluationDefaultModel checks configured and explicitly selected models. */
+func TestRelationEvaluationDefaultModel(t *testing.T) {
+	resolver := &relationEvaluationModelStub{}
+	worker := &RelationEvaluationWorker{Models: resolver}
+	options, err := worker.resolveOptions(context.Background(), grouping.RelationEvaluationOptions{})
+	if err != nil || resolver.capability != "groupReview" || len(options.Models) != 1 || options.Models[0] != "configured-model" {
+		t.Fatalf("default model resolution failed: options=%#v capability=%q err=%v", options, resolver.capability, err)
+	}
+	resolver.capability = ""
+	options, err = worker.resolveOptions(context.Background(), grouping.RelationEvaluationOptions{Models: []string{"selected"}})
+	if err != nil || resolver.capability != "" || options.Models[0] != "selected" {
+		t.Fatalf("explicit model was not preserved: options=%#v err=%v", options, err)
+	}
+}
+
+/** TestSelectionEvaluationArgsAndDefaultModel preserves the worker task and score-model choice. */
+func TestSelectionEvaluationArgsAndDefaultModel(t *testing.T) {
+	args := SelectionEvaluationArgs{Options: editorial.SelectionEvaluationOptions{
+		Gold: "gold data", Limit: 10, Split: "holdout", Concurrency: 2, SweepStart: 40, SweepEnd: 90,
+	}}
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded SelectionEvaluationArgs
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if args.Kind() != "eval.selection" || decoded.Options.Gold != "gold data" || decoded.Options.Split != "holdout" || args.InsertOpts().Queue != "evaluations" || args.InsertOpts().MaxAttempts != 2 {
+		t.Fatalf("selection evaluation task contract changed: %s", encoded)
+	}
+	if timeout := (&SelectionEvaluationWorker{}).Timeout(nil); timeout != 30*time.Minute {
+		t.Fatalf("selection evaluation timeout = %s", timeout)
+	}
+	resolver := &relationEvaluationModelStub{}
+	worker := &SelectionEvaluationWorker{Models: resolver}
+	options, err := worker.resolveOptions(context.Background(), editorial.SelectionEvaluationOptions{})
+	if err != nil || resolver.capability != "score" || len(options.Models) != 1 || options.Models[0] != "configured-model" {
+		t.Fatalf("default score model resolution failed: options=%#v capability=%q err=%v", options, resolver.capability, err)
+	}
+	resolver.capability = ""
+	options, err = worker.resolveOptions(context.Background(), editorial.SelectionEvaluationOptions{Models: []string{"selected"}})
+	if err != nil || resolver.capability != "" || options.Models[0] != "selected" {
+		t.Fatalf("explicit selection model was not preserved: options=%#v err=%v", options, err)
+	}
+}
 
 func TestSelectedNotifyRiverArgsKeepPgBossPayloadShape(t *testing.T) {
 	if kind := (SelectedNotifyArgs{}).Kind(); kind != "notify.selected" {
@@ -61,6 +167,22 @@ func TestDailyWindowIsFixedInBeijing(t *testing.T) {
 func TestPausedAutomaticWorkersPreserveTasks(t *testing.T) {
 	// Nil DB intentionally ensures the disabled path cannot read inputs or call a model.
 	service := NewService(nil, config.Config{}, nil)
+	if err := (&StoryDigestEvaluationWorker{}).Work(context.Background(), &river.Job[StoryDigestEvaluationArgs]{}); err != nil {
+		var snooze *river.JobSnoozeError
+		if !errors.As(err, &snooze) || snooze.Duration != 5*time.Minute {
+			t.Fatalf("disabled digest evaluation worker = %v", err)
+		}
+	} else {
+		t.Fatal("disabled digest evaluation must remain queued")
+	}
+	if err := (&SelectionEvaluationWorker{Enabled: false}).Work(context.Background(), &river.Job[SelectionEvaluationArgs]{}); err != nil {
+		var snooze *river.JobSnoozeError
+		if !errors.As(err, &snooze) || snooze.Duration != 5*time.Minute {
+			t.Fatalf("disabled selection evaluation worker = %v", err)
+		}
+	} else {
+		t.Fatal("disabled selection evaluation must remain queued")
+	}
 	article := &ArticleWorker{Service: service, Enabled: false}
 	daily := &DailyWorker{Service: service, Enabled: false}
 	for _, err := range []error{article.Work(context.Background(), &river.Job[ArticleArgs]{}), daily.Work(context.Background(), &river.Job[DailyArgs]{})} {

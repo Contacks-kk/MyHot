@@ -3,7 +3,6 @@ package operationsalerts
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -136,24 +135,7 @@ func (s *Service) Check(ctx context.Context, now time.Time) (Result, error) {
 }
 
 func (s *Service) send(ctx context.Context, title string, lines []string) error {
-	if !s.config.FeishuInternalEnabled {
-		return nil
-	}
-	chat := strings.TrimSpace(s.config.AlertChatID)
-	if chat == "" {
-		chat = strings.TrimSpace(s.config.InternalChatID)
-	}
-	if chat == "" {
-		return nil
-	}
-	if s.messenger == nil {
-		return fmt.Errorf("operations alert messenger is unavailable")
-	}
-	prefix := ""
-	if s.config.EnvironmentName != "" && s.config.EnvironmentName != "production" {
-		prefix = "【" + s.config.EnvironmentName + "】"
-	}
-	return s.messenger.SendText(ctx, chat, prefix+title+"\n"+strings.Join(lines, "\n"))
+	return sendOperationsAlert(ctx, s.messenger, s.config, title, lines)
 }
 
 func repeatAfter(level Level) time.Duration {
@@ -186,6 +168,11 @@ func formatAlert(f Finding, since, now time.Time, repeat bool) (string, []string
 		}
 	}
 	return mark + " " + prefix + f.Title + lasting, lines
+}
+
+/** Formats the recovery message shared by regular alerts and the worker watchdog. */
+func formatRecovery(title string, since, now time.Time) (string, []string) {
+	return "✅ 已恢复：" + title, []string{"持续 " + duration(now.Sub(since)) + "（" + beijingStamp(since) + " 起）"}
 }
 
 func optionalLine(label, value string) string {

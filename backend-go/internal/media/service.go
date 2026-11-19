@@ -109,6 +109,7 @@ func NewService(cfg Config, repo Repository, client HTTPDoer) *Service {
 			ResponseHeaderTimeout: 15 * time.Second,
 			MaxIdleConns:          16,
 			MaxIdleConnsPerHost:   4,
+			Protocols:             http1OnlyProtocols(),
 		}
 		client = &http.Client{
 			Transport: transport,

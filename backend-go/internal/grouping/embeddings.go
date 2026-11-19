@@ -292,11 +292,7 @@ func (HTTPEmbeddingProvider) Embed(ctx context.Context, cfg EmbeddingConfig, tex
 	endpoint := *base
 	endpoint.Path = strings.TrimRight(base.Path, "/") + "/embeddings"
 	endpoint.RawPath = ""
-	body := map[string]any{"model": cfg.Model, "input": texts, "encoding_format": "float"}
-	if cfg.Dimensions > 0 {
-		body["dimensions"] = cfg.Dimensions
-	}
-	payload, err := json.Marshal(body)
+	payload, err := json.Marshal(embeddingRequestBody(cfg, texts))
 	if err != nil {
 		return EmbeddingResponse{}, &embeddingProviderError{message: "embedding request could not be encoded", rejected: true}
 	}
@@ -337,30 +333,48 @@ func (HTTPEmbeddingProvider) Embed(ctx context.Context, cfg EmbeddingConfig, tex
 	return EmbeddingResponse{Body: raw, RequestID: response.Header.Get("x-request-id")}, nil
 }
 
+/** embeddingRequestBody omits dimensions when the provider selects its own vector size. */
+func embeddingRequestBody(cfg EmbeddingConfig, texts []string) map[string]any {
+	body := map[string]any{"model": cfg.Model, "input": texts, "encoding_format": "float"}
+	if cfg.Dimensions > 0 {
+		body["dimensions"] = cfg.Dimensions
+	}
+	return body
+}
+
+/** parseEmbeddingResponse validates provider vectors and restores their input order. */
 func parseEmbeddingResponse(raw []byte, count, dimensions int) ([][]float32, error) {
 	var response struct {
 		Data []struct {
-			Index     *int      `json:"index"`
-			Embedding []float32 `json:"embedding"`
+			Index     *int       `json:"index"`
+			Embedding []*float32 `json:"embedding"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &response); err != nil || len(response.Data) != count {
 		return nil, errors.New("embedding count or JSON shape is invalid")
 	}
-	for _, row := range response.Data {
-		if row.Index == nil || *row.Index < 0 || *row.Index >= count || !validVector(row.Embedding, dimensions) {
-			return nil, errors.New("embedding index or dimensions are invalid")
-		}
-	}
 	ordered := make([][]float32, count)
 	seen := make([]bool, count)
 	for _, row := range response.Data {
+		if row.Index == nil || *row.Index < 0 || *row.Index >= count {
+			return nil, errors.New("embedding index or dimensions are invalid")
+		}
 		index := *row.Index
 		if seen[index] {
 			return nil, errors.New("embedding indices are duplicated")
 		}
+		vector := make([]float32, len(row.Embedding))
+		for coordinate, value := range row.Embedding {
+			if value == nil {
+				return nil, errors.New("embedding index or dimensions are invalid")
+			}
+			vector[coordinate] = *value
+		}
+		if !validVector(vector, dimensions) {
+			return nil, errors.New("embedding index or dimensions are invalid")
+		}
 		seen[index] = true
-		ordered[index] = row.Embedding
+		ordered[index] = vector
 	}
 	for _, found := range seen {
 		if !found {
@@ -380,8 +394,17 @@ func embeddingUsage(raw []byte) json.RawMessage {
 	return response.Usage
 }
 
+/** validVector rejects empty, mismatched, and non-finite embedding coordinates. */
 func validVector(vector []float32, dimensions int) bool {
-	return len(vector) > 0 && (dimensions <= 0 || len(vector) == dimensions)
+	if len(vector) == 0 || (dimensions > 0 && len(vector) != dimensions) {
+		return false
+	}
+	for _, value := range vector {
+		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+			return false
+		}
+	}
+	return true
 }
 
 func hashEmbeddingText(text string) string {

@@ -206,7 +206,7 @@ func (r *Repository) FinishXSuccess(ctx context.Context, runs []*sourceRun, foun
 				return err
 			}
 		}
-		return completeXReceipts(tx, receiptIDs)
+		return completeReceipts(tx, receiptIDs)
 	})
 }
 
@@ -242,7 +242,7 @@ func (r *Repository) FinishXFailure(ctx context.Context, runs []*sourceRun, foun
 	})
 }
 
-func completeXReceipts(tx *gorm.DB, ids []int64) error {
+func completeReceipts(tx *gorm.DB, ids []int64) error {
 	if len(ids) == 0 {
 		return nil
 	}

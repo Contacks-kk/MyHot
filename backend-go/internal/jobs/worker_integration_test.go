@@ -7,14 +7,21 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"aihot/backend-go/internal/articlebody"
 	"aihot/backend-go/internal/config"
+	"aihot/backend-go/internal/contentpipeline"
+	"aihot/backend-go/internal/db"
+	"aihot/backend-go/internal/editorial"
 	"aihot/backend-go/internal/interests"
+	"aihot/backend-go/internal/materials"
 	"aihot/backend-go/internal/modelconfig"
 	"aihot/backend-go/internal/personal"
 	"aihot/backend-go/internal/provider"
+	publicationdomain "aihot/backend-go/internal/publication"
 	"aihot/backend-go/internal/receipts"
 	"aihot/backend-go/internal/sourcenaming"
 	"aihot/backend-go/internal/usersources"
@@ -692,9 +699,22 @@ func TestRiverConsumesPersonalArticleWithFakeModel(t *testing.T) {
 func TestSourceJobsAllowNextRunAfterCompletion(t *testing.T) {
 	f := fixture(t)
 	ctx := context.Background()
+	f.cfg.CollectorEnabled = true
+	f.cfg.SourceSchedule = config.SourceSchedule{
+		AutoMinInterval:   15,
+		ManualReuseWindow: 10,
+		AutoReuseWindow:   10,
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE user_source_subscriptions SET interval_minutes=5 WHERE source_id=$1`, f.source); err != nil {
+		t.Fatal(err)
+	}
 	client, err := NewClient(ctx, f.pool, f.orm, f.cfg, nil, interests.PublicationSettings{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var interval int
+	if err := f.pool.QueryRow(ctx, `SELECT interval_minutes FROM sources WHERE id=$1`, f.source).Scan(&interval); err != nil || interval != 15 {
+		t.Fatalf("worker did not reconcile schedule before scanning: interval=%d err=%v", interval, err)
 	}
 	args := SourceArgs{SourceID: f.source}
 	first, err := client.Insert(ctx, args, sourceInsertOpts())
@@ -794,4 +814,257 @@ func TestPublicationEffectsInsertRiverJobsInPublicationTransaction(t *testing.T)
 		t.Fatalf("committed publication effects = %d, want 2", got)
 	}
 	t.Cleanup(func() { _, _ = f.pool.Exec(ctx, `DELETE FROM river_job WHERE args->>'articleId'=$1`, articleID) })
+}
+
+/** TestFailedDatabaseOpenDoesNotPoisonLaterRiverQueueInsertion covers a fresh pool after a failed database open. */
+func TestFailedDatabaseOpenDoesNotPoisonLaterRiverQueueInsertion(t *testing.T) {
+	ctx := context.Background()
+	raw := os.Getenv("MYHOT_TEST_DATABASE_URL")
+	if raw == "" {
+		t.Skip("MYHOT_TEST_DATABASE_URL is not configured")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if (parsed.Hostname() != "localhost" && parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "::1") || !strings.HasSuffix(parsed.Path, "_test") {
+		t.Fatal("integration database must be localhost and end with _test")
+	}
+
+	missing := *parsed
+	missing.Path = "/myhot_missing_queue_recovery_test"
+	if pool, err := db.Open(ctx, missing.String()); err == nil {
+		pool.Close()
+		t.Fatal("expected opening a missing test database to fail")
+	}
+
+	pool, err := db.Open(ctx, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if err := MigrateRiver(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := client.Insert(ctx, SourceArgs{SourceID: "queue-recovery-test"}, &river.InsertOpts{Queue: "queue_recovery_test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM river_job WHERE id=$1`, job.Job.ID)
+	})
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM river_job WHERE id=$1 AND kind=$2`, job.Job.ID, SourceArgs{}.Kind()).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("queue job count after recovery = %d, want 1", count)
+	}
+}
+
+/** TestVerifiedPublisherAttributionQueuesBodyExtractionOnce keeps discovery and body work distinct. */
+func TestVerifiedPublisherAttributionQueuesBodyExtractionOnce(t *testing.T) {
+	f := fixture(t)
+	ctx := context.Background()
+	if err := MigrateRiver(ctx, f.pool); err != nil {
+		t.Fatal(err)
+	}
+	discoveryID := f.prefix + "_verified_discovery"
+	publisherID := f.prefix + "_verified_publisher"
+	articleURL := "https://publisher-" + f.prefix + ".example/news/release"
+	configBytes, err := json.Marshal(map[string]any{
+		"publisherUrlPrefixes": []string{"https://publisher-" + f.prefix + ".example/news"},
+		"fetchPublicContent":   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `INSERT INTO sources(id,name,kind,tier,participation_mode,config,enabled,health)
+		VALUES($1,'Verified discovery','rss','T1','editorial','{}'::jsonb,true,'ok'),
+		($2,'Paused verified publisher','web_list','T1','editorial',$3::jsonb,false,'paused')`, discoveryID, publisherID, configBytes); err != nil {
+		t.Fatal(err)
+	}
+	publicationRepository := publicationdomain.NewRepository(f.pool, nil, interests.PublicationSettings{}, "Test", "https://test.invalid")
+	materialService := materials.NewService(materials.NewRepository(f.orm))
+	materialService.SetSourceAttributor(materials.NewAttributionRepository(f.pool, publicationRepository))
+	stored, err := materialService.Store(ctx, materials.Input{
+		SourceID: discoveryID, URL: articleURL, IdentityKey: "url:" + articleURL,
+		Title: "Publisher announcement", Author: "Aggregator submitter", Via: "ingest",
+	})
+	if err != nil || !stored.Created || stored.Revised {
+		t.Fatalf("initial discovery = %#v, err=%v", stored, err)
+	}
+	t.Cleanup(func() {
+		_, _ = f.pool.Exec(context.Background(), `DELETE FROM river_job WHERE args->>'articleId'=$1`, stored.ArticleID)
+		_, _ = f.pool.Exec(context.Background(), `DELETE FROM audit_log WHERE action='article.attribution' AND subject=$1`, "article:"+stored.ArticleID)
+		_, _ = f.pool.Exec(context.Background(), `DELETE FROM articles WHERE id=$1`, stored.ArticleID)
+		_, _ = f.pool.Exec(context.Background(), `DELETE FROM sources WHERE id=ANY($1)`, []string{discoveryID, publisherID})
+	})
+	if _, err := f.pool.Exec(ctx, `UPDATE articles SET created_at=now()-interval '5 minutes' WHERE id=$1`, stored.ArticleID); err != nil {
+		t.Fatal(err)
+	}
+	var correctedSource string
+	var author *string
+	if err := f.pool.QueryRow(ctx, `SELECT source_id,author FROM articles WHERE id=$1`, stored.ArticleID).Scan(&correctedSource, &author); err != nil {
+		t.Fatal(err)
+	}
+	if correctedSource != publisherID || author != nil {
+		t.Fatalf("verified publisher attribution source=%q author=%v", correctedSource, author)
+	}
+	service := articlebody.NewService(articlebody.NewRepository(f.orm, true, true), nil, nil)
+	client, err := river.NewClient(riverpgxv5.New(f.pool), &river.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scan := &SharedBodyScanWorker{Service: service, Client: client, Enabled: true}
+	for range 2 {
+		if err := scan.Work(ctx, &river.Job[SharedBodyScanArgs]{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var jobs, discoveries int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM river_job WHERE kind=$1 AND args->>'articleId'=$2`, SharedBodyArgs{}.Kind(), stored.ArticleID).Scan(&jobs); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM article_discoveries WHERE article_id=$1 AND source_id=$2`, stored.ArticleID, discoveryID).Scan(&discoveries); err != nil {
+		t.Fatal(err)
+	}
+	if jobs != 1 || discoveries != 1 {
+		t.Fatalf("body tasks=%d discovery records=%d, want one each", jobs, discoveries)
+	}
+}
+
+/** TestRiverStopDrainsAnInflightPaidAnalysis verifies graceful shutdown waits for durable work. */
+func TestRiverStopDrainsAnInflightPaidAnalysis(t *testing.T) {
+	f := fixture(t)
+	ctx := context.Background()
+	if err := MigrateRiver(ctx, f.pool); err != nil {
+		t.Fatal(err)
+	}
+	articleID := f.article(t, "shutdown", "OpenAI shutdown release", time.Now().Add(-time.Hour))
+	if _, err := f.pool.Exec(ctx, `UPDATE sources SET tier='T1',participation_mode='editorial' WHERE id=$1`, f.source); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE articles SET body_text='A lab released a new AI model with evaluation results.',body_status='ok' WHERE id=$1`, articleID); err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	openRelease := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
+	defer openRelease()
+	analyzer := &shutdownAnalysisStub{pool: f.pool, entered: entered, release: release}
+	publicationRepository := publicationdomain.NewRepository(f.pool, nil, interests.PublicationSettings{}, "Test", "https://test.invalid")
+	service := contentpipeline.NewService(contentpipeline.NewRepository(f.orm), analyzer, nil,
+		publicationdomain.NewService(publicationRepository), nil)
+	workers := river.NewWorkers()
+	worker := &ContentAnalyzeWorker{Service: service}
+	river.AddWorker(workers, worker)
+	queue := "shared_analysis"
+	queues := map[string]river.QueueConfig{queue: {MaxWorkers: 1}, "shared_grouping": {MaxWorkers: 1}}
+	client, err := river.NewClient(riverpgxv5.New(f.pool), &river.Config{Workers: workers, Queues: queues})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.Client = client
+	var stoppedCleanly atomic.Bool
+	t.Cleanup(func() {
+		openRelease()
+		if !stoppedCleanly.Load() {
+			stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = client.Stop(stopCtx)
+		}
+	})
+	if err := client.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	job, err := client.Insert(ctx, ContentAnalyzeArgs{ArticleID: articleID, AttemptTag: "shutdown-test"}, &river.InsertOpts{Queue: queue, MaxAttempts: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = f.pool.Exec(ctx, `DELETE FROM river_job WHERE id=$1 OR args->>'articleId'=$2`, job.Job.ID, articleID)
+	})
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("paid analysis did not reach the fake model")
+	}
+
+	stopped := make(chan error, 1)
+	go func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		stopped <- client.Stop(stopCtx)
+	}()
+	select {
+	case err := <-stopped:
+		openRelease()
+		t.Fatalf("River stopped before the in-flight model call settled: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	openRelease()
+	if err := <-stopped; err != nil {
+		stoppedCleanly.Store(true)
+		t.Fatal(err)
+	}
+	stoppedCleanly.Store(true)
+	var state string
+	if err := f.pool.QueryRow(ctx, `SELECT state FROM river_job WHERE id=$1`, job.Job.ID).Scan(&state); err != nil || state != "completed" {
+		t.Fatalf("stopped worker job state = %q, err=%v", state, err)
+	}
+	var analyses, publications int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM analyses WHERE article_id=$1 AND input_revision=1 AND relevance='pass'`, articleID).Scan(&analyses); err != nil || analyses != 1 {
+		t.Fatalf("saved shared analysis = %d, err=%v", analyses, err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM publications WHERE article_id=$1 AND selection_candidate`, articleID).Scan(&publications); err != nil || publications != 1 {
+		t.Fatalf("saved publication candidate = %d, err=%v", publications, err)
+	}
+	if analyzer.calls.Load() != 1 {
+		t.Fatalf("fake paid analysis calls during graceful stop = %d, want 1", analyzer.calls.Load())
+	}
+}
+
+type shutdownAnalysisStub struct {
+	pool    *pgxpool.Pool
+	entered chan<- struct{}
+	release <-chan struct{}
+	calls   atomic.Int32
+}
+
+/** Analyze blocks like an in-flight paid writing call, then commits its result for publication. */
+func (s *shutdownAnalysisStub) Analyze(ctx context.Context, articleID string, _ editorial.AnalysisOptions) (*editorial.AnalyzeResult, error) {
+	s.calls.Add(1)
+	s.entered <- struct{}{}
+	<-s.release
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	var analysisID int64
+	err = tx.QueryRow(ctx, `INSERT INTO analyses(article_id,input_revision,origin,prompt_version,relevance,category,tags,subjects,title_zh,summary_zh,score,selected,output)
+		VALUES($1,1,'model','shutdown-test','pass','models',ARRAY['模型发布']::text[],ARRAY[]::text[],'停机期间完成','模型分析结果已写入并发布。',92,true,'{"scope":"single"}'::jsonb) RETURNING id`, articleID).Scan(&analysisID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE articles SET processing_state='analyzed' WHERE id=$1 AND revision=1`, articleID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	score := 92
+	category := "models"
+	return &editorial.AnalyzeResult{AnalysisID: &analysisID, Output: &editorial.AnalysisOutput{
+		Relevance: "pass", Selected: true, Score: &score, Category: &category, Tags: []string{"模型发布"}, Subjects: []string{},
+		TitleZh: "停机期间完成", SummaryZh: "模型分析结果已写入并发布。", Scope: "single",
+	}, ReceiptIDs: []int64{}, Reused: false}, nil
 }

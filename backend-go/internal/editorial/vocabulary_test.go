@@ -2,6 +2,7 @@ package editorial
 
 import (
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -9,16 +10,32 @@ import (
 	"aihot/backend-go/internal/interests"
 )
 
-func TestIndustryVocabularyAndStructurePromptLoadFromSharedPack(t *testing.T) {
+/** TestVocabularyBundledPathPreservesRules verifies the relocated vocabulary keeps its configured behavior. */
+func TestVocabularyBundledPathPreservesRules(t *testing.T) {
+	t.Setenv("INDUSTRY_VOCABULARY_FILE", "")
+	want, err := LoadVocabulary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("INDUSTRY_VOCABULARY_FILE", "../../config/vocabulary.json")
+	got, err := LoadVocabulary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(want, got) {
+		t.Fatal("vocabulary changed after relocation")
+	}
+}
+
+func TestIndustryVocabularyAndStructurePromptLoadFromGoConfig(t *testing.T) {
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
 	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", ".."))
-	industry := filepath.Join(repositoryRoot, "shared", "industry")
-	t.Setenv("INDUSTRY_VOCABULARY_FILE", filepath.Join(industry, "vocabulary.json"))
-	t.Setenv("INDUSTRY_CATEGORIES_FILE", filepath.Join(industry, "categories.json"))
-	t.Setenv("INDUSTRY_ENTITIES_FILE", filepath.Join(industry, "entities.json"))
+	t.Setenv("INDUSTRY_VOCABULARY_FILE", filepath.Join(repositoryRoot, "backend-go", "config", "vocabulary.json"))
+	t.Setenv("INDUSTRY_CATEGORIES_FILE", filepath.Join(repositoryRoot, "backend-go", "config", "categories.json"))
+	t.Setenv("INDUSTRY_ENTITIES_FILE", filepath.Join(repositoryRoot, "backend-go", "config", "entities.json"))
 	vocabulary, err := LoadVocabulary()
 	if err != nil {
 		t.Fatal(err)
@@ -31,7 +48,7 @@ func TestIndustryVocabularyAndStructurePromptLoadFromSharedPack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prompts, err := LoadPromptsFrom(filepath.Join(industry, "prompts"), "MyHOT")
+	prompts, err := LoadPromptsFrom(filepath.Join(repositoryRoot, "backend-go", "config", "prompts"), "MyHOT")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +142,7 @@ func loadCurrentVocabulary(t *testing.T) Vocabulary {
 		t.Fatal("runtime.Caller failed")
 	}
 	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..", ".."))
-	t.Setenv("INDUSTRY_VOCABULARY_FILE", filepath.Join(repositoryRoot, "shared", "industry", "vocabulary.json"))
+	t.Setenv("INDUSTRY_VOCABULARY_FILE", filepath.Join(repositoryRoot, "backend-go", "config", "vocabulary.json"))
 	vocabulary, err := LoadVocabulary()
 	if err != nil {
 		t.Fatal(err)

@@ -11,7 +11,13 @@ import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import type { ReportDetail, ReportKind, ReportNavigationEntry } from "@aihot/contracts/site";
 import { isoWeekLabel } from "@aihot/contracts/time";
-import { issueNumber, periodGrid } from "../app/features/report/format.ts";
+import { issueNumber, metricItems, periodGrid } from "../app/features/report/format.ts";
+
+test("report release metric uses the authenticated catalog's unit", () => {
+  assert.deepEqual(metricItems({ modelsReleased: 3 }, "个新模型"), [{ value: 3, unit: "个新模型" }]);
+  assert.deepEqual(metricItems({ modelsReleased: 3 }, null), []);
+  assert.deepEqual(metricItems({ modelsReleased: 0 }, "个新模型"), []);
+});
 
 const kinds: ReportKind[] = ["daily", "weekly", "monthly"];
 const keys = Object.fromEntries(kinds.map((kind) => [kind, Array.from({ length: 405 }, (_, i) => {
@@ -34,6 +40,7 @@ const api = createServer((req, res) => {
   const path = new URL(req.url!, "http://api.local").pathname;
   res.setHeader("Content-Type", "application/json");
   if (path === "/api/me") { if (req.headers.cookie !== "myhot_session=reader") { res.statusCode = 401; return res.end("{}"); } return res.end(JSON.stringify({ id: 1, email: "reader@example.invalid", csrfToken: "csrf" })); }
+  if (path === "/api/me/catalog") return res.end(JSON.stringify({ subject: "Fixture", categories: [], topicGroups: [], topics: [] }));
   if (path === "/api/site/meta") return res.end(JSON.stringify({ changelogVersion: "2026-09-28T12:00" }));
   if (path === "/api/site/reports/daily") return res.end(JSON.stringify({ kind: "daily", items: index("daily").map((entry) => ({ ...entry, count: 1 })) }));
   const match = /^\/api\/site\/reports\/(daily|weekly|monthly)\/(.+)$/.exec(path);

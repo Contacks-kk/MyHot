@@ -12,15 +12,34 @@ type repository interface {
 
 // Service prepares new material consistently before persistence. The repository owns
 // the PostgreSQL transaction that inserts or revises an article and records discovery.
-type Service struct{ repository repository }
+type Service struct {
+	repository repository
+	attributor SourceAttributor
+}
 
 func NewService(repository repository) *Service { return &Service{repository: repository} }
+
+/** SetSourceAttributor reconciles publisher ownership after a material is stored. */
+func (s *Service) SetSourceAttributor(attributor SourceAttributor) {
+	s.attributor = attributor
+}
 
 func (s *Service) Store(ctx context.Context, input Input) (Result, error) {
 	input = prepare(input)
 	decision := DecideTimeline(input.PublishedAt, input.DiscoveredAt, input.Backfill)
 	hash := ContentHash(input.Title, input.BodyText, input.Excerpt)
-	return s.repository.StorePrepared(ctx, input, decision, hash)
+	result, err := s.repository.StorePrepared(ctx, input, decision, hash)
+	if err != nil {
+		return Result{}, err
+	}
+	if s.attributor == nil {
+		return result, nil
+	}
+	result.ProcessingNeeded, err = s.attributor.ReconcileMaterialSource(ctx, result.ArticleID, input.SourceID, input.Author)
+	if err != nil {
+		return Result{}, err
+	}
+	return result, nil
 }
 
 func prepare(input Input) Input {
