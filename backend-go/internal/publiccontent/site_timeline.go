@@ -353,11 +353,13 @@ func timelineRepresentativeRank(row SiteTimelineMember, entities map[string]inte
 	}
 	containsOwner := false
 	for _, subject := range subjects {
+		// Topic labels can be unconfigured while the owning company is still known.
 		identity := siteTimelineEntityIdentity(subject, entities)
-		if identity == "" {
+		if identity == owner {
+			containsOwner = true
+		} else if identity != "" {
 			return 3
 		}
-		containsOwner = containsOwner || identity == owner
 	}
 	if !containsOwner || row.PublisherRole == nil {
 		return 3

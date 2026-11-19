@@ -132,7 +132,7 @@ func TestRepositoryPublishIsIdempotentAcrossProjectionSearchAndSelectedLedger(t 
 	if err := json.Unmarshal(payload, &item); err != nil {
 		t.Fatal(err)
 	}
-	if revision != 1 || ledgerCount != 1 || !strings.Contains(direct, "OpenAI") || body != "a full body" || item["category"] != "technology" {
+	if revision != 1 || ledgerCount != 1 || !strings.Contains(direct, "openai") || body != "a full body" || item["category"] != "technology" {
 		t.Fatalf("stored projection effects revision=%d ledger=%d direct=%q body=%q payload=%s", revision, ledgerCount, direct, body, payload)
 	}
 	if effects.selected != 1 || effects.media != 1 || effects.changed != 0 {
@@ -245,9 +245,9 @@ func TestRepositorySettlesOneSelectedSeatPerFactKeepsTheLedgerCurrent(t *testing
 			t.Fatal(err)
 		}
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO publications(article_id,source_id,title,url,channel,discovered_at,timeline_at,visibility,eligible,selected,seat,body_mode,score,fact_id)
-		VALUES($1,$2,'Media report','https://fixture.example/media','news',$3,$3,'public',true,true,true,'summary',80,$4),
-		      ($5,$6,'Official report','https://fixture.example/official','news',$3,$3,'public',true,true,false,'summary',60,$4)`, mediaArticle, mediaSource, now, factID, officialArticle, officialSource); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO publications(article_id,source_id,title,url,channel,discovered_at,timeline_at,sort_at,visibility,eligible,selected,seat,body_mode,score,fact_id)
+		VALUES($1,$2,'Media report','https://fixture.example/media','news',$3,$3,$3,'public',true,true,true,'summary',80,$4),
+		      ($5,$6,'Official report','https://fixture.example/official','news',$3,$3,$3,'public',true,true,false,'summary',60,$4)`, mediaArticle, mediaSource, now, factID, officialArticle, officialSource); err != nil {
 		t.Fatal(err)
 	}
 	repository := NewRepository(pool, nil, interests.PublicationSettings{}, "Example", "https://example.test")

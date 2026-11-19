@@ -148,7 +148,7 @@ func (r *GormRepository) V1Items(ctx context.Context, query V1ItemsQuery, now ti
 		} else if query.Category != nil {
 			db = db.Where("p.category = ?", *query.Category)
 		}
-		if query.Search != nil {
+		if len(terms) > 0 {
 			for _, term := range terms {
 				pattern := "%" + term + "%"
 				db = db.Where(`(p.search_text LIKE ? OR EXISTS (

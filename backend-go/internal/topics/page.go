@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"aihot/backend-go/internal/model"
 )
 
 const pageSize = 20
@@ -41,7 +43,7 @@ type PageItemRow struct {
 	Summary     *string
 	Reason      *string
 	Category    *string
-	Tags        []string
+	Tags        model.TextArray `gorm:"column:tags;type:text[]"`
 	Score       *float64
 	Selected    *bool
 	Channel     string
@@ -225,7 +227,7 @@ func toFeedItem(row PageItemRow, now time.Time, runtime RuntimeConfig) (FeedItem
 	item := FeedItem{
 		ID: row.ID, Title: row.Title, Summary: row.Summary, Reason: reason,
 		Source: SourceRef{Name: topicPublicSourceName(row.SourceName)}, TimelineAt: row.TimelineAt.UTC().Format("2006-01-02T15:04:05.000Z"),
-		Category: row.Category, Tags: displayTags(row.Tags), Selected: selected, Channel: row.Channel,
+		Category: row.Category, Tags: displayTags([]string(row.Tags)), Selected: selected, Channel: row.Channel,
 	}
 	if item.Tags == nil {
 		item.Tags = []string{}

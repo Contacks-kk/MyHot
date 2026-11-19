@@ -150,10 +150,13 @@ type publicationRiverEffects struct {
 	storyDigest bool
 }
 
-// NewTransactionClient creates a River inserter for HTTP transactions that need to enqueue work
-// atomically without starting a second Worker process.
+// NewTransactionClient creates a River inserter for publication effects without starting workers.
 func NewTransactionClient(pool *pgxpool.Pool) (*river.Client[pgx.Tx], error) {
-	return river.NewClient(riverpgxv5.New(pool), &river.Config{})
+	workers := river.NewWorkers()
+	river.AddWorker(workers, &SelectedNotifyWorker{})
+	river.AddWorker(workers, &MediaPrepareWorker{})
+	river.AddWorker(workers, &StoryDigestWorker{})
+	return river.NewClient(riverpgxv5.New(pool), &river.Config{Workers: workers})
 }
 
 // MigrateRiver ensures producer processes can enqueue jobs before a Worker has started.

@@ -232,7 +232,7 @@ func (r *GormRepository) Reject(ctx context.Context, receiptID int64, reason str
 func createAttempt(tx *gorm.DB, receiptID int64, number int, request Request) (int64, error) {
 	attempt := model.PaidReceiptAttempt{
 		ReceiptID: receiptID, Attempt: number, Service: request.Service, Model: optional(request.Model),
-		Origin: "live", Status: "pending",
+		Origin: "live", Status: "pending", StartedAt: time.Now().UTC(),
 	}
 	if err := tx.Create(&attempt).Error; err != nil {
 		return 0, err

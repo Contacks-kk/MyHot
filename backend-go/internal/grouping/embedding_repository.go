@@ -50,7 +50,7 @@ func (r *GormRepository) SaveEmbeddingsAndComplete(ctx context.Context, modelNam
 			if err := tx.Exec(`INSERT INTO embeddings (kind, ref_id, model, text_hash, vector)
 				VALUES ('article', ?, ?, ?, ?)
 				ON CONFLICT (kind, ref_id, model) DO UPDATE SET text_hash = EXCLUDED.text_hash,
-				vector = EXCLUDED.vector, created_at = now()`, row.ID, modelName, row.Hash, row.Vector).Error; err != nil {
+				vector = EXCLUDED.vector, created_at = now()`, row.ID, modelName, row.Hash, model.Float32Array(row.Vector)).Error; err != nil {
 				return err
 			}
 		}

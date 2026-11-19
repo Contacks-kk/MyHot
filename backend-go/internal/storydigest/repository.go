@@ -31,7 +31,12 @@ func (r *GormRepository) Reports(ctx context.Context, storyID int64, now time.Ti
 }
 
 func (r *GormRepository) LastDigest(ctx context.Context, storyID int64) (*SavedDigest, error) {
-	var row SavedDigest
+	var row struct {
+		ArticleIDs model.TextArray `gorm:"column:article_ids;type:text[]"`
+		InputsHash *string         `gorm:"column:inputs_hash"`
+		Digest     string          `gorm:"column:digest"`
+		ReceiptID  *int64          `gorm:"column:receipt_id"`
+	}
 	read := r.db.WithContext(ctx).Table("story_digests").Select("article_ids, inputs_hash, digest, receipt_id").
 		Where("story_id = ?", storyID).Order("version DESC").Limit(1).Scan(&row)
 	if read.Error != nil {
@@ -40,7 +45,7 @@ func (r *GormRepository) LastDigest(ctx context.Context, storyID int64) (*SavedD
 	if read.RowsAffected == 0 {
 		return nil, nil
 	}
-	return &row, nil
+	return &SavedDigest{ArticleIDs: []string(row.ArticleIDs), InputsHash: row.InputsHash, Digest: row.Digest, ReceiptID: row.ReceiptID}, nil
 }
 
 func (r *GormRepository) Clear(ctx context.Context, storyID int64, version int) (bool, error) {
@@ -77,7 +82,7 @@ func (r *GormRepository) Save(ctx context.Context, input SaveInput) (bool, error
 		}
 		latest := input.Latest
 		digest := model.StoryDigest{StoryID: input.StoryID, Version: input.Version, Digest: input.Digest,
-			Latest: &latest, ReceiptID: input.ReceiptID, ArticleIDs: input.ArticleIDs, InputsHash: &input.InputsHash}
+			Latest: &latest, ReceiptID: input.ReceiptID, ArticleIDs: model.TextArray(input.ArticleIDs), InputsHash: &input.InputsHash}
 		if err := tx.Create(&digest).Error; err != nil {
 			return err
 		}

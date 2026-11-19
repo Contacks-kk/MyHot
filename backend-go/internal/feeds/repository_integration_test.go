@@ -49,8 +49,8 @@ func TestFullFeedDropsBodyWhenRedistributionPermissionIsRevoked(t *testing.T) {
 		VALUES (?, ?, ?, ?, 'Licensed title', 'Licensed full text', '<p>LICENSED-BODY</p>', 'ok', ?, ?, ?)`, articleID, sourceID, articleID, "https://source.example/licensed", now, now, now).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := orm.Exec(`INSERT INTO publications(article_id,source_id,title,summary,url,channel,visibility,eligible,selected,seat,visible_after,discovered_at,timeline_at,published_at,syndicate)
-		VALUES (?, ?, 'Licensed title', 'Licensed summary', 'https://source.example/licensed', 'news', 'public', true, true, true, ?, ?, ?, ?, true)`, articleID, sourceID, now.Add(-time.Minute), now, now, now).Error; err != nil {
+	if err := orm.Exec(`INSERT INTO publications(article_id,source_id,title,summary,url,channel,visibility,eligible,selected,seat,visible_after,discovered_at,timeline_at,sort_at,published_at,syndicate)
+		VALUES (?, ?, 'Licensed title', 'Licensed summary', 'https://source.example/licensed', 'news', 'public', true, true, true, ?, ?, ?, ?, ?, true)`, articleID, sourceID, now.Add(-time.Minute), now, now, now, now).Error; err != nil {
 		t.Fatal(err)
 	}
 

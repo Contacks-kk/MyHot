@@ -792,13 +792,11 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 	pgBossHandoffScanWorker := &PgBossHandoffScanWorker{Pool: pool, DB: orm, CollectorEnabled: cfg.CollectorEnabled,
 		ManualMPEnabled: cfg.CollectorEnabled && strings.TrimSpace(cfg.DajialaKey) != "", DigestEnabled: cfg.StoryDigestEnabled && cfg.ModelCallsEnabled}
 	river.AddWorker(workers, pgBossHandoffScanWorker)
-	if cfg.GoMediaPrepareEnabled {
-		mediaItems := publiccontent.NewService(publiccontent.NewRepository(orm), entities)
-		mediaItems.SetTopics(topicDefinitions)
-		river.AddWorker(workers, &MediaPrepareWorker{Service: imageService, Articles: &ArticleMediaPrewarmer{
-			items: mediaItems, images: imageService, secret: cfg.ImageProxySignSecret, xFull: cfg.XPostIsFullText,
-		}})
-	}
+	mediaItems := publiccontent.NewService(publiccontent.NewRepository(orm), entities)
+	mediaItems.SetTopics(topicDefinitions)
+	river.AddWorker(workers, &MediaPrepareWorker{Service: imageService, Articles: &ArticleMediaPrewarmer{
+		items: mediaItems, images: imageService, secret: cfg.ImageProxySignSecret, xFull: cfg.XPostIsFullText,
+	}})
 	if cfg.SharedPipelineEnabled {
 		sharedPipelineScanWorker = &SharedPipelineScanWorker{Service: pipelineService, DB: orm}
 		sourceRepublishScanWorker = &SourceRepublishScanWorker{Service: sourceRepublishService, DB: orm}
@@ -874,9 +872,7 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 	river.AddWorker(workers, operationsAlertsWorker)
 	river.AddWorker(workers, deliveryRecoveryWorker)
 	river.AddWorker(workers, receiptRecoveryWorker)
-	if cfg.GoContentDeliveryEnabled {
-		river.AddWorker(workers, selectedNotifyWorker)
-	}
+	river.AddWorker(workers, selectedNotifyWorker)
 	if mpScanWorker != nil {
 		river.AddWorker(workers, mpScanWorker)
 	}

@@ -6,7 +6,6 @@ type Story struct {
 	ID              int64      `gorm:"column:id;primaryKey"`
 	PublicID        string     `gorm:"column:public_id"`
 	Title           string     `gorm:"column:title"`
-	Status          string     `gorm:"column:status"`
 	FirstReportAt   *time.Time `gorm:"column:first_report_at"`
 	LatestAt        *time.Time `gorm:"column:latest_at"`
 	Digest          *string    `gorm:"column:digest"`
@@ -27,7 +26,7 @@ type StoryDigest struct {
 	Digest     string    `gorm:"column:digest"`
 	Latest     *string   `gorm:"column:latest"`
 	ReceiptID  *int64    `gorm:"column:receipt_id"`
-	ArticleIDs []string  `gorm:"column:article_ids"`
+	ArticleIDs TextArray `gorm:"column:article_ids;type:text[]"`
 	InputsHash *string   `gorm:"column:inputs_hash"`
 	CreatedAt  time.Time `gorm:"column:created_at"`
 }

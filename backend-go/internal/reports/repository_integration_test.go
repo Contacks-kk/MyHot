@@ -74,10 +74,10 @@ func TestPeriodReportsAssignsDelayedAndBoundaryReleasesOnce(t *testing.T) {
  VALUES(?, ?, ?, ?, ?, ?, ?)`, item.id, sourceID, item.id, "https://report.example/"+item.id, item.id, item.timelineAt, item.timelineAt).Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := db.Exec(`INSERT INTO publications(article_id, source_id, title, url, channel, discovered_at, timeline_at,
- visibility, eligible, selected, backfill, visible_after)
- VALUES(?, ?, ?, ?, 'news', ?, ?, 'public', true, true, false, ?)`,
-			item.id, sourceID, item.id, "https://report.example/"+item.id, item.timelineAt, item.timelineAt, item.visibleAt).Error; err != nil {
+		if err := db.Exec(`INSERT INTO publications(article_id, source_id, title, url, channel, discovered_at, timeline_at, sort_at,
+	 visibility, eligible, selected, backfill, visible_after)
+	 VALUES(?, ?, ?, ?, 'news', ?, ?, ?, 'public', true, true, false, ?)`,
+			item.id, sourceID, item.id, "https://report.example/"+item.id, item.timelineAt, item.timelineAt, item.timelineAt, item.visibleAt).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -157,10 +157,10 @@ func TestPeriodReportsWaitsForAnEarlierReleaseTransaction(t *testing.T) {
  VALUES(?, ?, ?, ?, ?, ?, ?)`, articleID, sourceID, articleID, "https://report.example/"+articleID, articleID, start.Add(time.Hour), start.Add(time.Hour)).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Exec(`INSERT INTO publications(article_id, source_id, title, url, channel, discovered_at, timeline_at,
- visibility, eligible, selected, backfill, visible_after)
- VALUES(?, ?, ?, ?, 'news', ?, ?, 'public', true, true, false, ?)`,
-		articleID, sourceID, articleID, "https://report.example/"+articleID, start.Add(time.Hour), start.Add(time.Hour), start).Error; err != nil {
+	if err := db.Exec(`INSERT INTO publications(article_id, source_id, title, url, channel, discovered_at, timeline_at, sort_at,
+	 visibility, eligible, selected, backfill, visible_after)
+	 VALUES(?, ?, ?, ?, 'news', ?, ?, ?, 'public', true, true, false, ?)`,
+		articleID, sourceID, articleID, "https://report.example/"+articleID, start.Add(time.Hour), start.Add(time.Hour), start.Add(time.Hour), start).Error; err != nil {
 		t.Fatal(err)
 	}
 

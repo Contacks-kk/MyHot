@@ -83,7 +83,7 @@ func (r *GormRepository) ReadSitemap(ctx context.Context, now time.Time, definit
 					OR (SELECT count(*) FROM unnest(p.tags) AS e(tag) WHERE e.tag LIKE 'entity:%') = 1)
 		)
 		SELECT t.slug, count(s.article_id)::int AS total,
-			count(s.article_id) FILTER (WHERE s.timeline_at > ? - interval '30 days')::int AS recent,
+			count(s.article_id) FILTER (WHERE s.timeline_at > (?::timestamptz - interval '30 days'))::int AS recent,
 			max(s.visible_after) AS changed_at
 		FROM topic_config t LEFT JOIN seats s ON s.slug = t.slug
 		GROUP BY t.slug ORDER BY t.slug`, encodedTopics, now, now).Scan(&topicRows).Error

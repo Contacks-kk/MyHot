@@ -129,7 +129,8 @@ func (r *GormRepository) SaveAnalysis(ctx context.Context, input Input, run Anal
 	}
 	row := model.ArticleAnalysis{
 		ArticleID: input.ID, InputRevision: input.Revision, Origin: "model", Model: stringPointer(modelName), PromptVersion: promptVersion,
-		ReceiptIDs: receiptIDs, Relevance: output.Relevance, Category: output.Category, Tags: output.Tags, Subjects: output.Subjects,
+		ReceiptIDs: model.Int64Array(receiptIDs), Relevance: output.Relevance, Category: output.Category,
+		Tags: model.TextArray(output.Tags), Subjects: model.TextArray(output.Subjects),
 		TitleZh: output.TitleZh, SummaryZh: output.SummaryZh, ReasonZh: output.ReasonZh, Score: output.Score, Selected: output.Selected, Output: detail,
 	}
 	var id int64

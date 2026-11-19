@@ -85,8 +85,8 @@ func TestReportClassificationCorrectionMovesFrozenEntriesAndArchivesRevision(t *
 		VALUES($1,$2,$3,$4,'Report correction fixture',now(),now())`, articleID, sourceID, "url:"+articleURL, articleURL); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO publications(article_id,title,summary,category,tags,source_id,channel,url,discovered_at,timeline_at)
-		VALUES($1,'Report correction fixture','summary','ai-models',ARRAY['new'], $2,'news',$3,now(),now())`, articleID, sourceID, articleURL); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO publications(article_id,title,summary,category,tags,source_id,channel,url,discovered_at,timeline_at,sort_at)
+		VALUES($1,'Report correction fixture','summary','ai-models',ARRAY['new'], $2,'news',$3,now(),now(),now())`, articleID, sourceID, articleURL); err != nil {
 		t.Fatal(err)
 	}
 	entry := map[string]any{"itemId": articleID, "firstParty": true, "role": "官方"}
@@ -410,8 +410,8 @@ func TestContentCommandsRollbackWhenAuditInsertFails(t *testing.T) {
 		VALUES($1,$2,$3,$4,'Original title',now(),now())`, articleID, sourceID, "url:"+articleURL, articleURL); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO publications(article_id,title,summary,source_id,channel,url,discovered_at,timeline_at)
-		VALUES($1,'Original title','Original summary',$2,'news',$3,now(),now())`, articleID, sourceID, articleURL); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO publications(article_id,title,summary,source_id,channel,url,discovered_at,timeline_at,sort_at)
+		VALUES($1,'Original title','Original summary',$2,'news',$3,now(),now(),now())`, articleID, sourceID, articleURL); err != nil {
 		t.Fatal(err)
 	}
 	publisher := publication.NewRepository(pool, nil, interests.PublicationSettings{}, "Fixture", "https://example.invalid")
@@ -501,7 +501,7 @@ func TestResetGroupingWithdrawsAutomaticIdentityButKeepsManualMembership(t *test
 		t.Fatal(err)
 	}
 	for _, storyID := range storyIDs {
-		if _, err := pool.Exec(ctx, `INSERT INTO stories(public_id,title,first_report_at,latest_at) VALUES($1,$1,now(),now())`, storyID); err != nil {
+		if _, err := pool.Exec(ctx, `INSERT INTO stories(public_id,title,first_report_at,latest_at) VALUES($1::uuid,$1::text,now(),now())`, storyID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -785,7 +785,13 @@ func TestNormalizeXEncodingCommitsAuditedRepairIdempotentlyAndRejectsStaleApprov
 	if err := pool.QueryRow(ctx, `SELECT title,body_text,x_post FROM articles WHERE id=$1`, articleID).Scan(&savedTitle, &savedBody, &savedPost); err != nil {
 		t.Fatal(err)
 	}
-	postContainsDecodedText := strings.Contains(string(savedPost), `"text":"Research & development\nLiteral &lt; and <code>`)
+	var savedPostFields struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(savedPost, &savedPostFields); err != nil {
+		t.Fatal(err)
+	}
+	postContainsDecodedText := strings.Contains(savedPostFields.Text, "Research & development\nLiteral &lt; and <code>")
 	if savedTitle != "Research & development" || !strings.Contains(savedBody, "Literal &lt; and <code>") || !strings.Contains(savedBody, "?value=&amp;keep=1") || !postContainsDecodedText {
 		t.Fatalf("stored repair changed nonprovider bytes or missed decoding: title=%q body=%q post=%s", savedTitle, savedBody, savedPost)
 	}
@@ -804,7 +810,7 @@ func TestNormalizeXEncodingCommitsAuditedRepairIdempotentlyAndRejectsStaleApprov
 	if err := pool.QueryRow(ctx, `SELECT body FROM pool_search WHERE article_id=$1`, articleID).Scan(&searchBody); err != nil {
 		t.Fatal(err)
 	}
-	if !selected || publicTitle != savedTitle || !strings.Contains(searchBody, "literal < and <code>") {
+	if !selected || publicTitle != savedTitle || !strings.Contains(searchBody, "literal &lt; and <code>") {
 		t.Fatalf("repair did not refresh the public projection and search cache: selected=%t title=%q search=%q", selected, publicTitle, searchBody)
 	}
 	retried, found, err := service.NormalizeXEncoding(ctx, articleID, input, actor)

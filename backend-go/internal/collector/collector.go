@@ -653,7 +653,7 @@ func detailTitleConfigured(detail settings) bool {
 
 /** detailDateConfigured reports whether detail rules can recover a publication date. */
 func detailDateConfigured(detail settings) bool {
-	return len(detail) > 0
+	return detail.text("publishedAtSelector") != "" || detail.text("publishedAtRegex") != ""
 }
 
 /** needsRecoveredTitle identifies listing labels that need an article-page headline. */

@@ -145,6 +145,7 @@ func (s *Server) putInterests(w http.ResponseWriter, r *http.Request, u userCont
 }
 
 func (s *Server) getEntities(w http.ResponseWriter, _ *http.Request, _ userContext) {
+	setPrivateSiteHeaders(w)
 	type entry struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`

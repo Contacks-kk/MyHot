@@ -853,7 +853,7 @@ func (s *Service) editionEntry(facts []rawFact, memory DailyMemory, participants
 	if sourceStory != nil && participants[*sourceStory] > 0 {
 		participantCount = participants[*sourceStory]
 	}
-	return EditionEntry{Entry: entry, Category: representative.Category, Tags: representative.Tags, StoryID: sourceStory,
+	return EditionEntry{Entry: entry, Category: representative.Category, Tags: []string(representative.Tags), StoryID: sourceStory,
 		Mentions: mentionedStoryIDs, SourceIDs: sourceIDs, Authority: priority(representative, s.config.Entities),
 		Importance: importance(scoreMax, participantCount, official, previous != nil), Previous: previous}, nil
 }

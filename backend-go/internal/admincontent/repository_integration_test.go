@@ -59,8 +59,8 @@ func TestSearchByIDURLAndTitleUsesPublicationTitle(t *testing.T) {
 		VALUES (?, ?, ?, ?, 'Original title', now(), now())`, articleID, sourceID, identity, articleURL).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := orm.Exec(`INSERT INTO publications (article_id,title,source_id,channel,url,discovered_at,timeline_at)
-		VALUES (?, 'Published title', ?, 'news', ?, now(), now())`, articleID, sourceID, articleURL).Error; err != nil {
+	if err := orm.Exec(`INSERT INTO publications (article_id,title,source_id,channel,url,discovered_at,timeline_at,sort_at)
+		VALUES (?, 'Published title', ?, 'news', ?, now(), now(), now())`, articleID, sourceID, articleURL).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := orm.Exec(`INSERT INTO article_discoveries (article_id,source_id,via) VALUES (?,?,'fixture')`, articleID, sourceID).Error; err != nil {
@@ -110,8 +110,8 @@ func TestSetSEOUpdatesIndexProjectionAndAuditsAtomically(t *testing.T) {
 		VALUES (?, ?, ?, ?, 'SEO fixture', now(), now())`, articleID, sourceID, "url:"+articleURL, articleURL).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := orm.Exec(`INSERT INTO publications (article_id,title,summary,source_id,channel,url,discovered_at,timeline_at)
-		VALUES (?, 'SEO fixture', 'readable summary', ?, 'news', ?, now(), now())`, articleID, sourceID, articleURL).Error; err != nil {
+	if err := orm.Exec(`INSERT INTO publications (article_id,title,summary,source_id,channel,url,discovered_at,timeline_at,sort_at)
+		VALUES (?, 'SEO fixture', 'readable summary', ?, 'news', ?, now(), now(), now())`, articleID, sourceID, articleURL).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -165,8 +165,8 @@ func TestSetSEORollsBackDecisionWhenAuditInsertFails(t *testing.T) {
 		VALUES (?, ?, ?, ?, 'SEO rollback fixture', now(), now())`, articleID, sourceID, "url:"+articleURL, articleURL).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := orm.Exec(`INSERT INTO publications (article_id,title,summary,source_id,channel,url,discovered_at,timeline_at)
-		VALUES (?, 'SEO rollback fixture', 'readable summary', ?, 'news', ?, now(), now())`, articleID, sourceID, articleURL).Error; err != nil {
+	if err := orm.Exec(`INSERT INTO publications (article_id,title,summary,source_id,channel,url,discovered_at,timeline_at,sort_at)
+		VALUES (?, 'SEO rollback fixture', 'readable summary', ?, 'news', ?, now(), now(), now())`, articleID, sourceID, articleURL).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := orm.Exec(`CREATE FUNCTION refuse_admincontent_seo_audit() RETURNS trigger LANGUAGE plpgsql AS $$

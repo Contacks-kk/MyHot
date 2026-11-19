@@ -12,7 +12,7 @@ type SelectBenchRun struct {
 	SampleSize    int             `gorm:"column:sample_size"`
 	Seed          *int64          `gorm:"column:seed"`
 	PromptVersion *string         `gorm:"column:prompt_version"`
-	Models        []string        `gorm:"column:models;type:text[]"`
+	Models        TextArray       `gorm:"column:models;type:text[]"`
 	Summary       json.RawMessage `gorm:"column:summary;type:jsonb"`
 	CreatedAt     time.Time       `gorm:"column:created_at"`
 	ImportedBy    *string         `gorm:"column:imported_by"`

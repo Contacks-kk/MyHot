@@ -83,7 +83,7 @@ func (r *Repository) Pending(ctx context.Context, limit int) ([]Candidate, error
 		limit = 100
 	}
 	var candidates []Candidate
-	bodyKinds := `(s.config->>'fetchPublicContent' = 'true' OR (s.config ? 'detail' AND s.config->'detail' <> 'null') OR s.kind = 'web_list'
+	bodyKinds := `(s.config->>'fetchPublicContent' = 'true' OR (jsonb_exists(s.config, 'detail') AND s.config->'detail' <> 'null') OR s.kind = 'web_list'
 		OR (coalesce(a.body_text, '') = '' AND a.x_post IS NULL))`
 	if r.includeX {
 		bodyKinds = strings.TrimSuffix(bodyKinds, ")") + ` OR (s.kind = 'x_search' AND jsonb_exists(a.x_post, 'tweetId')))`

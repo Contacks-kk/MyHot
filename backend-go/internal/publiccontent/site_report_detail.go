@@ -180,6 +180,10 @@ func (s *Service) SiteReport(ctx context.Context, kind, key string, now time.Tim
 			paragraph := ""
 			if kind == "daily" && named.LeadParagraph != nil {
 				paragraph = *named.LeadParagraph
+			} else if kind == "daily" && named.ItemID != "" {
+				if replacement, ok := availability[named.ItemID]; ok && replacement.Available && replacement.Summary != nil {
+					paragraph = *replacement.Summary
+				}
 			} else if kind != "daily" && overview != nil {
 				paragraph = *overview
 			}

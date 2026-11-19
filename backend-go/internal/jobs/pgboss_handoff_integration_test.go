@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -57,7 +58,8 @@ func TestPgBossHandoffAtomicallyMovesOwnedQueueWorkToRiver(t *testing.T) {
 	if _, err := pool.Exec(ctx, fmt.Sprintf(`CREATE TABLE %s.job (
 		id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name text NOT NULL, data jsonb,
 		state text NOT NULL, start_after timestamptz NOT NULL, created_on timestamptz NOT NULL,
-		retry_count integer NOT NULL DEFAULT 0, completed_on timestamptz, output jsonb)`, quotedSchema)); err != nil {
+		started_on timestamptz, retry_count integer NOT NULL DEFAULT 0,
+		completed_on timestamptz, output jsonb)`, quotedSchema)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO sources(id,name,kind,config) VALUES($1,'Handoff test source','rss','{"feedUrl":"https://example.invalid/feed"}')`, sourceID); err != nil {
@@ -99,13 +101,27 @@ func TestPgBossHandoffAtomicallyMovesOwnedQueueWorkToRiver(t *testing.T) {
 		t.Fatalf("manual source fetch resume = %#v, %v", resumed, err)
 	}
 	var output []byte
-	for _, id := range []string{manualID, scheduledID, notifyID, mediaID} {
+	for _, id := range []string{manualID, notifyID, mediaID} {
 		if err := pool.QueryRow(ctx, fmt.Sprintf(`SELECT state,output FROM %s.job WHERE id=$1`, quotedSchema), id).Scan(&state, &output); err != nil {
 			t.Fatal(err)
 		}
-		if state != "completed" || !strings.Contains(string(output), `"handoff":"river"`) {
+		var details map[string]any
+		if err := json.Unmarshal(output, &details); err != nil {
+			t.Fatal(err)
+		}
+		if state != "completed" || details["handoff"] != "river" {
 			t.Fatalf("source row %s handoff state=%s output=%s", id, state, output)
 		}
+	}
+	if err := pool.QueryRow(ctx, fmt.Sprintf(`SELECT state,output FROM %s.job WHERE id=$1`, quotedSchema), scheduledID).Scan(&state, &output); err != nil {
+		t.Fatal(err)
+	}
+	var retired map[string]any
+	if err := json.Unmarshal(output, &retired); err != nil {
+		t.Fatal(err)
+	}
+	if state != "completed" || retired["retiredBy"] != "go-shared-pipeline" {
+		t.Fatalf("scheduled source row state=%s output=%s", state, output)
 	}
 	var count int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM river_job WHERE kind IN ('myhot_collect_source','notify.selected','media.prepare') AND (args->>'sourceId'=$1 OR args->>'articleId'=$2)`, sourceID, prefix+"_article").Scan(&count); err != nil {

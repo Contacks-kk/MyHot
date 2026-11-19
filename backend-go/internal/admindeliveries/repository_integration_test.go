@@ -98,7 +98,13 @@ func TestResendClaimAndFinalAuditUseOptimisticDeliveryVersion(t *testing.T) {
 	})
 
 	record, found, err := repository.LoadResend(ctx, id)
-	if err != nil || !found || record == nil || record.Status != "unknown" || record.ConfigRef != "test-webhook" || string(record.Payload) != `{"version":1}` {
+	var initialPayload map[string]any
+	if record != nil {
+		if err := json.Unmarshal(record.Payload, &initialPayload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err != nil || !found || record == nil || record.Status != "unknown" || record.ConfigRef != "test-webhook" || initialPayload["version"] != float64(1) {
 		t.Fatalf("resend record = %#v, found=%t, err=%v", record, found, err)
 	}
 	newPayload := json.RawMessage(`{"version":2}`)

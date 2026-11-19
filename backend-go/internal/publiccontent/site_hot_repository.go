@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"time"
+
+	"aihot/backend-go/internal/model"
 )
 
 func (r *GormRepository) SiteHotRanking(ctx context.Context, now time.Time) (*SiteHotRanking, error) {
@@ -57,6 +59,9 @@ SELECT computed_at, rank, story_id, entry, story_public_id, story_title, represe
 FROM current_reports ORDER BY rank`
 	if err := r.db.WithContext(ctx).Raw(query, head.ID, now, now).Scan(&rows).Error; err != nil {
 		return nil, err
+	}
+	if rows == nil {
+		rows = []SiteHotRankingRecord{}
 	}
 	for i := range rows {
 		rows[i].ComputedAt = head.ComputedAt
@@ -127,7 +132,7 @@ func (r *GormRepository) loadSiteHotFaces(ctx context.Context, details *SiteHotD
 	err := r.db.WithContext(ctx).Raw(`SELECT DISTINCT ON (s.id) s.name,
 		CASE WHEN s.icon_url IS NOT NULL THEN s.icon_url ELSE a.x_post->>'avatarUrl' END AS url
 		FROM story_signals ss JOIN sources s ON s.id = ss.source_id
-		LEFT JOIN articles a ON a.id = CASE WHEN s.icon_url IS NULL THEN ss.article_id END AND a.x_post ? 'avatarUrl'
+		LEFT JOIN articles a ON a.id = CASE WHEN s.icon_url IS NULL THEN ss.article_id END AND jsonb_exists(a.x_post, 'avatarUrl')
 		WHERE ss.story_id IN ?
 		ORDER BY s.id, (a.id IS NULL), a.discovered_at DESC, a.id DESC`, storyIDs).Scan(&rows).Error
 	if err != nil {
@@ -215,7 +220,7 @@ func (r *GormRepository) loadSiteHotCovers(ctx context.Context, details *SiteHot
 		) img
 		WHERE p.story_id IN ? AND p.visibility = 'public' AND p.eligible AND (NOT p.selected OR p.visible_after <= ?)
 		AND p.body_mode <> 'summary'
-		ORDER BY p.story_id, (p.article_id = ANY(?::text[])) DESC, p.first_party DESC, p.selected DESC, coalesce(p.score, 0) DESC, p.article_id`, storyIDs, now, representatives).Scan(&rows).Error
+		ORDER BY p.story_id, (p.article_id = ANY(?::text[])) DESC, p.first_party DESC, p.selected DESC, coalesce(p.score, 0) DESC, p.article_id`, storyIDs, now, model.TextArray(representatives)).Scan(&rows).Error
 	if err != nil {
 		return err
 	}

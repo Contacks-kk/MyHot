@@ -46,7 +46,7 @@ func (r *GormRepository) Page(ctx context.Context, definition topics.Definition,
 					OR (SELECT count(*) FROM unnest(p.tags) AS e(tag) WHERE e.tag LIKE 'entity:%') = 1)
 		)
 		SELECT count(*)::int AS total,
-			count(*) FILTER (WHERE timeline_at > ? - interval '30 days')::int AS recent,
+			count(*) FILTER (WHERE timeline_at > ?::timestamptz - interval '30 days')::int AS recent,
 			(SELECT title FROM seats ORDER BY timeline_at DESC, article_id DESC LIMIT 1) AS latest_title,
 			(SELECT timeline_at FROM seats ORDER BY timeline_at DESC, article_id DESC LIMIT 1) AS latest_at
 		FROM seats`, encoded, now, now).Scan(&stats).Error

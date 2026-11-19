@@ -120,7 +120,7 @@ func (r *GormRepository) sitePoolRelevancePage(ctx context.Context, query SitePo
 		any := make([]string, 0, len(terms))
 		for _, term := range terms {
 			pattern := "%" + term + "%"
-			part += " + (CASE WHEN ps.direct LIKE ? THEN 3 ELSE 0 END) + (CASE WHEN ps.body LIKE ? THEN 1 ELSE 0 END)"
+			part += " + (CASE WHEN ps.direct LIKE ? THEN 3 WHEN ps.body LIKE ? THEN 1 ELSE 0 END)"
 			matchArgs = append(matchArgs, pattern, pattern)
 			any = append(any, "(ps.direct LIKE ? OR ps.body LIKE ?)")
 		}

@@ -16,16 +16,16 @@ const timelineOwnFactEvidence = `EXISTS (
 
 func (r *GormRepository) SiteTimelineAnchors(ctx context.Context, query SiteTimelineQuery, now time.Time, after *siteTimelineCursor, limit int) ([]SiteTimelineAnchor, error) {
 	grouped := r.siteTimelineGroupedQuery(query, now)
+	anchorsQuery := r.db.WithContext(ctx).Table("(?) AS grouped", grouped)
 	if after != nil {
 		cursorTime := time.UnixMilli(after.Anchor).UTC()
-		grouped = grouped.Where("anchor_at < ? OR (anchor_at = ? AND group_key COLLATE \"C\" < ?)", cursorTime, cursorTime, after.GroupKey)
+		anchorsQuery = anchorsQuery.Where("anchor_at < ? OR (anchor_at = ? AND group_key COLLATE \"C\" < ?)", cursorTime, cursorTime, after.GroupKey)
 	}
 	var rows []struct {
 		Key      string    `gorm:"column:group_key"`
 		AnchorAt time.Time `gorm:"column:anchor_at"`
 	}
-	err := r.db.WithContext(ctx).Table("(?) AS grouped", grouped).
-		Select("group_key, anchor_at").Order("anchor_at DESC").Order("group_key COLLATE \"C\" DESC").Limit(limit).Scan(&rows).Error
+	err := anchorsQuery.Select("group_key, anchor_at").Order("anchor_at DESC").Order("group_key COLLATE \"C\" DESC").Limit(limit).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}

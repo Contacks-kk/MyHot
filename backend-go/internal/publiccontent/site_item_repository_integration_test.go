@@ -54,8 +54,8 @@ func TestSiteItemRepositoryLoadsLicensedDetailAndCurrentGroup(t *testing.T) {
 		VALUES (?, ?, ?, ?, 'Original title', 'Writer', 'en', ?, ?, 'English body', '<h2>English body</h2>', 'ok')`, articleID, sourceID, prefix, "https://fixture.example/article", now, now).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := orm.Exec(`INSERT INTO publications (article_id,source_id,title,original_title,summary,reason,category,tags,score,channel,url,published_at,discovered_at,timeline_at,visibility,eligible,selected,seat,visible_after,body_mode,indexable)
-		VALUES (?, ?, 'Chinese title', 'Original title', 'Summary', 'Reason', 'ai-models', ARRAY['Agent','entity:openai'], 81.6, 'news', ?, ?, ?, ?, 'public', true, true, true, ?, 'full', true)`, articleID, sourceID, "https://fixture.example/article", now, now, now, now.Add(-time.Hour)).Error; err != nil {
+	if err := orm.Exec(`INSERT INTO publications (article_id,source_id,title,original_title,summary,reason,category,tags,score,channel,url,published_at,discovered_at,timeline_at,sort_at,visibility,eligible,selected,seat,visible_after,body_mode,indexable)
+		VALUES (?, ?, 'Chinese title', 'Original title', 'Summary', 'Reason', 'ai-models', ARRAY['Agent','entity:openai'], 81.6, 'news', ?, ?, ?, ?, ?, 'public', true, true, true, ?, 'full', true)`, articleID, sourceID, "https://fixture.example/article", now, now, now, now, now.Add(-time.Hour)).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := orm.Exec("INSERT INTO translations (article_id,lang,revision,body_html,body_text,complete) VALUES (?, 'zh', 1, '<h2>Chinese body</h2>', 'Chinese body', false)", articleID).Error; err != nil {

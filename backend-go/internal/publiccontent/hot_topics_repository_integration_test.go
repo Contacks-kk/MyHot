@@ -61,8 +61,8 @@ func TestHotTopicsRepositoryRechecksTheSavedRepresentativeAgainstCurrentPublicat
 		VALUES (?, ?, ?, 'https://source.example/fixture', 'Fixture article', ?, ?)`, articleID, sourceID, prefix+"_identity", now, now).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := orm.Exec(`INSERT INTO publications(article_id,source_id,title,url,channel,discovered_at,timeline_at,visibility,eligible,selected)
-		VALUES (?, ?, 'Fixture article', 'https://source.example/fixture', 'news', ?, ?, 'public', true, false)`, articleID, sourceID, now, now).Error; err != nil {
+	if err := orm.Exec(`INSERT INTO publications(article_id,source_id,title,url,channel,discovered_at,timeline_at,sort_at,visibility,eligible,selected)
+		VALUES (?, ?, 'Fixture article', 'https://source.example/fixture', 'news', ?, ?, ?, 'public', true, false)`, articleID, sourceID, now, now, now).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := orm.Exec(`INSERT INTO fact_articles(fact_id,article_id,role) VALUES ((SELECT id FROM facts WHERE public_id = ?), ?, 'primary')`, factID, articleID).Error; err != nil {
@@ -72,7 +72,7 @@ func TestHotTopicsRepositoryRechecksTheSavedRepresentativeAgainstCurrentPublicat
 		VALUES (now() + interval '1 hour', ?, jsonb_build_array(jsonb_build_object(
 		'rank', 1,
 		'storyId', (SELECT id FROM stories WHERE public_id = ?),
-		'storyPublicId', ?, 'representativeItemId', ?, 'sourceCount', 2, 'signalCount', 1,
+		'storyPublicId', ?::text, 'representativeItemId', ?::text, 'sourceCount', 2, 'signalCount', 1,
 		'participantCount', 3, 'sourceNames', jsonb_build_array('Fixture source（channel）'))), '{}', true)`, ruleVersion, publicID, publicID, articleID).Error; err != nil {
 		t.Fatal(err)
 	}

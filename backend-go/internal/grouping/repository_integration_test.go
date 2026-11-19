@@ -78,16 +78,16 @@ func TestSignalRevisitQueriesKeepOnlyUnattachedRecentDiscussionPosts(t *testing.
 		}
 		return id
 	}
-	replyID := insert("reply", now.Add(-time.Hour), false, nil, `{"replyTo":"tweet-123"}`)
-	quoteID := insert("quote", now.Add(-2*time.Hour), false, nil, `{"quoted":{"url":"https://x.com/acme/status/tweet-123"}}`)
-	insert("unmatched", now.Add(-3*time.Hour), false, nil, `{"replyTo":"tweet-123"}`)
+	replyID := insert("reply", now.Add(-time.Hour), false, nil, `{"replyTo":"123"}`)
+	quoteID := insert("quote", now.Add(-2*time.Hour), false, nil, `{"quoted":{"url":"https://x.com/acme/status/123"}}`)
+	insert("unmatched", now.Add(-3*time.Hour), false, nil, `{"replyTo":"123"}`)
 	insert("other-recent", now.Add(-3*time.Hour), false, nil, `{}`)
-	insert("too-old", now.Add(-7*time.Hour), false, nil, `{"replyTo":"tweet-123"}`)
+	insert("too-old", now.Add(-49*time.Hour), false, nil, `{"replyTo":"123"}`)
 	stalePublished := now.Add(-50 * time.Hour)
-	insert("stale-backfill", now.Add(-time.Hour), true, &stalePublished, `{"replyTo":"tweet-123"}`)
-	attachedID := insert("attached", now.Add(-time.Hour), false, nil, `{"replyTo":"tweet-123"}`)
-	overriddenID := insert("overridden", now.Add(-time.Hour), false, nil, `{"replyTo":"tweet-123"}`)
-	judgedID := insert("judged", now.Add(-time.Hour), false, nil, `{"replyTo":"tweet-123"}`)
+	insert("stale-backfill", now.Add(-time.Hour), true, &stalePublished, `{"replyTo":"123"}`)
+	attachedID := insert("attached", now.Add(-time.Hour), false, nil, `{"replyTo":"123"}`)
+	overriddenID := insert("overridden", now.Add(-time.Hour), false, nil, `{"replyTo":"123"}`)
+	judgedID := insert("judged", now.Add(-time.Hour), false, nil, `{"replyTo":"123"}`)
 	if err := db.Exec(`INSERT INTO grouping_decisions(article_id,verdict) VALUES (?,'signal-unmatched'),(?,'signal')`, ids["unmatched"], judgedID).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestSignalRevisitQueriesKeepOnlyUnattachedRecentDiscussionPosts(t *testing.
 		t.Fatal(err)
 	}
 
-	waiting, err := repository.WaitingSignals(ctx, "tweet-123", now.Add(-signalWaitWindow))
+	waiting, err := repository.WaitingSignals(ctx, "123", now.Add(-signalWaitWindow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,9 +180,11 @@ func TestRecallRepositoryFiltersLiveRecentNonCompositeEvidence(t *testing.T) {
 	if err := db.Exec("INSERT INTO sources (id,name,kind) VALUES (?, 'Grouping recall fixture', 'rss')", sourceID).Error; err != nil {
 		t.Fatal(err)
 	}
+	storyNumber := 0
 	newStory := func(label string) int64 {
 		t.Helper()
-		publicID := fmt.Sprintf("00000000-0000-4000-8000-%012x", time.Now().UnixNano()&0xffffffffffff)
+		storyNumber++
+		publicID := fmt.Sprintf("00000000-0000-4000-8000-%012x", (time.Now().UnixNano()+int64(storyNumber))&0xffffffffffff)
 		var id int64
 		if err := db.Raw("INSERT INTO stories (public_id,title) VALUES (?,?) RETURNING id", publicID, label).Scan(&id).Error; err != nil {
 			t.Fatal(err)
@@ -269,8 +271,8 @@ func TestRecallRepositorySelectedContextAndRelatedXIdentity(t *testing.T) {
 			VALUES (?,?,?,?,?,?,?,?)`, id, sourceID, identity, articleURL, label, now, now, strings.Repeat("body", 2000)).Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := db.Exec(`INSERT INTO publications (article_id,title,summary,source_id,channel,url,discovered_at,timeline_at,selected,visible_after,fact_id)
-			VALUES (?,?,?,?,'news',?,?,?,?,?,?)`, id, label+" public", "summary", sourceID, articleURL, now, now, selected, visibleAfter, publicationFact).Error; err != nil {
+		if err := db.Exec(`INSERT INTO publications (article_id,title,summary,source_id,channel,url,discovered_at,timeline_at,sort_at,selected,visible_after,fact_id)
+			VALUES (?,?,?,?,'news',?,?,?,?,?,?,?)`, id, label+" public", "summary", sourceID, articleURL, now, now, now, selected, visibleAfter, publicationFact).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -373,8 +375,8 @@ func TestCandidateViewsUsesChronologicalStoryRoot(t *testing.T) {
 			VALUES(?,?,?,?,?,?,?)`, article.id, sourceID, "url:"+article.id, articleURL, article.title, now, now).Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := db.Exec(`INSERT INTO publications(article_id,title,source_id,channel,url,published_at,discovered_at,timeline_at)
-			VALUES(?,?,?,'news',?,?,?,?)`, article.id, article.title, sourceID, articleURL, article.at, now, now).Error; err != nil {
+		if err := db.Exec(`INSERT INTO publications(article_id,title,source_id,channel,url,published_at,discovered_at,timeline_at,sort_at)
+			VALUES(?,?,?,'news',?,?,?,?,?)`, article.id, article.title, sourceID, articleURL, article.at, now, now, article.at).Error; err != nil {
 			t.Fatal(err)
 		}
 		if err := db.Exec("INSERT INTO fact_articles(fact_id,article_id,role) VALUES (?,?,'report')", article.factID, article.id).Error; err != nil {
@@ -393,7 +395,7 @@ func TestCandidateViewsUsesChronologicalStoryRoot(t *testing.T) {
 		t.Fatalf("story root followed fact ID instead of report chronology: %#v", candidates)
 	}
 	roots, err := repository.StoryRoots(ctx, []int64{storyID})
-	if err != nil || len(roots) != 1 || roots[0].StoryID != storyID || roots[0].At != earlier || roots[0].Report.Title != "earlier fact report" || roots[0].Roundup {
+	if err != nil || len(roots) != 1 || roots[0].StoryID != storyID || !roots[0].At.Equal(earlier) || roots[0].Report.Title != "earlier fact report" || roots[0].Roundup {
 		t.Fatalf("story root comparison input changed: roots=%#v err=%v", roots, err)
 	}
 	if err := db.Exec(`INSERT INTO grouping_decisions(article_id,story_id,verdict,candidates)
@@ -497,7 +499,8 @@ func TestEmbeddingRepositoryReusesPaidResponseAfterAtomicSaveRollback(t *testing
 		t.Fatal(err)
 	}
 	vectors, err := store.Ensure(ctx, inputs)
-	if err != nil || provider.calls != 1 || vectors[firstID][0] != 1 || vectors[secondID][0] != 1 {
+	if err != nil || provider.calls != 1 || len(vectors[firstID]) != 2 || len(vectors[secondID]) != 2 ||
+		vectors[firstID][0] != 1 || vectors[firstID][1] != 0 || vectors[secondID][0] != 0 || vectors[secondID][1] != 1 {
 		t.Fatalf("retry did not reuse the paid response in input order: vectors=%v calls=%d err=%v", vectors, provider.calls, err)
 	}
 	if err := db.Raw("SELECT status, completed_at FROM receipts WHERE service = 'embedding' AND purpose = 'embedding' AND subject = ?", "article:"+firstID).Row().Scan(&status, &completedAt); err != nil || status != "completed" || completedAt == nil {

@@ -107,8 +107,10 @@ type rawCursor struct {
 }
 
 func (r *GormRepository) LedgerEpoch(ctx context.Context) (string, error) {
-	var value []byte
-	result := r.db.WithContext(ctx).Raw("SELECT value FROM settings WHERE key = ?", "selected_ledger_epoch").Scan(&value)
+	var settingValue struct {
+		Value json.RawMessage `gorm:"column:value"`
+	}
+	result := r.db.WithContext(ctx).Raw("SELECT value FROM settings WHERE key = ?", "selected_ledger_epoch").Scan(&settingValue)
 	if result.Error != nil {
 		return "", result.Error
 	}
@@ -124,7 +126,7 @@ func (r *GormRepository) LedgerEpoch(ctx context.Context) (string, error) {
 		if err := r.db.WithContext(ctx).Exec("INSERT INTO settings(key,value) VALUES(?,?::jsonb) ON CONFLICT (key) DO NOTHING", "selected_ledger_epoch", string(encoded)).Error; err != nil {
 			return "", err
 		}
-		result = r.db.WithContext(ctx).Raw("SELECT value FROM settings WHERE key = ?", "selected_ledger_epoch").Scan(&value)
+		result = r.db.WithContext(ctx).Raw("SELECT value FROM settings WHERE key = ?", "selected_ledger_epoch").Scan(&settingValue)
 		if result.Error != nil {
 			return "", result.Error
 		}
@@ -132,7 +134,7 @@ func (r *GormRepository) LedgerEpoch(ctx context.Context) (string, error) {
 	var setting struct {
 		Epoch string `json:"epoch"`
 	}
-	if err := json.Unmarshal(value, &setting); err != nil || setting.Epoch == "" {
+	if err := json.Unmarshal(settingValue.Value, &setting); err != nil || setting.Epoch == "" {
 		return "", errors.New("selected ledger epoch is invalid")
 	}
 	return setting.Epoch, nil

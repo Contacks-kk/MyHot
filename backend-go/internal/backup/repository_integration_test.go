@@ -100,7 +100,12 @@ func TestGormRepositoryAuditsDailyBackupAttemptsAndSummary(t *testing.T) {
 	if err := db.First(&value, retry).Error; err != nil {
 		t.Fatal(err)
 	}
-	if value.Status != "ok" || string(value.Detail) != `{"uploaded":true,"objects":[]}` {
+	var detail map[string]any
+	if err := json.Unmarshal(value.Detail, &detail); err != nil {
+		t.Fatal(err)
+	}
+	objects, objectsOK := detail["objects"].([]any)
+	if value.Status != "ok" || detail["uploaded"] != true || !objectsOK || len(objects) != 0 {
 		t.Fatalf("backup audit was not persisted: %#v", value)
 	}
 }

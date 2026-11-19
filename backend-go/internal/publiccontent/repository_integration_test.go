@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"aihot/backend-go/internal/model"
 	"aihot/backend-go/internal/topics"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -62,8 +63,8 @@ func TestAvailabilityReadsOnlyPublicEditorialItems(t *testing.T) {
 		if i == 1 {
 			visibility = "summary-only"
 		}
-		if err := orm.Exec(`INSERT INTO publications (article_id,title,source_id,channel,url,discovered_at,timeline_at,visibility)
-			VALUES (?, 'Fixture', ?, 'news', ?, now(), now(), ?)`, articleID, sourceID, "https://example.invalid/"+articleID, visibility).Error; err != nil {
+		if err := orm.Exec(`INSERT INTO publications (article_id,title,source_id,channel,url,discovered_at,timeline_at,sort_at,visibility)
+			VALUES (?, 'Fixture', ?, 'news', ?, now(), now(), now(), ?)`, articleID, sourceID, "https://example.invalid/"+articleID, visibility).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -114,8 +115,8 @@ func TestTopicSummariesFollowSelectedSeatsAndCompanyIdentityRules(t *testing.T) 
 			VALUES (?, ?, ?, ?, ?, ?, ?)`, id, sourceID, id, "https://example.invalid/"+id, title, now, now).Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := orm.Exec(`INSERT INTO publications (article_id,source_id,title,url,channel,tags,discovered_at,timeline_at,visibility,eligible,selected,seat,visible_after)
-			VALUES (?, ?, ?, ?, 'news', ?, ?, ?, ?, true, ?, ?, ?)`, id, sourceID, title, "https://example.invalid/"+id, tags, now, now, visibility, selected, seat, visibleAfter).Error; err != nil {
+		if err := orm.Exec(`INSERT INTO publications (article_id,source_id,title,url,channel,tags,discovered_at,timeline_at,sort_at,visibility,eligible,selected,seat,visible_after)
+			VALUES (?, ?, ?, ?, 'news', ?, ?, ?, ?, ?, true, ?, ?, ?)`, id, sourceID, title, "https://example.invalid/"+id, model.TextArray(tags), now, now, now, visibility, selected, seat, visibleAfter).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -145,7 +146,7 @@ func TestTopicSummariesFollowSelectedSeatsAndCompanyIdentityRules(t *testing.T) 
 			got[row.Slug] = append(got[row.Slug], *row.ID)
 		}
 	}
-	wantCompany := []string{ids[0], ids[1]}
+	wantCompany := []string{ids[1], ids[0]}
 	wantField := []string{ids[0]}
 	if fmt.Sprint(got["openai"]) != fmt.Sprint(wantCompany) || fmt.Sprint(got["agent"]) != fmt.Sprint(wantField) {
 		t.Fatalf("topic seats = %#v, want company %v and field %v", got, wantCompany, wantField)
@@ -183,7 +184,7 @@ func TestTopicSummariesFollowSelectedSeatsAndCompanyIdentityRules(t *testing.T) 
 		t.Fatalf("withdrawal remained in the uncached topic index or page: summaries=%#v page=%#v", got, page)
 	}
 
-	if err := orm.Exec("UPDATE publications SET tags = ? WHERE article_id = ?", []string{"entity:anthropic"}, ids[1]).Error; err != nil {
+	if err := orm.Exec("UPDATE publications SET tags = ? WHERE article_id = ?", model.TextArray{"entity:anthropic"}, ids[1]).Error; err != nil {
 		t.Fatal(err)
 	}
 	rows, err = repository.Summaries(context.Background(), definitions, now)
@@ -362,8 +363,8 @@ func TestGroupReportsRepositoryAppliesEvidenceVisibilityAndFilters(t *testing.T)
 		if err := orm.Raw(`INSERT INTO analyses (article_id,input_revision,origin,output) VALUES (?,1,'rule',?::jsonb) RETURNING id`, id, output).Scan(&analysisID).Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := orm.Exec(`INSERT INTO publications (article_id,analysis_id,source_id,title,url,channel,category,tags,discovered_at,timeline_at,visibility,eligible,selected,visible_after)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ARRAY[?]::text[], ?, ?, ?, ?, ?, ?)`, id, analysisID, sourceID, id, "https://example.invalid/"+id, channel, category, prefix, timelineAt, timelineAt, visibility, eligible, selected, visibleAfter).Error; err != nil {
+		if err := orm.Exec(`INSERT INTO publications (article_id,analysis_id,source_id,title,url,channel,category,tags,discovered_at,timeline_at,sort_at,visibility,eligible,selected,visible_after)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ARRAY[?]::text[], ?, ?, ?, ?, ?, ?, ?)`, id, analysisID, sourceID, id, "https://example.invalid/"+id, channel, category, prefix, timelineAt, timelineAt, timelineAt, visibility, eligible, selected, visibleAfter).Error; err != nil {
 			t.Fatal(err)
 		}
 		if err := orm.Exec("INSERT INTO fact_articles (fact_id,article_id,role) VALUES (?,?,?)", factID, id, role).Error; err != nil {

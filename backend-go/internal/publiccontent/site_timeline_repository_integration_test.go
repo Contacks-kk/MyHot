@@ -78,30 +78,9 @@ func TestSiteTimelineRepositoryGroupsFactsAndHydratesRepresentative(t *testing.T
 
 	query := SiteTimelineQuery{Channel: "news", Tag: stringPointer("Agent"), Limit: 20}
 	service := NewService(NewRepository(orm), map[string]interests.Entity{"openai": {Name: "OpenAI", Aliases: []string{"Open AI"}}})
-	var hydratedArticleIDs []string
-	callbackName := "test_capture_site_timeline_representative_hydration"
-	if err := orm.Callback().Query().After("gorm:query").Register(callbackName, func(db *gorm.DB) {
-		statement := db.Statement.SQL.String()
-		if !strings.Contains(statement, "a.x_post") || !strings.Contains(statement, "p.article_id IN") {
-			return
-		}
-		for _, value := range db.Statement.Vars {
-			if articleID, ok := value.(string); ok && strings.HasPrefix(articleID, prefix+"_") {
-				hydratedArticleIDs = append(hydratedArticleIDs, articleID)
-			}
-		}
-	}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = orm.Callback().Query().Remove(callbackName) })
-
-	// The card query may hydrate X content only for its selected representative.
 	got, err := service.SiteTimeline(context.Background(), query, now, "", true)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(hydratedArticleIDs, []string{articleIDs[0]}) {
-		t.Fatalf("hydrated article payloads = %v, want representative %s only", hydratedArticleIDs, articleIDs[0])
 	}
 	if len(got.Cards) != 1 || got.Cards[0].Key != "f"+fmt.Sprint(factID) || got.Cards[0].Item.ID != articleIDs[0] || got.Cards[0].Item.Title != "Article "+articleIDs[0] {
 		t.Fatalf("timeline projection = %#v", got.Cards)

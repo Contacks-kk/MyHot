@@ -86,7 +86,9 @@ export async function runMigrations(sql: postgres.Sql, root: string): Promise<nu
           }
         }
       } catch (error) {
-        throw new Error(`migration ${name} failed after ${Date.now() - start}ms: ${(error as Error).message}`, { cause: error });
+        const failure = error as Error & { code?: string };
+        const reason = failure.code === "55P03" ? "lock timeout (55P03)" : failure.message;
+        throw new Error(`migration ${name} failed after ${Date.now() - start}ms: ${reason}`, { cause: error });
       }
       console.log(`applied ${name} (${Date.now() - start}ms, ${plan.kind})`);
       count++;

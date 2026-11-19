@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"aihot/backend-go/internal/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -38,7 +39,7 @@ func (r *GormRepository) HeatRows(ctx context.Context, at time.Time, behind []st
 	previous := at.Add(-6 * time.Hour)
 	params := []any{
 		at, previous, at.Add(-time.Duration(windowHours) * time.Hour), previous.Add(-time.Duration(windowHours) * time.Hour),
-		behind, feeds.Dev, feeds.HN, len(storyIDs) > 0, storyIDs,
+		model.TextArray(behind), model.TextArray(feeds.Dev), model.TextArray(feeds.HN), len(storyIDs) > 0, model.Int64Array(storyIDs),
 	}
 	var rows []HeatRow
 	err := r.db.WithContext(ctx).Raw(heatRowsQuery, params...).Scan(&rows).Error
@@ -49,14 +50,14 @@ func (r *GormRepository) Participants(ctx context.Context, storyID int64, at tim
 	previous := at.Add(-6 * time.Hour)
 	params := []any{
 		at, previous, at.Add(-time.Duration(windowHours) * time.Hour), previous.Add(-time.Duration(windowHours) * time.Hour),
-		[]string{}, feeds.Dev, feeds.HN, true, []int64{storyID}, storyID, at.Add(-time.Duration(windowHours) * time.Hour), at,
+		model.TextArray{}, model.TextArray(feeds.Dev), model.TextArray(feeds.HN), true, model.Int64Array{storyID},
 	}
 	var rows []Participant
 	query := `WITH ` + heatParametersCTE + `,
 ` + currentSignalsCTE + `
 SELECT DISTINCT ON (cs.participant_key) s.name, cs.kind, s.tier, cs.observed_at AS at
 FROM current_signals cs JOIN sources s ON s.id = cs.source_id CROSS JOIN params
-WHERE cs.story_id = ? AND cs.observed_at > ? AND cs.observed_at <= ?
+WHERE cs.story_id = ANY(params.story_ids) AND cs.observed_at > params.now_from AND cs.observed_at <= params.at
 ORDER BY cs.participant_key, (cs.kind = 'editorial') DESC, cs.observed_at DESC`
 	err := r.db.WithContext(ctx).Raw(query, params...).Scan(&rows).Error
 	return rows, err

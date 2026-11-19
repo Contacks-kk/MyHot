@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"aihot/backend-go/internal/model"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -41,8 +42,8 @@ func (r *CommandsRepository) correctReportClassification(ctx context.Context, tx
 		return nil
 	}
 	rows, err := tx.Query(ctx, `SELECT id,kind,content,revision,generated_at FROM reports
-		WHERE content @> jsonb_build_object('sections',jsonb_build_array(jsonb_build_object('items',jsonb_build_array(jsonb_build_object('itemId',$1)))))
-		   OR content @> jsonb_build_object('themes',jsonb_build_array(jsonb_build_object('storyRefs',jsonb_build_array(jsonb_build_object('itemId',$1)))))
+		WHERE content @> jsonb_build_object('sections',jsonb_build_array(jsonb_build_object('items',jsonb_build_array(jsonb_build_object('itemId',$1::text)))))
+		   OR content @> jsonb_build_object('themes',jsonb_build_array(jsonb_build_object('storyRefs',jsonb_build_array(jsonb_build_object('itemId',$1::text)))))
 		ORDER BY id FOR UPDATE`, articleID)
 	if err != nil {
 		return err
@@ -150,8 +151,8 @@ func (r *CommandsRepository) recountReleaseMetric(ctx context.Context, tx pgx.Tx
 		}
 	}
 	type publicationInfo struct {
-		Category *string  `db:"category"`
-		Tags     []string `db:"tags"`
+		Category *string         `db:"category"`
+		Tags     model.TextArray `db:"tags"`
 	}
 	info := make(map[string]publicationInfo, len(itemIDs))
 	if len(itemIDs) > 0 {
@@ -183,7 +184,7 @@ func (r *CommandsRepository) recountReleaseMetric(ctx context.Context, tx pgx.Tx
 			}
 			id, _ := entry["itemId"].(string)
 			row, ok := info[id]
-			if !ok || row.Category == nil || *row.Category != r.reportCorrection.ReleaseCategory || !containsString(row.Tags, r.reportCorrection.ReleaseTag) || truthy(entry["followUp"]) {
+			if !ok || row.Category == nil || *row.Category != r.reportCorrection.ReleaseCategory || !containsString([]string(row.Tags), r.reportCorrection.ReleaseTag) || truthy(entry["followUp"]) {
 				continue
 			}
 			role, _ := entry["role"].(string)

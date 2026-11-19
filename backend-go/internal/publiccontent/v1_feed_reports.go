@@ -90,7 +90,7 @@ func (s *Service) V1FeedIssues(ctx context.Context, kind string, limit int, now 
 		}
 	}
 	if len(replacements) > 0 {
-		summaries, err := repository.V1DailyReplacementSummaries(ctx, replacements)
+		summaries, err := repository.V1DailyReplacementSummaries(ctx, replacements, now)
 		if err != nil {
 			return nil, err
 		}

@@ -12,6 +12,7 @@ import (
 
 	"aihot/backend-go/internal/bodyhtml"
 	"aihot/backend-go/internal/mediaurl"
+	"aihot/backend-go/internal/model"
 	"aihot/backend-go/internal/topics"
 )
 
@@ -45,7 +46,7 @@ type SiteItemDetailRow struct {
 	TranslationHTML *string
 	TranslationText *string
 	TranslationDone *bool
-	TopicSlugs      []string
+	TopicSlugs      model.TextArray `gorm:"column:topic_slugs;type:text[]"`
 	StoryPublicID   *string
 	StoryTitle      *string
 }
@@ -281,7 +282,7 @@ func siteItemSummary(row SiteItemDetailRow) SiteItemSummary {
 		ID: row.Item.ID, Title: row.Item.Title, OriginalTitle: row.OriginalTitle, Summary: row.Item.Summary,
 		Reason: row.Item.Reason, Source: topics.SourceRef{Name: PublicSourceName(row.Item.SourceName)},
 		PublishedAt: formatNullableTime(row.Item.PublishedAt), DiscoveredAt: formatV1Time(row.DiscoveredAt),
-		TimelineAt: formatV1Time(row.Item.TimelineAt), Category: row.Item.Category, Tags: displayItemTags(row.Item.Tags),
+		TimelineAt: formatV1Time(row.Item.TimelineAt), Category: row.Item.Category, Tags: displayItemTags([]string(row.Item.Tags)),
 		Selected: row.Item.Selected == nil || *row.Item.Selected, Channel: row.Item.Channel,
 	}
 	item.Links.Original = row.OriginalURL

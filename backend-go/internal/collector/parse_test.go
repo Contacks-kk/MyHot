@@ -836,6 +836,9 @@ func TestLaterCollectionRejectsUnseenArchiveButKeepsKnownCorrections(t *testing.
 /** TestDetailReadCriteriaRespectKnownHeadlinesAndMissingFields. */
 func TestDetailReadCriteriaRespectKnownHeadlinesAndMissingFields(t *testing.T) {
 	detail := settings{"titleSelector": "h1", "publishedAtSelector": "time"}
+	if !detailDateConfigured(detail) || detailDateConfigured(settings{"titleSelector": "h1"}) {
+		t.Fatal("detail date requirements must follow configured date selectors and regexes")
+	}
 	date := time.Now()
 	candidate := item{Title: "Read more", Published: &date}
 	if needsDetailRead(candidate, detail, true) {

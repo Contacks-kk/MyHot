@@ -32,7 +32,7 @@ type V1ReportRepository interface {
 	V1ReportIndex(context.Context, string, int) ([]V1ReportIndexRecord, error)
 	V1Report(context.Context, string, string, bool) (*V1ReportRecord, error)
 	V1ReportAvailability(context.Context, []string, time.Time) (map[string]V1ReportAvailabilityRecord, error)
-	V1DailyReplacementSummaries(context.Context, []V1DailyReplacement) (map[string]*string, error)
+	V1DailyReplacementSummaries(context.Context, []V1DailyReplacement, time.Time) (map[string]*string, error)
 }
 
 type V1ReportIndexRecord struct {
@@ -273,7 +273,7 @@ func (r *GormRepository) V1ReportAvailability(ctx context.Context, ids []string,
 	return result, nil
 }
 
-func (r *GormRepository) V1DailyReplacementSummaries(ctx context.Context, replacements []V1DailyReplacement) (map[string]*string, error) {
+func (r *GormRepository) V1DailyReplacementSummaries(ctx context.Context, replacements []V1DailyReplacement, now time.Time) (map[string]*string, error) {
 	result := make(map[string]*string, len(replacements))
 	if len(replacements) == 0 {
 		return result, nil
@@ -288,12 +288,14 @@ func (r *GormRepository) V1DailyReplacementSummaries(ctx context.Context, replac
 		Summary *string `gorm:"column:summary"`
 	}
 	const query = `SELECT wanted.key, wanted.item_id,
-		(SELECT item->>'summary' FROM jsonb_path_query(r.content, '$.sections[*].items[*]') item
-		 WHERE item->>'itemId' = wanted.item_id LIMIT 1) AS summary
+		COALESCE((SELECT item->>'summary' FROM jsonb_path_query(r.content, '$.sections[*].items[*]') item
+		 WHERE item->>'itemId' = wanted.item_id LIMIT 1),
+		 (SELECT p.summary FROM publications p WHERE p.article_id = wanted.item_id AND p.visibility = 'public' AND p.eligible
+		   AND (NOT p.selected OR p.visible_after <= ?))) AS summary
 		FROM reports r
 		JOIN jsonb_to_recordset(?::jsonb) AS wanted(key text, item_id text) ON true
 		WHERE r.kind = 'daily' AND r.key = wanted.key`
-	if err := r.db.WithContext(ctx).Raw(query, string(payload)).Scan(&rows).Error; err != nil {
+	if err := r.db.WithContext(ctx).Raw(query, now, string(payload)).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	for _, row := range rows {
@@ -459,7 +461,7 @@ func (s *Service) v1ReportIndex(ctx context.Context, kind string, limit int, now
 		}
 	}
 	if len(replacements) > 0 {
-		summaries, err := repository.V1DailyReplacementSummaries(ctx, replacements)
+		summaries, err := repository.V1DailyReplacementSummaries(ctx, replacements, now)
 		if err != nil {
 			return V1ReportIndexResponse{}, err
 		}
@@ -530,6 +532,8 @@ func (s *Service) V1Daily(ctx context.Context, key string, latest bool, now time
 			paragraph := ""
 			if current.LeadParagraph != nil {
 				paragraph = *current.LeadParagraph
+			} else if replacement, ok := availability[current.ItemID]; ok && replacement.Available && replacement.Summary != nil {
+				paragraph = *replacement.Summary
 			}
 			lead = &V1DailyLead{Title: current.Title, LeadParagraph: paragraph}
 		}

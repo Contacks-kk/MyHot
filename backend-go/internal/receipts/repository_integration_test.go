@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,15 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
+
+/** equalJSON compares decoded JSON values without depending on JSONB formatting. */
+func equalJSON(left, right []byte) bool {
+	var leftValue, rightValue any
+	if json.Unmarshal(left, &leftValue) != nil || json.Unmarshal(right, &rightValue) != nil {
+		return false
+	}
+	return reflect.DeepEqual(leftValue, rightValue)
+}
 
 func receiptTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
@@ -101,7 +111,7 @@ func TestPaidRequestPersistenceRetryAndBudget(t *testing.T) {
 		t.Fatal("completed receipt was sent to provider again")
 		return Outcome{}, nil
 	})
-	if err != nil || !second.Reused || string(second.Response) != string(first.Response) {
+	if err != nil || !second.Reused || !equalJSON(second.Response, first.Response) {
 		t.Fatalf("reused response = %#v: %v", second, err)
 	}
 
@@ -431,7 +441,7 @@ func TestReceivedAnswerWinsAConcurrentStaleSweep(t *testing.T) {
 		t.Fatal("received response was purchased again")
 		return Outcome{}, nil
 	})
-	if err != nil || !reused.Reused || string(reused.Response) != `{"answer":"committed"}` {
+	if err != nil || !reused.Reused || !equalJSON(reused.Response, []byte(`{"answer":"committed"}`)) {
 		t.Fatalf("later request did not reuse the committed response: %#v err=%v", reused, err)
 	}
 	var status, attemptStatus string

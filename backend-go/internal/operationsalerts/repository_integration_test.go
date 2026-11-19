@@ -77,7 +77,7 @@ func TestRepositorySourceHealthFindingsPreserveRecentEvidence(t *testing.T) {
 	insertSource(budgetID, "editorial", "ok", cutoff.Add(time.Hour))
 	for _, sourceID := range []string{qualityID, signalID} {
 		if err := orm.Exec(`INSERT INTO fetch_runs(source_id,started_at,status,error,detail)
-			SELECT ?, ? - i * interval '1 hour', CASE WHEN i <= 5 THEN 'failed' ELSE 'ok' END,
+			SELECT ?, ?::timestamptz - i * interval '1 hour', CASE WHEN i <= 5 THEN 'failed' ELSE 'ok' END,
 			CASE WHEN i <= 5 THEN 'HTTP 503' ELSE NULL END,
 			jsonb_build_object('detailFailures', CASE WHEN i = 1 THEN 2 ELSE 0 END)
 			FROM generate_series(1,20) AS i`, sourceID, now).Error; err != nil {
@@ -85,7 +85,7 @@ func TestRepositorySourceHealthFindingsPreserveRecentEvidence(t *testing.T) {
 		}
 	}
 	if err := orm.Exec(`INSERT INTO fetch_runs(source_id,started_at,status,error)
-		SELECT ?, ? - i * interval '1 hour', 'failed', 'Budget for test exhausted (day)' FROM generate_series(1,20) AS i`, budgetID, now).Error; err != nil {
+		SELECT ?, ?::timestamptz - i * interval '1 hour', 'failed', 'Budget for test exhausted (day)' FROM generate_series(1,20) AS i`, budgetID, now).Error; err != nil {
 		t.Fatal(err)
 	}
 	articleID := prefix + "_undated"

@@ -281,7 +281,7 @@ func (r *GormRepository) CommitGrouping(ctx context.Context, input CommitInput) 
 				return err
 			}
 			createdAt := input.ObservedAt
-			story := model.Story{PublicID: publicID, Title: input.FactTitle, Status: "active", FirstReportAt: &createdAt,
+			story := model.Story{PublicID: publicID, Title: input.FactTitle, FirstReportAt: &createdAt,
 				LatestAt: &createdAt, Version: 1, Origin: "model"}
 			if err := tx.Create(&story).Error; err != nil {
 				return err

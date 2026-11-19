@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"aihot/backend-go/internal/model"
 )
 
 var ErrChainRepositoryUnavailable = errors.New("content chain repository is unavailable")
@@ -79,39 +81,39 @@ type Analysis struct {
 }
 
 type Publication struct {
-	ArticleID       string     `json:"article_id"`
-	AnalysisID      *int64     `json:"analysis_id"`
-	Revision        int        `json:"revision"`
-	Visibility      string     `json:"visibility"`
-	Eligible        bool       `json:"eligible"`
-	Selected        bool       `json:"selected"`
-	Seat            bool       `json:"seat"`
-	Title           string     `json:"title"`
-	OriginalTitle   *string    `json:"original_title"`
-	Summary         *string    `json:"summary"`
-	Reason          *string    `json:"reason"`
-	Category        *string    `json:"category"`
-	Tags            []string   `json:"tags"`
-	Score           *float64   `json:"score"`
-	SourceID        string     `json:"source_id"`
-	Channel         string     `json:"channel"`
-	FirstParty      bool       `json:"first_party"`
-	URL             string     `json:"url"`
-	PublishedAt     *time.Time `json:"published_at"`
-	DiscoveredAt    time.Time  `json:"discovered_at"`
-	TimelineAt      time.Time  `json:"timeline_at"`
-	SortAt          *time.Time `json:"sort_at"`
-	Backfill        bool       `json:"backfill"`
-	SelectedReadyAt *time.Time `json:"selected_ready_at"`
-	VisibleAfter    *time.Time `json:"visible_after"`
-	BodyMode        string     `json:"body_mode"`
-	Syndicate       bool       `json:"syndicate"`
-	Indexable       bool       `json:"indexable"`
-	SEOIndexedAt    *time.Time `json:"seo_indexed_at"`
-	SEOExcludedAt   *time.Time `json:"seo_excluded_at"`
-	StoryID         *int64     `json:"story_id"`
-	FactID          *int64     `json:"fact_id"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	ArticleID       string          `json:"article_id"`
+	AnalysisID      *int64          `json:"analysis_id"`
+	Revision        int             `json:"revision"`
+	Visibility      string          `json:"visibility"`
+	Eligible        bool            `json:"eligible"`
+	Selected        bool            `json:"selected"`
+	Seat            bool            `json:"seat"`
+	Title           string          `json:"title"`
+	OriginalTitle   *string         `json:"original_title"`
+	Summary         *string         `json:"summary"`
+	Reason          *string         `json:"reason"`
+	Category        *string         `json:"category"`
+	Tags            model.TextArray `json:"tags" gorm:"column:tags;type:text[]"`
+	Score           *float64        `json:"score"`
+	SourceID        string          `json:"source_id"`
+	Channel         string          `json:"channel"`
+	FirstParty      bool            `json:"first_party"`
+	URL             string          `json:"url"`
+	PublishedAt     *time.Time      `json:"published_at"`
+	DiscoveredAt    time.Time       `json:"discovered_at"`
+	TimelineAt      time.Time       `json:"timeline_at"`
+	SortAt          *time.Time      `json:"sort_at"`
+	Backfill        bool            `json:"backfill"`
+	SelectedReadyAt *time.Time      `json:"selected_ready_at"`
+	VisibleAfter    *time.Time      `json:"visible_after"`
+	BodyMode        string          `json:"body_mode"`
+	Syndicate       bool            `json:"syndicate"`
+	Indexable       bool            `json:"indexable"`
+	SEOIndexedAt    *time.Time      `json:"seo_indexed_at"`
+	SEOExcludedAt   *time.Time      `json:"seo_excluded_at"`
+	StoryID         *int64          `json:"story_id"`
+	FactID          *int64          `json:"fact_id"`
+	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
 type Override struct {

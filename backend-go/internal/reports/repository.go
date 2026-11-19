@@ -13,28 +13,28 @@ import (
 )
 
 type ReportRow struct {
-	ID            string    `gorm:"column:id"`
-	Title         string    `gorm:"column:title"`
-	Summary       *string   `gorm:"column:summary"`
-	URL           string    `gorm:"column:url"`
-	Category      *string   `gorm:"column:category"`
-	Tags          []string  `gorm:"column:tags"`
-	Score         *int      `gorm:"column:score"`
-	FirstParty    bool      `gorm:"column:first_party"`
-	BodyMode      string    `gorm:"column:body_mode"`
-	Selected      bool      `gorm:"column:selected"`
-	TimelineAt    time.Time `gorm:"column:timeline_at"`
-	SourceID      string    `gorm:"column:source_id"`
-	SourceName    string    `gorm:"column:source_name"`
-	SourceKind    string    `gorm:"column:source_kind"`
-	SourceTier    string    `gorm:"column:source_tier"`
-	PublisherRole *string   `gorm:"column:publisher_role"`
-	OwnerEntityID *string   `gorm:"column:owner_entity_id"`
-	FactSubject   *string   `gorm:"column:fact_subject"`
-	FactID        *int64    `gorm:"column:fact_id"`
-	FactPublicID  *string   `gorm:"column:fact_public_id"`
-	StoryID       *int64    `gorm:"column:story_id"`
-	StoryPublicID *string   `gorm:"column:story_public_id"`
+	ID            string          `gorm:"column:id"`
+	Title         string          `gorm:"column:title"`
+	Summary       *string         `gorm:"column:summary"`
+	URL           string          `gorm:"column:url"`
+	Category      *string         `gorm:"column:category"`
+	Tags          model.TextArray `gorm:"column:tags;type:text[]"`
+	Score         *int            `gorm:"column:score"`
+	FirstParty    bool            `gorm:"column:first_party"`
+	BodyMode      string          `gorm:"column:body_mode"`
+	Selected      bool            `gorm:"column:selected"`
+	TimelineAt    time.Time       `gorm:"column:timeline_at"`
+	SourceID      string          `gorm:"column:source_id"`
+	SourceName    string          `gorm:"column:source_name"`
+	SourceKind    string          `gorm:"column:source_kind"`
+	SourceTier    string          `gorm:"column:source_tier"`
+	PublisherRole *string         `gorm:"column:publisher_role"`
+	OwnerEntityID *string         `gorm:"column:owner_entity_id"`
+	FactSubject   *string         `gorm:"column:fact_subject"`
+	FactID        *int64          `gorm:"column:fact_id"`
+	FactPublicID  *string         `gorm:"column:fact_public_id"`
+	StoryID       *int64          `gorm:"column:story_id"`
+	StoryPublicID *string         `gorm:"column:story_public_id"`
 }
 
 type Issue struct {

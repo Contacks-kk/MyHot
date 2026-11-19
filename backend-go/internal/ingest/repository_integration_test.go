@@ -40,9 +40,9 @@ func TestGormRepositoryIngestsIntoExistingSchema(t *testing.T) {
 	sourceID := fmt.Sprintf("ingest_test_%d", time.Now().UnixNano())
 	service := NewService(NewRepository(orm), materials.NewService(materials.NewRepository(orm)))
 	input := json.RawMessage(fmt.Sprintf(`{"sourceId":%q,"sourceName":"External fixture","items":[
-		{"title":"Pushed article","url":"http://www.example.invalid/story/?utm_source=test","raw":{"_aihot":{"baseline":true},"fixture":7}},
-		{"title":"duplicate","url":"https://example.invalid/story"}
-	]}`, sourceID))
+		{"title":"Pushed article","url":%q,"raw":{"_aihot":{"baseline":true},"fixture":7}},
+		{"title":"duplicate","url":%q}
+	]}`, sourceID, "http://www.example.invalid/story/"+sourceID+"/?utm_source=test", "https://example.invalid/story/"+sourceID))
 	result, err := service.Ingest(ctx, input)
 	if err != nil || !result.OK || result.Created != 1 {
 		t.Fatalf("ingest = %#v: %v", result, err)
@@ -62,7 +62,7 @@ func TestGormRepositoryIngestsIntoExistingSchema(t *testing.T) {
 	if err := orm.Raw("SELECT source_id, identity_key, title, backfill, backfill_reason, raw FROM articles WHERE source_id = ?", sourceID).Scan(&article).Error; err != nil {
 		t.Fatal(err)
 	}
-	if article.SourceID != sourceID || article.IdentityKey != "url:https://example.invalid/story" || article.Title != "Pushed article" || !article.Backfill || article.BackfillReason != "reported-baseline" || !strings.Contains(string(article.Raw), `"fixture": 7`) {
+	if article.SourceID != sourceID || article.IdentityKey != "url:https://example.invalid/story/"+sourceID || article.Title != "Pushed article" || !article.Backfill || article.BackfillReason != "reported-baseline" || !strings.Contains(string(article.Raw), `"fixture": 7`) {
 		t.Fatalf("stored article changed: %#v raw=%s", article, article.Raw)
 	}
 	var articleCount int64

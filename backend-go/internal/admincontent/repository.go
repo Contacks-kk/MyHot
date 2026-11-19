@@ -110,7 +110,10 @@ func (r *GormRepository) ByTitle(ctx context.Context, term string) ([]Row, error
 
 func (r *GormRepository) Chain(ctx context.Context, id string) (*Chain, error) {
 	db := r.db.WithContext(ctx)
-	var chain Chain
+	chain := Chain{
+		Discoveries: []Discovery{}, Revisions: []Revision{}, Analyses: []Analysis{}, Ledger: []LedgerEntry{},
+		Membership: []Membership{}, Decisions: []Decision{}, Deliveries: []Delivery{}, History: []AuditEntry{},
+	}
 	article := db.Table("articles AS a").Select(`a.id, a.source_id, a.url, a.identity_key, a.title, a.author, a.language, a.published_at, a.published_at_claim,
 		a.discovered_at, a.timeline_at, a.backfill, a.body_status, a.revision, a.processing_state, a.processing_error, a.grouped_at,
 		length(a.body_text) AS body_chars, s.name AS source_name, s.kind AS source_kind, s.tier, s.participation_mode, s.site_fulltext, s.syndicate_fulltext`).
@@ -179,6 +182,27 @@ func (r *GormRepository) Chain(ctx context.Context, id string) (*Chain, error) {
 	}
 	if overrideResult.RowsAffected > 0 {
 		chain.Override = &override
+	}
+	if chain.Discoveries == nil {
+		chain.Discoveries = []Discovery{}
+	}
+	if chain.Revisions == nil {
+		chain.Revisions = []Revision{}
+	}
+	if chain.Ledger == nil {
+		chain.Ledger = []LedgerEntry{}
+	}
+	if chain.Membership == nil {
+		chain.Membership = []Membership{}
+	}
+	if chain.Decisions == nil {
+		chain.Decisions = []Decision{}
+	}
+	if chain.Deliveries == nil {
+		chain.Deliveries = []Delivery{}
+	}
+	if chain.History == nil {
+		chain.History = []AuditEntry{}
 	}
 	return &chain, nil
 }

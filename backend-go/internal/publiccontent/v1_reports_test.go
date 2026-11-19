@@ -79,7 +79,7 @@ func (r *v1ReportsFakeRepository) V1ReportAvailability(_ context.Context, ids []
 	return result, nil
 }
 
-func (r *v1ReportsFakeRepository) V1DailyReplacementSummaries(_ context.Context, replacements []V1DailyReplacement) (map[string]*string, error) {
+func (r *v1ReportsFakeRepository) V1DailyReplacementSummaries(_ context.Context, replacements []V1DailyReplacement, _ time.Time) (map[string]*string, error) {
 	result := make(map[string]*string)
 	for _, replacement := range replacements {
 		result[replacement.Key+"\x00"+replacement.ItemID] = r.replacements[replacement.ItemID]

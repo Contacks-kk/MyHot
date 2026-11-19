@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"aihot/backend-go/internal/model"
 	"gorm.io/gorm"
@@ -15,15 +16,32 @@ type GormRepository struct{ db *gorm.DB }
 func NewRepository(db *gorm.DB) *GormRepository { return &GormRepository{db: db} }
 
 func (r *GormRepository) List(ctx context.Context) ([]RunListEntry, error) {
-	var runs []RunListEntry
+	var rows []struct {
+		ID            string          `gorm:"column:id"`
+		Label         string          `gorm:"column:label"`
+		Split         *string         `gorm:"column:split"`
+		SampleSize    int             `gorm:"column:sample_size"`
+		PromptVersion *string         `gorm:"column:prompt_version"`
+		Models        model.TextArray `gorm:"column:models;type:text[]"`
+		Summary       json.RawMessage `gorm:"column:summary"`
+		CreatedAt     time.Time       `gorm:"column:created_at"`
+		ImportedBy    *string         `gorm:"column:imported_by"`
+		Cases         int             `gorm:"column:cases"`
+	}
 	err := r.db.WithContext(ctx).Table("selectbench_runs AS r").Select(`
 		r.id, r.label, r.split, r.sample_size, r.prompt_version, r.models,
 		(SELECT coalesce(jsonb_object_agg(key, value - 'sweep'), '{}'::jsonb) FROM jsonb_each(r.summary)) AS summary,
 		r.created_at, r.imported_by,
 		(SELECT count(*)::int FROM selectbench_results x WHERE x.run_id = r.id) AS cases`).
-		Order("r.created_at DESC").Limit(100).Scan(&runs).Error
+		Order("r.created_at DESC").Limit(100).Scan(&rows).Error
 	if err != nil {
 		return nil, err
+	}
+	runs := make([]RunListEntry, 0, len(rows))
+	for _, row := range rows {
+		runs = append(runs, RunListEntry{ID: row.ID, Label: row.Label, Split: row.Split, SampleSize: row.SampleSize,
+			PromptVersion: row.PromptVersion, Models: []string(row.Models), Summary: row.Summary, CreatedAt: row.CreatedAt,
+			ImportedBy: row.ImportedBy, Cases: row.Cases})
 	}
 	if runs == nil {
 		runs = []RunListEntry{}
@@ -40,7 +58,7 @@ func (r *GormRepository) Run(ctx context.Context, id string, filters Filters) (*
 	if result.Error != nil {
 		return nil, result.Error
 	}
-	run := RunSummary{ID: stored.ID, Label: stored.Label, Split: stored.Split, SampleSize: stored.SampleSize, Seed: stored.Seed, PromptVersion: stored.PromptVersion, Models: stored.Models, Summary: stored.Summary, CreatedAt: stored.CreatedAt, ImportedBy: stored.ImportedBy}
+	run := RunSummary{ID: stored.ID, Label: stored.Label, Split: stored.Split, SampleSize: stored.SampleSize, Seed: stored.Seed, PromptVersion: stored.PromptVersion, Models: []string(stored.Models), Summary: stored.Summary, CreatedAt: stored.CreatedAt, ImportedBy: stored.ImportedBy}
 	modelName := filters.Model
 	if modelName == "" && len(stored.Models) > 0 {
 		modelName = stored.Models[0]
@@ -94,7 +112,7 @@ func (r *GormRepository) Run(ctx context.Context, id string, filters Filters) (*
 
 func (r *GormRepository) Import(ctx context.Context, data ImportData, actor string) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		run := model.SelectBenchRun{ID: data.ID, Label: data.Label, Split: data.Split, SampleSize: data.SampleSize, Seed: data.Seed, PromptVersion: data.Prompt, Models: data.Models, Summary: data.Summary, ImportedBy: &actor}
+		run := model.SelectBenchRun{ID: data.ID, Label: data.Label, Split: data.Split, SampleSize: data.SampleSize, Seed: data.Seed, PromptVersion: data.Prompt, Models: model.TextArray(data.Models), Summary: data.Summary, ImportedBy: &actor}
 		create := tx
 		if data.Idempotent {
 			create = create.Clauses(clause.OnConflict{DoNothing: true})

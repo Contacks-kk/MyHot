@@ -314,6 +314,7 @@ type userHandler func(http.ResponseWriter, *http.Request, userContext)
 
 func (s *Server) withUser(next userHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		setPrivateSiteHeaders(w)
 		user, err := s.userFromRequest(r)
 		if err != nil {
 			if errors.Is(err, errNoSession) || errors.Is(err, account.ErrNoSession) {
@@ -413,7 +414,9 @@ func readJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
+	if w.Header().Get("Cache-Control") == "" {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
 }

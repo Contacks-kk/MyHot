@@ -193,7 +193,7 @@ func fixture(t *testing.T) workerFixture {
 	pool := localTestPool(t)
 	orm := localTestORM(t)
 	prefix := fmt.Sprintf("worker_%d", time.Now().UnixNano())
-	f := workerFixture{pool: pool, orm: orm, source: prefix + "_source", prefix: prefix, cfg: config.Config{PersonalizationEnabled: true, ModelCallsEnabled: true, UserJobMaxWorkers: 4, UserAPIKeyEncryptionKey: []byte(strings.Repeat("s", 32))}}
+	f := workerFixture{pool: pool, orm: orm, source: prefix + "_source", prefix: prefix, cfg: config.Config{SiteName: "Test", SiteURL: "https://test.invalid", PersonalizationEnabled: true, ModelCallsEnabled: true, UserJobMaxWorkers: 4, UserAPIKeyEncryptionKey: []byte(strings.Repeat("s", 32))}}
 	ctx := context.Background()
 	if _, err := pool.Exec(ctx, `INSERT INTO sources(id,name,kind,config) VALUES($1,'Worker test','rss','{"feedUrl":"https://worker.example.invalid/feed"}')`, f.source); err != nil {
 		t.Fatal(err)
@@ -258,6 +258,9 @@ func TestColdStartSubscriptionSlicesTenArticlesOnce(t *testing.T) {
 	}
 	for i := 0; i < 12; i++ {
 		f.article(t, fmt.Sprintf("cs_%02d", i), fmt.Sprintf("OpenAI cold start item %d", i), time.Now().Add(-time.Duration(30+i)*time.Minute))
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE articles SET created_at=now() WHERE source_id=$1`, f.source); err != nil {
+		t.Fatal(err)
 	}
 
 	var queuedArticles []ArticleArgs
@@ -785,6 +788,7 @@ func TestPublicationEffectsInsertRiverJobsInPublicationTransaction(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback(ctx)
 	if err := effects.EnqueueSelectedTx(ctx, tx, articleID, time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -966,8 +970,9 @@ func TestRiverStopDrainsAnInflightPaidAnalysis(t *testing.T) {
 	workers := river.NewWorkers()
 	worker := &ContentAnalyzeWorker{Service: service}
 	river.AddWorker(workers, worker)
+	river.AddWorker(workers, &EventGroupWorker{})
 	queue := "shared_analysis"
-	queues := map[string]river.QueueConfig{queue: {MaxWorkers: 1}, "shared_grouping": {MaxWorkers: 1}}
+	queues := map[string]river.QueueConfig{queue: {MaxWorkers: 1}}
 	client, err := river.NewClient(riverpgxv5.New(f.pool), &river.Config{Workers: workers, Queues: queues})
 	if err != nil {
 		t.Fatal(err)
@@ -1017,8 +1022,10 @@ func TestRiverStopDrainsAnInflightPaidAnalysis(t *testing.T) {
 	}
 	stoppedCleanly.Store(true)
 	var state string
-	if err := f.pool.QueryRow(ctx, `SELECT state FROM river_job WHERE id=$1`, job.Job.ID).Scan(&state); err != nil || state != "completed" {
-		t.Fatalf("stopped worker job state = %q, err=%v", state, err)
+	var jobErrors []byte
+	var attempts int
+	if err := f.pool.QueryRow(ctx, `SELECT state,errors::text,attempt FROM river_job WHERE id=$1`, job.Job.ID).Scan(&state, &jobErrors, &attempts); err != nil || state != "completed" {
+		t.Fatalf("stopped worker job state = %q, attempts=%d errors=%s, err=%v", state, attempts, jobErrors, err)
 	}
 	var analyses, publications int
 	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM analyses WHERE article_id=$1 AND input_revision=1 AND relevance='pass'`, articleID).Scan(&analyses); err != nil || analyses != 1 {

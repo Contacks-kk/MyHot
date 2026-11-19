@@ -2,6 +2,7 @@ package hotranking
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -71,8 +72,8 @@ func TestHotRankingRepositoriesComputeAndPersistCurrentHeat(t *testing.T) {
 			VALUES (?, ?, ?, ?, ?, ?, ?)`, articleID, sourceIDs[i], prefix+"_identity_"+fmt.Sprint(i), "https://fixture.invalid/"+articleID, "Fixture report", first, first).Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := orm.Exec(`INSERT INTO publications(article_id,source_id,title,url,channel,discovered_at,timeline_at,visibility,eligible,selected,body_mode)
-			VALUES (?, ?, 'Fixture report', ?, 'news', ?, ?, 'public', true, true, 'summary')`, articleID, sourceIDs[i], "https://fixture.invalid/"+articleID, first, first).Error; err != nil {
+		if err := orm.Exec(`INSERT INTO publications(article_id,source_id,title,url,channel,discovered_at,timeline_at,sort_at,visibility,eligible,selected,body_mode)
+			VALUES (?, ?, 'Fixture report', ?, 'news', ?, ?, ?, 'public', true, true, 'summary')`, articleID, sourceIDs[i], "https://fixture.invalid/"+articleID, first, first, first).Error; err != nil {
 			t.Fatal(err)
 		}
 		if err := orm.Exec("UPDATE publications SET visible_after = ? WHERE article_id = ?", first, articleID).Error; err != nil {
@@ -123,7 +124,11 @@ func TestHotRankingRepositoriesComputeAndPersistCurrentHeat(t *testing.T) {
 	if err := orm.Table("hot_rankings").Select("rule_version, entries, evidence").Where("id = ?", rankingID).Scan(&stored).Error; err != nil {
 		t.Fatal(err)
 	}
-	if stored.RuleVersion != ruleVersion || !strings.Contains(string(stored.Entries), publicID) || !strings.Contains(string(stored.Evidence), `"windowHours":48`) {
+	var evidence map[string]any
+	if err := json.Unmarshal(stored.Evidence, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if stored.RuleVersion != ruleVersion || !strings.Contains(string(stored.Entries), publicID) || evidence["windowHours"] != float64(48) {
 		t.Fatalf("saved hot ranking = %#v", stored)
 	}
 }

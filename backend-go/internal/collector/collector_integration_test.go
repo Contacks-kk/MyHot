@@ -497,7 +497,8 @@ func TestCollectorStoresDeduplicatesAndKeepsHistoricalBody(t *testing.T) {
 		_, _ = pool.Exec(ctx, `DELETE FROM sources WHERE id=$1`, sourceID)
 	})
 	addCollectorSubscription(t, pool, sourceID)
-	body := "original body"
+	originalBody := strings.TrimSpace(strings.Repeat("original body ", 22))
+	body := originalBody
 	calls := 0
 	service := testCollectorService(orm, pool, fakeDoer(func(req *http.Request) (*http.Response, error) {
 		calls++
@@ -568,20 +569,21 @@ func TestCollectorStoresDeduplicatesAndKeepsHistoricalBody(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT backfill,backfill_reason FROM articles WHERE id=$1`, articleID).Scan(&backfill, &backfillReason); err != nil || !backfill || backfillReason != "first-import" {
 		t.Fatalf("first import backfill = %t/%q: %v", backfill, backfillReason, err)
 	}
-	body = "original bod�"
+	body = strings.TrimSpace(strings.Repeat("original bod� ", 22))
 	markDue()
 	if err := service.CollectSource(ctx, sourceID); err != nil {
 		t.Fatal(err)
 	}
 	var saved string
-	if err := pool.QueryRow(ctx, `SELECT body_text FROM articles WHERE id=$1`, articleID).Scan(&saved); err != nil || saved != "original body" {
+	if err := pool.QueryRow(ctx, `SELECT body_text FROM articles WHERE id=$1`, articleID).Scan(&saved); err != nil || saved != originalBody {
 		t.Fatalf("replacement-character refresh changed body to %q: %v", saved, err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE articles SET processing_state='analyzed', processing_attempts=4,
 		grouping_status='complete', selection_adds_value=true WHERE id=$1`, articleID); err != nil {
 		t.Fatal(err)
 	}
-	body = "a longer updated source body"
+	updatedBody := strings.TrimSpace(strings.Repeat("a longer updated source body ", 12))
+	body = updatedBody
 	markDue()
 	if err := service.CollectSource(ctx, sourceID); err != nil {
 		t.Fatal(err)
@@ -600,12 +602,12 @@ func TestCollectorStoresDeduplicatesAndKeepsHistoricalBody(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE articles SET created_at=(SELECT activated_at FROM personalization_rollout WHERE id=true)-interval '1 second' WHERE id=$1`, articleID); err != nil {
 		t.Fatal(err)
 	}
-	body = "different and much longer source body"
+	body = strings.TrimSpace(strings.Repeat("different and much longer source body ", 12))
 	markDue()
 	if err := service.CollectSource(ctx, sourceID); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT body_text FROM articles WHERE id=$1`, articleID).Scan(&saved); err != nil || saved != "a longer updated source body" {
+	if err := pool.QueryRow(ctx, `SELECT body_text FROM articles WHERE id=$1`, articleID).Scan(&saved); err != nil || saved != updatedBody {
 		t.Fatalf("historical body = %q: %v", saved, err)
 	}
 }
@@ -765,6 +767,7 @@ func TestDetailBudgetContinuesAfterKnownArticles(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO sources(id,name,kind,config) VALUES($1,'Detail test','web_list',$2::jsonb)`, sourceID, configuration); err != nil {
 		t.Fatal(err)
 	}
+	addCollectorSubscription(t, pool, sourceID)
 	t.Cleanup(func() {
 		_, _ = pool.Exec(ctx, `DELETE FROM articles WHERE source_id=$1`, sourceID)
 		_, _ = pool.Exec(ctx, `DELETE FROM sources WHERE id=$1`, sourceID)
@@ -788,6 +791,9 @@ func TestDetailBudgetContinuesAfterKnownArticles(t *testing.T) {
 	}
 	if detailRequests != 3 {
 		t.Fatalf("first run made %d detail requests, want the configured budget of 3", detailRequests)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE sources SET last_ok_at=now()-interval '11 minutes' WHERE id=$1`, sourceID); err != nil {
+		t.Fatal(err)
 	}
 	if err := service.CollectSourceNow(ctx, sourceID); err != nil {
 		t.Fatal(err)
@@ -844,6 +850,9 @@ func TestDetailFailureIsAuditedAndRecoveredWithoutSavingHotSignalBodies(t *testi
 		t.Fatal(err)
 	}
 	assertDetailAudit(t, pool, sourceID, 1, 1, true)
+	if _, err := pool.Exec(ctx, `UPDATE sources SET last_ok_at=now()-interval '11 minutes' WHERE id=$1`, sourceID); err != nil {
+		t.Fatal(err)
+	}
 	failing = false
 	if err := service.CollectSourceNow(ctx, sourceID); err != nil {
 		t.Fatal(err)
@@ -881,7 +890,12 @@ func TestUndatedDetailSuccessDoesNotConsumeFutureBudgets(t *testing.T) {
 		body := fmt.Sprintf(`<article><h1>Undated title %s</h1><p>Article body</p></article>`, strings.TrimPrefix(req.URL.Path, "/article/"))
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
 	}))
-	for range 4 {
+	for index := range 4 {
+		if index > 0 {
+			if _, err := pool.Exec(ctx, `UPDATE sources SET last_ok_at=now()-interval '11 minutes' WHERE id=$1`, sourceID); err != nil {
+				t.Fatal(err)
+			}
+		}
 		if err := service.CollectSourceNow(ctx, sourceID); err != nil {
 			t.Fatal(err)
 		}
@@ -906,7 +920,7 @@ func TestJinaListingKeepsReceivedPageAcrossStorageFailure(t *testing.T) {
 	configuration, err := json.Marshal(map[string]any{
 		"url":                  address,
 		"allowUrlPrefixes":     []string{"https://example.org/news/"},
-		"initialBackfillLimit": 30,
+		"_aihot":               map[string]any{"initialBackfillLimit": 30},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -980,7 +994,7 @@ func TestLaterCollectionRejectsUnseenArchiveAndRepairsKnownItems(t *testing.T) {
 	orm := collectorORM(t)
 	ctx := context.Background()
 	sourceID := fmt.Sprintf("collector_admission_%d", time.Now().UnixNano())
-	initializedAt := time.Now().UTC().Add(-7 * 24 * time.Hour).Truncate(time.Millisecond)
+	initializedAt := time.Now().UTC().Add(-7 * 24 * time.Hour).Truncate(time.Second)
 	address := "https://admission.example.invalid/" + sourceID
 	configJSON, _ := json.Marshal(map[string]string{"feedUrl": address + "/feed"})
 	cursorJSON, _ := json.Marshal(map[string]string{"initializedAt": initializedAt.Format(time.RFC3339Nano)})
@@ -1081,7 +1095,7 @@ func TestInvalidPublicationClaimKeepsTheStoredTimeline(t *testing.T) {
 		Scan(&publishedAt, &publishedAtClaim, &timelineAt, &revision); err != nil {
 		t.Fatal(err)
 	}
-	if !publishedAt.Equal(claimedAt) || !publishedAtClaim.Equal(claimedAt) || !timelineAt.Equal(claimedAt) || revision != 2 {
+	if !publishedAt.Equal(claimedAt) || !publishedAtClaim.Equal(claimedAt) || !timelineAt.Equal(discoveredAt) || revision != 2 {
 		t.Fatalf("stored timeline after invalid claim = %s/%s/%s revision %d", publishedAt, publishedAtClaim, timelineAt, revision)
 	}
 }
@@ -1548,6 +1562,9 @@ func TestXSearchResumesToItsSavedWatermarkAcrossRuns(t *testing.T) {
 	if err := json.Unmarshal(detail, &firstRun); err != nil || firstRun["truncated"] != true || firstRun["backlog"] != float64(1) {
 		t.Fatalf("first collection backlog audit = %s, err=%v", detail, err)
 	}
+	if _, err := pool.Exec(ctx, `UPDATE sources SET last_ok_at=now()-interval '11 minutes' WHERE id=$1`, sourceID); err != nil {
+		t.Fatal(err)
+	}
 	if err := service.CollectSourceNow(ctx, sourceID); err != nil {
 		t.Fatal(err)
 	}
@@ -1560,6 +1577,7 @@ func TestXSearchResumesToItsSavedWatermarkAcrossRuns(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT cursor FROM sources WHERE id=$1`, sourceID).Scan(&cursor); err != nil {
 		t.Fatal(err)
 	}
+	saved = nil
 	if err := json.Unmarshal(cursor, &saved); err != nil {
 		t.Fatal(err)
 	}
@@ -1765,8 +1783,8 @@ func TestRSSTailCommitsBefore304AndRetainsOldValidatorAfterStorageFailure(t *tes
 	address := "https://rss-tail.example.invalid/" + sourceID
 	initializedAt := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
 	if _, err := pool.Exec(ctx, `INSERT INTO sources(id,name,kind,config,cursor)
-		VALUES($1,'RSS tail test','rss',jsonb_build_object('feedUrl',$2::text),
-		jsonb_build_object('initializedAt',$3::text,'rssURL',$2::text,'rssResponseURL',$2::text,'rssConfigHash',$4::text,'rssETag','"old"'))`, sourceID, address, initializedAt, rssConfigHash(settings{"feedUrl": address})); err != nil {
+		VALUES($1,'RSS tail test','rss',jsonb_build_object('feedUrl',$2::text,'_aihot',jsonb_build_object('initialBackfillLimit',61)),
+		jsonb_build_object('initializedAt',$3::text,'rssURL',$2::text,'rssResponseURL',$2::text,'rssConfigHash',$4::text,'rssETag','"old"'))`, sourceID, address, initializedAt, rssConfigHash(settings{"feedUrl": address, "_aihot": map[string]any{"initialBackfillLimit": 61}})); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -1811,7 +1829,7 @@ func TestRSSTailCommitsBefore304AndRetainsOldValidatorAfterStorageFailure(t *tes
 	}
 	markDue := func() {
 		t.Helper()
-		if _, err := pool.Exec(ctx, `UPDATE sources SET next_fetch_at=now()-interval '1 second' WHERE id=$1`, sourceID); err != nil {
+		if _, err := pool.Exec(ctx, `UPDATE sources SET next_fetch_at=now()-interval '1 second',last_ok_at=now()-interval '11 minutes' WHERE id=$1`, sourceID); err != nil {
 			t.Fatal(err)
 		}
 	}

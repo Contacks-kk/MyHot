@@ -24,11 +24,11 @@ type ArticleAnalysis struct {
 	Origin        string          `gorm:"column:origin"`
 	Model         *string         `gorm:"column:model"`
 	PromptVersion string          `gorm:"column:prompt_version"`
-	ReceiptIDs    []int64         `gorm:"column:receipt_ids;type:bigint[]"`
+	ReceiptIDs    Int64Array      `gorm:"column:receipt_ids;type:bigint[]"`
 	Relevance     string          `gorm:"column:relevance"`
 	Category      *string         `gorm:"column:category"`
-	Tags          []string        `gorm:"column:tags;type:text[]"`
-	Subjects      []string        `gorm:"column:subjects;type:text[]"`
+	Tags          TextArray       `gorm:"column:tags;type:text[]"`
+	Subjects      TextArray       `gorm:"column:subjects;type:text[]"`
 	TitleZh       string          `gorm:"column:title_zh"`
 	SummaryZh     string          `gorm:"column:summary_zh"`
 	ReasonZh      *string         `gorm:"column:reason_zh"`

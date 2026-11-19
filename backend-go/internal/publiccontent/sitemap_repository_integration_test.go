@@ -62,8 +62,8 @@ func TestReadSitemapUsesCurrentPublicScopeAndIndexability(t *testing.T) {
 			VALUES (?, ?, ?, ?, ?, ?, ?)`, id, sourceID, id, "https://fixture.example/"+id, "Sitemap company report", timeline, timeline).Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := orm.Exec(`INSERT INTO publications(article_id,source_id,title,summary,url,channel,discovered_at,timeline_at,visible_after,visibility,eligible,selected,seat,tags)
-			VALUES (?, ?, 'Sitemap company report', 'Summary', ?, 'news', ?, ?, ?, 'public', true, true, true, ARRAY['entity:fixture']::text[])`, id, sourceID, "https://fixture.example/"+id, timeline, timeline, released).Error; err != nil {
+		if err := orm.Exec(`INSERT INTO publications(article_id,source_id,title,summary,url,channel,discovered_at,timeline_at,sort_at,visible_after,visibility,eligible,selected,seat,tags)
+			VALUES (?, ?, 'Sitemap company report', 'Summary', ?, 'news', ?, ?, ?, ?, 'public', true, true, true, ARRAY['entity:fixture']::text[])`, id, sourceID, "https://fixture.example/"+id, timeline, timeline, timeline, released).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -71,8 +71,8 @@ func TestReadSitemapUsesCurrentPublicScopeAndIndexability(t *testing.T) {
 		VALUES (?, ?, ?, ?, 'Indexable item', ?, ?)`, indexableID, sourceID, indexableID, "https://fixture.example/"+indexableID, released, released).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := orm.Exec(`INSERT INTO publications(article_id,source_id,title,summary,url,channel,discovered_at,timeline_at,visibility,eligible,selected,indexable,tags)
-		VALUES (?, ?, 'Indexable item', 'Summary', ?, 'news', ?, ?, 'public', true, false, true, ARRAY['entity:fixture']::text[])`, indexableID, sourceID, "https://fixture.example/"+indexableID, released, released).Error; err != nil {
+	if err := orm.Exec(`INSERT INTO publications(article_id,source_id,title,summary,url,channel,discovered_at,timeline_at,sort_at,visibility,eligible,selected,indexable,tags,updated_at)
+		VALUES (?, ?, 'Indexable item', 'Summary', ?, 'news', ?, ?, ?, 'public', true, false, true, ARRAY['entity:fixture']::text[], ?)`, indexableID, sourceID, "https://fixture.example/"+indexableID, released, released, released, released).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := orm.Exec("INSERT INTO stories(public_id,title,latest_at) VALUES (?, 'Sitemap story', ?)", storyID, released).Error; err != nil {

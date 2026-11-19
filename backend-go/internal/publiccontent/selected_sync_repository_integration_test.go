@@ -61,10 +61,10 @@ func TestSelectedSyncRepositoryReadsSnapshotAndRedactsCurrentlyUnlistedChanges(t
 			t.Fatal(err)
 		}
 	}
-	if err := orm.Exec(`INSERT INTO publications(article_id,source_id,title,url,channel,discovered_at,timeline_at,visibility,eligible,selected)
-		VALUES (?, ?, 'Visible fixture', 'https://fixture.example/visible', 'news', ?, ?, 'public', true, false),
-		       (?, ?, 'Withdrawn fixture', 'https://fixture.example/withdrawn', 'news', ?, ?, 'withdrawn', true, false)`,
-		visibleID, sourceID, now, now, withdrawnID, sourceID, now, now).Error; err != nil {
+	if err := orm.Exec(`INSERT INTO publications(article_id,source_id,title,url,channel,discovered_at,timeline_at,sort_at,visibility,eligible,selected)
+		VALUES (?, ?, 'Visible fixture', 'https://fixture.example/visible', 'news', ?, ?, ?, 'public', true, false),
+		       (?, ?, 'Withdrawn fixture', 'https://fixture.example/withdrawn', 'news', ?, ?, ?, 'withdrawn', true, false)`,
+		visibleID, sourceID, now, now, now, withdrawnID, sourceID, now, now, now).Error; err != nil {
 		t.Fatal(err)
 	}
 	visiblePayload := fmt.Sprintf(`{"id":%q,"title":"Visible fixture","links":{"aihot":"/items/%s","original":"https://fixture.example/visible"}}`, visibleID, visibleID)
@@ -121,7 +121,7 @@ func TestSelectedSyncRepositoryReadsSnapshotAndRedactsCurrentlyUnlistedChanges(t
 		t.Fatalf("snapshot did not filter the current selected set: %#v", snapshot)
 	}
 
-	changes, err := repository.SelectedChanges(context.Background(), 10, firstSeq, firstSeq+1, now, false)
+	changes, err := repository.SelectedChanges(context.Background(), 10, firstSeq-1, firstSeq+1, now, false)
 	if err != nil {
 		t.Fatal(err)
 	}

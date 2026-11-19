@@ -101,8 +101,8 @@ func TestRepositoryLinksStoriesAfterRepeatedIndependentTies(t *testing.T) {
 		if err := db.Exec(`INSERT INTO fact_articles(fact_id,article_id,role) VALUES (?,?,'report')`, factIDs[ownIndex], articleID).Error; err != nil {
 			t.Fatal(err)
 		}
-		if err := db.Exec(`INSERT INTO publications(article_id,title,source_id,channel,url,discovered_at,timeline_at) VALUES (?,? ,?,'news',?,?,?)`,
-			articleID, "Fixture report", sourceID, "https://example.invalid/"+articleID, now, now).Error; err != nil {
+		if err := db.Exec(`INSERT INTO publications(article_id,title,source_id,channel,url,discovered_at,timeline_at,sort_at) VALUES (?,? ,?,'news',?,?,?,?)`,
+			articleID, "Fixture report", sourceID, "https://example.invalid/"+articleID, now, now, now).Error; err != nil {
 			t.Fatal(err)
 		}
 		candidates := fmt.Sprintf(`[{"id":%d,"relation":"SAME_STORY","confidence":0.95}]`, factIDs[otherIndex])

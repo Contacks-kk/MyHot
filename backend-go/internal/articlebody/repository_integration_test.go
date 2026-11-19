@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -60,7 +61,7 @@ func TestSaveBodyCommitsRevisionAndTimelineAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	published := discovered.Add(-time.Hour)
-	body := &Extracted{HTML: "<p>Readable article body</p>", Text: "Readable article body", Images: []Image{}}
+	body := &Extracted{HTML: "<p>Readable article body</p>", Text: "Readable article body", PublishedAt: &published, Images: []Image{}}
 	candidate := Candidate{ID: articleID, Revision: 1, BodyStatus: "pending", SourceConfig: []byte(`{"fetchPublicContent":true}`)}
 	repository := NewRepository(db)
 	pending, err := repository.Pending(ctx, 100)
@@ -398,7 +399,14 @@ func TestPendingAndSaveBodyIncludeConfiguredXArticles(t *testing.T) {
 	if err := db.Table("articles").Where("id = ?", articleID).Take(&saved).Error; err != nil {
 		t.Fatal(err)
 	}
-	if saved.Title != "Long form" || saved.BodyText != bodyText || string(saved.XArticle) != string(articleJSON) || saved.Revision != 2 || saved.BodyStatus != "ok" {
+	var savedArticle, expectedArticle any
+	if err := json.Unmarshal(saved.XArticle, &savedArticle); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(articleJSON, &expectedArticle); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Title != "Long form" || saved.BodyText != bodyText || !reflect.DeepEqual(savedArticle, expectedArticle) || saved.Revision != 2 || saved.BodyStatus != "ok" {
 		t.Fatalf("X Article body was not committed atomically: %#v", saved)
 	}
 }

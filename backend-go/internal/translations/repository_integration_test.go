@@ -57,8 +57,8 @@ func TestRepositoryTranslationEligibilityAttemptsAndRevisionSafeUpsert(t *testin
 		VALUES (?, ?, ?, 'https://example.invalid/translation', 'Original title', 'en', 3, 'Original body', '<p>Original body</p>', 'ok', now(), now())`, articleID, sourceID, articleID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := orm.Exec(`INSERT INTO publications (article_id,title,selected,visibility,body_mode,source_id,channel,url,discovered_at,timeline_at)
-		VALUES (?, 'Chinese title', true, 'public', 'full', ?, 'news', 'https://example.invalid/translation', now(), now())`, articleID, sourceID).Error; err != nil {
+	if err := orm.Exec(`INSERT INTO publications (article_id,title,selected,visibility,body_mode,source_id,channel,url,discovered_at,timeline_at,sort_at)
+		VALUES (?, 'Chinese title', true, 'public', 'full', ?, 'news', 'https://example.invalid/translation', now(), now(), now())`, articleID, sourceID).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -135,8 +135,8 @@ func TestRepositoryQuoteCandidatesAndConflictUpsert(t *testing.T) {
 		VALUES (?, ?, ?, 'https://x.com/example/status/1', 'Original post', 'en', ?::jsonb, now(), now())`, articleID, sourceID, articleID, string(xPost)).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := orm.Exec(`INSERT INTO publications (article_id,title,selected,visibility,body_mode,source_id,channel,url,discovered_at,timeline_at)
-		VALUES (?, 'Original post', true, 'public', 'full', ?, 'x', 'https://x.com/example/status/1', now(), now())`, articleID, sourceID).Error; err != nil {
+	if err := orm.Exec(`INSERT INTO publications (article_id,title,selected,visibility,body_mode,source_id,channel,url,discovered_at,timeline_at,sort_at)
+		VALUES (?, 'Original post', true, 'public', 'full', ?, 'x', 'https://x.com/example/status/1', now(), now(), now())`, articleID, sourceID).Error; err != nil {
 		t.Fatal(err)
 	}
 	candidates, err := repository.QuoteCandidates(ctx, 3)
