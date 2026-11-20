@@ -71,16 +71,38 @@ func (s *Server) funnel(w http.ResponseWriter, r *http.Request, u userContext) {
 	writeJSON(w, http.StatusOK, view)
 }
 
-/** hot returns the authenticated user's top 48-hour hotspots. */
+/** hot returns only the authenticated user's processed hotspots for the requested time range. */
 func (s *Server) hot(w http.ResponseWriter, r *http.Request, u userContext) {
-	items, err := s.Personal.Hot(r.Context(), u.ID)
+	query := r.URL.Query()
+	page := 1
+	if raw := query.Get("page"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "页码无效")
+			return
+		}
+		page = parsed
+	}
+	selection := personal.HotQuery{
+		Range: query.Get("range"),
+		Date:  query.Get("date"),
+		Page:  page,
+	}
+	result, err := s.Personal.Hot(r.Context(), u.ID, selection, time.Now())
+	var inputError *personal.InputError
+	if errors.As(err, &inputError) {
+		writeError(w, http.StatusBadRequest, inputError.Message)
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "个人热点暂不可用")
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items": contentResponses(items, time.Now(), s.Config.ImageProxySignSecret, "image-336", 4),
+		"items":   contentResponses(result.Items, time.Now(), s.Config.ImageProxySignSecret, "image-336", 4),
+		"page":    result.Page,
+		"hasMore": result.HasMore,
 	})
 }
 

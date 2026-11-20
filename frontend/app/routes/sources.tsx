@@ -778,7 +778,7 @@ export default function SourcesRoute() {
 
   return (
     <main className="mx-auto max-w-[900px] pb-12">
-      <BackLink to="/" label={locale === "en" ? "My Hot" : "我的热点"} />
+      <BackLink to="/hot" label={locale === "en" ? "Personal Hotspots" : "个人热点榜单"} />
 
       <div className="mt-3 flex flex-wrap items-end justify-between gap-3">
         <div>

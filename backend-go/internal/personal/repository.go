@@ -138,9 +138,10 @@ func (r *Repository) Feed(ctx context.Context, userID int64) ([]Card, error) {
 	return items, err
 }
 
-func (r *Repository) Hot(ctx context.Context, userID int64) ([]Card, error) {
+/** Hot reads the user's ranked results within an inclusive start and exclusive end. */
+func (r *Repository) Hot(ctx context.Context, userID int64, window hotWindow) ([]Card, error) {
 	var items []Card
-	err := r.db.WithContext(ctx).Raw(personalSelect+` WHERE r.user_id=? AND coalesce(a.published_at,a.discovered_at)>=now()-interval '48 hours' AND coalesce(a.published_at,a.discovered_at)<=now() ORDER BY r.relevance_score DESC,coalesce(a.published_at,a.discovered_at) DESC,r.article_id LIMIT 10`, userID).Scan(&items).Error
+	err := r.db.WithContext(ctx).Raw(personalSelect+` WHERE r.user_id=? AND coalesce(a.published_at,a.discovered_at)>=? AND coalesce(a.published_at,a.discovered_at)<? ORDER BY r.relevance_score DESC,coalesce(a.published_at,a.discovered_at) DESC,r.article_id LIMIT ? OFFSET ?`, userID, window.Start, window.End, window.Limit+1, window.Offset).Scan(&items).Error
 	if items == nil {
 		items = []Card{}
 	}
@@ -247,7 +248,8 @@ func (r *Repository) Funnel(ctx context.Context, userID int64) (FunnelView, erro
 		JOIN article_discoveries ad ON ad.article_id = a.id
 		JOIN user_source_subscriptions sub ON sub.source_id = ad.source_id AND sub.enabled
 		WHERE sub.user_id = ?
-		  AND ad.discovered_at >= (now() AT TIME ZONE 'Asia/Shanghai')::date
+		  AND ad.discovered_at >= ((now() AT TIME ZONE 'Asia/Shanghai')::date::timestamp AT TIME ZONE 'Asia/Shanghai')
+		  AND ad.discovered_at <= now()
 	),
 	user_evaluated AS (
 		SELECT article_id FROM user_article_results WHERE user_id = ?
@@ -271,7 +273,8 @@ func (r *Repository) Funnel(ctx context.Context, userID int64) (FunnelView, erro
 		JOIN user_source_subscriptions sub ON sub.source_id = ad.source_id AND sub.enabled
 		JOIN sources s ON s.id = ad.source_id
 		WHERE sub.user_id = ?
-		  AND ad.discovered_at >= (now() AT TIME ZONE 'Asia/Shanghai')::date
+		  AND ad.discovered_at >= ((now() AT TIME ZONE 'Asia/Shanghai')::date::timestamp AT TIME ZONE 'Asia/Shanghai')
+		  AND ad.discovered_at <= now()
 	)
 	SELECT t.article_id, t.title, t.source, t.url, t.published_at, t.created_at
 	FROM today_scanned t

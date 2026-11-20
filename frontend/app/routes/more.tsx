@@ -8,6 +8,7 @@ import { IconLogout } from "../components/icons";
 import { userApiGet, type UserSession } from "../lib/user-api.server";
 import { useLocalePreference } from "../lib/local-state";
 import { getDict } from "../lib/i18n";
+import { ThemeSwitch } from "../components/shell/ThemeSwitch";
 
 export const handle: Screen = {
   tab: "me",
@@ -49,6 +50,23 @@ export default function MorePage() {
     <section className="mx-auto max-w-[720px] pb-10">
       <h1 className="text-[25px] font-semibold tracking-tight text-ink">{dict.account.title}</h1>
       <p className="mt-2 text-[13px] text-ink-4">{user.email}</p>
+      <nav aria-label={locale === "en" ? "Workspace settings" : "工作区设置"} className="card mt-6 divide-y divide-line text-[14px] text-ink-2 lg:hidden">
+        {[
+          ["/model", dict.nav.model],
+          ["/sources", dict.nav.sources],
+          ["/history", dict.nav.history],
+          ["/about", dict.nav.about],
+        ].map(([to, label]) => (
+          <Link key={to} to={to!} className="flex items-center justify-between px-5 py-4 hover:bg-bg-sunk">
+            <span>{label}</span>
+            <span aria-hidden>›</span>
+          </Link>
+        ))}
+      </nav>
+      <div className="card mt-5 flex items-center justify-between px-5 py-4 lg:hidden">
+        <span className="text-[14px] font-medium text-ink">{dict.shell.appearance}</span>
+        <ThemeSwitch className="w-[112px]" />
+      </div>
       <div className="card mt-6 divide-y divide-line text-[14px] text-ink-2">
         {[
           ["/terms", dict.account.terms],

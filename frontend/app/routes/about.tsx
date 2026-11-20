@@ -25,7 +25,7 @@ export default function AboutPage() {
 
   const content = (
     <article className="mx-auto max-w-[760px]">
-      <div className="pb-2"><BackLink to="/" label={hasShell ? "我的热点" : "MyHOT"} /></div>
+      <div className="pb-2"><BackLink to={hasShell ? "/hot" : "/"} label={hasShell ? "个人热点榜单" : "MyHOT"} /></div>
       <h1 className={`${hasShell ? "" : "mt-8 "}text-[34px] font-semibold tracking-tight text-ink`}>
         为你关注的变化，留出每天的阅读时间。
       </h1>

@@ -19,7 +19,7 @@ import { addRecentSearch } from "../lib/local-state";
 import { userApiGet } from "../lib/user-api.server";
 import type { Catalog } from "../lib/catalog";
 
-export const handle: Screen = { tab: "featured", name: "全部" };
+export const handle: Screen = { tab: "hot", name: "全部" };
 
 const ALL_TITLE = subjectAfter("全部", "动态");
 

@@ -188,7 +188,7 @@ export function ErrorBoundary() {
             重新加载
           </Link>}
           <Link reloadDocument to="/" className={buttonClass(notFound ? "primary" : "secondary")}>
-            回到我的热点
+            回到个人热点榜单
           </Link>
           <Link reloadDocument to="/history" className={buttonClass("secondary")}>
             查看历史归档

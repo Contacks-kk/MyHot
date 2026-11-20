@@ -257,8 +257,86 @@ func (s *Service) Feed(ctx context.Context, userID int64) ([]Card, error) {
 	return s.repository.Feed(ctx, userID)
 }
 
-func (s *Service) Hot(ctx context.Context, userID int64) ([]Card, error) {
-	return s.repository.Hot(ctx, userID)
+type HotQuery struct {
+	Range string
+	Date  string
+	Page  int
+}
+
+type hotWindow struct {
+	Start  time.Time
+	End    time.Time
+	Limit  int
+	Offset int
+}
+
+type HotPage struct {
+	Items   []Card
+	Page    int
+	HasMore bool
+}
+
+/** hotWindowFor validates the selection and resolves Beijing calendar days or a rolling 48-hour window. */
+func hotWindowFor(query HotQuery, now time.Time) (hotWindow, error) {
+	if query.Page < 1 || query.Page > 100000 {
+		return hotWindow{}, &InputError{Message: "页码无效"}
+	}
+	if query.Range == "" || query.Range == "48h" {
+		if query.Page != 1 {
+			return hotWindow{}, &InputError{Message: "48 小时榜单仅提供前 10 条"}
+		}
+		return hotWindow{
+			Start: now.Add(-48 * time.Hour),
+			End:   now,
+			Limit: 10,
+		}, nil
+	}
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		return hotWindow{}, err
+	}
+	today := now.In(location).Format(time.DateOnly)
+	date := today
+	if query.Range == "date" {
+		date = query.Date
+	} else if query.Range != "today" {
+		return hotWindow{}, &InputError{Message: "时间范围无效"}
+	}
+	start, err := time.ParseInLocation(time.DateOnly, date, location)
+	if err != nil || date > today {
+		return hotWindow{}, &InputError{Message: "请选择有效的历史日期"}
+	}
+	end := start.AddDate(0, 0, 1)
+	if end.After(now) {
+		end = now
+	}
+	return hotWindow{
+		Start:  start,
+		End:    end,
+		Limit:  50,
+		Offset: (query.Page - 1) * 50,
+	}, nil
+}
+
+/** Hot reads already processed personal results in the selected window, with pagination for calendar days. */
+func (s *Service) Hot(ctx context.Context, userID int64, query HotQuery, now time.Time) (HotPage, error) {
+	window, err := hotWindowFor(query, now)
+	if err != nil {
+		return HotPage{}, err
+	}
+	items, err := s.repository.Hot(ctx, userID, window)
+	if err != nil {
+		return HotPage{}, err
+	}
+	hasMore := len(items) > window.Limit && window.Limit == 50
+	if len(items) > window.Limit {
+		items = items[:window.Limit]
+	}
+	return HotPage{
+		Items:   items,
+		Page:    query.Page,
+		HasMore: hasMore,
+	}, nil
 }
 
 func (s *Service) Daily(ctx context.Context, userID int64) ([]DailyReport, error) {

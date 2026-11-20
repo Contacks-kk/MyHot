@@ -3,7 +3,6 @@ export type Locale = "zh" | "en";
 
 export interface TranslationDict {
   nav: {
-    featured: string;
     hot: string;
     daily: string;
     model: string;
@@ -24,7 +23,6 @@ export interface TranslationDict {
   };
   action: {
     backToHot: string;
-    backToFeed: string;
     readOriginal: string;
     openOriginal: string;
     logout: string;
@@ -59,8 +57,6 @@ export interface TranslationDict {
     last48Hours: string;
     hotRankTitle: string;
     hotRankSubtitle: string;
-    noHotspots: string;
-    noResultsYet: string;
   };
   model: {
     title: string;
@@ -84,8 +80,7 @@ export interface TranslationDict {
 export const TRANSLATIONS: Record<Locale, TranslationDict> = {
   zh: {
     nav: {
-      featured: "我的热点",
-      hot: "个人热点榜",
+      hot: "个人热点榜单",
       daily: "我的日报",
       model: "模型配置",
       interests: "关注项",
@@ -105,7 +100,6 @@ export const TRANSLATIONS: Record<Locale, TranslationDict> = {
     },
     action: {
       backToHot: "返回热点榜",
-      backToFeed: "我的热点",
       readOriginal: "阅读原文 ↗",
       openOriginal: "打开原文 ↗",
       logout: "退出登录",
@@ -138,10 +132,8 @@ export const TRANSLATIONS: Record<Locale, TranslationDict> = {
       publishTime: "发布时间",
       matched: "匹配",
       last48Hours: "LAST 48 HOURS",
-      hotRankTitle: "个人热点榜",
+      hotRankTitle: "个人热点榜单",
       hotRankSubtitle: "按你的模型评分排序，最多展示 10 条。",
-      noHotspots: "过去 48 小时还没有匹配到的文章。",
-      noResultsYet: "暂时还没有个人结果。新增文章命中你的关注项后会显示在这里。",
     },
     model: {
       title: "模型配置",
@@ -163,7 +155,6 @@ export const TRANSLATIONS: Record<Locale, TranslationDict> = {
   },
   en: {
     nav: {
-      featured: "My Feed",
       hot: "Hotspots",
       daily: "Daily Brief",
       model: "Model Settings",
@@ -184,7 +175,6 @@ export const TRANSLATIONS: Record<Locale, TranslationDict> = {
     },
     action: {
       backToHot: "Back to Hotlist",
-      backToFeed: "Back to Feed",
       readOriginal: "Read Original ↗",
       openOriginal: "Open Original ↗",
       logout: "Log out",
@@ -219,8 +209,6 @@ export const TRANSLATIONS: Record<Locale, TranslationDict> = {
       last48Hours: "LAST 48 HOURS",
       hotRankTitle: "Personal Hotspots",
       hotRankSubtitle: "Ranked by your model score, showing top 10 articles.",
-      noHotspots: "No matching articles found in the last 48 hours.",
-      noResultsYet: "No personal results yet. New articles matching your interests will appear here.",
     },
     model: {
       title: "Model Settings",

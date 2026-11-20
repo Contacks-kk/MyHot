@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { webModules } from "../../site-modules";
 import { getDict, type Locale } from "../../lib/i18n";
 import {
-  IconBolt, IconDoc, IconFlame, IconGrid, IconHeart, IconHistory, IconPlug, IconRss, IconUser,
+  IconDoc, IconFlame, IconGrid, IconHeart, IconHistory, IconPlug, IconRss, IconUser,
 } from "../icons";
 
 export interface NavItem {
@@ -24,11 +24,10 @@ function getSections(locale: Locale): Array<{ title: string; items: NavItem[] }>
     {
       title: dict.nav.workspace,
       items: [
-        { to: "/", label: dict.nav.featured, icon: IconBolt, end: true },
         { to: "/hot", label: dict.nav.hot, icon: IconFlame },
+        { to: "/interests", label: dict.nav.interests, icon: IconGrid },
         { to: "/daily", label: dict.nav.daily, icon: IconDoc, end: true },
         { to: "/model", label: dict.nav.model, icon: IconPlug },
-        { to: "/interests", label: dict.nav.interests, icon: IconGrid },
         { to: "/sources", label: dict.nav.sources, icon: IconRss },
       ],
     },
@@ -67,13 +66,12 @@ export function sidebarIsActive(item: NavItem, pathname: string): boolean {
 }
 
 /**
- * The phone tab bar: 全部 lives beside 精选 as a switch, 热点 and 日报 are tabs, and "我的" at /more holds
- * 收藏, 外观, the tools and the site's own pages. Which tab a page sits under is declared by the page
- * itself (components/shell/screens.ts).
+ * The phone tab bar exposes personal hotspots, interests, daily reports, and account settings.
+ * Each page declares its tab in components/shell/screens.ts.
  */
 export type TabKey =
-  | "featured"
   | "hot"
+  | "interests"
   | "daily"
   | "me"
   // A module's tab.
@@ -91,8 +89,8 @@ export interface Tab {
 export function tabs(locale: Locale = "zh"): Tab[] {
   const dict = getDict(locale);
   const engineTabs: Tab[] = [
-    { key: "featured", to: "/", label: dict.nav.featured, icon: IconBolt },
     { key: "hot", to: "/hot", label: dict.nav.hot, icon: IconFlame },
+    { key: "interests", to: "/interests", label: dict.nav.interests, icon: IconGrid },
     { key: "daily", to: "/daily", label: dict.nav.daily, icon: IconDoc },
     { key: "me", to: "/more", label: dict.nav.account, icon: IconUser, changelog: true },
   ];

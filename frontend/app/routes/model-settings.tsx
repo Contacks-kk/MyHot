@@ -112,7 +112,7 @@ export default function ModelSettings() {
 
   return (
     <main className="mx-auto max-w-[720px] pb-10">
-      <BackLink to="/" label={dict.action.backToFeed} />
+      <BackLink to="/hot" label={dict.action.backToHot} />
       <h1 className="mt-3 text-[25px] font-semibold tracking-tight text-ink">{dict.model.title}</h1>
       <p className="mt-2 text-[13px] leading-relaxed text-ink-3">{dict.model.subtitle}</p>
       <form onSubmit={save} className="card mt-6 p-5 sm:p-6">

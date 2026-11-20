@@ -26,7 +26,7 @@ import { IconCopy, IconDownload, IconExternal, IconImage, IconMenu, IconMore, Ic
 import { BarButton, PhoneBar } from "../components/shell/PhoneBar";
 import { isPhone, type Screen } from "../components/shell/screens";
 
-export const handle: Screen = { home: "featured", toolbar: true };
+export const handle: Screen = { home: "hot", toolbar: true };
 
 const PosterSheet = lazy(() => import("../features/item/PosterSheet"));
 
