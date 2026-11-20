@@ -1395,204 +1395,203 @@ export default function SourcesRoute() {
 
                   {/* 展开的信源详细信息面板 / 卡片内就地编辑表单 */}
                   {isExpanded && (
-                    <div className="mt-4 rounded-control border border-line/70 bg-bg-sunk/40 p-4 text-[12px] space-y-3">
-                      {editingId === source.id ? (
-                        <form
-                          onSubmit={saveInline}
-                          className="rounded-control border border-accent/40 bg-surface/90 p-4 sm:p-5 space-y-4 shadow-xs"
-                        >
-                          <div className="flex items-center justify-between border-b border-line pb-3">
-                            <h4 className="text-[14px] font-semibold text-ink flex items-center gap-2">
-                              <span>{locale === "en" ? "Edit Source Configuration" : "编辑信源配置"}</span>
-                              <span className="text-[12px] font-normal text-ink-3">({source.name})</span>
-                            </h4>
-                            <button
-                              type="button"
-                              onClick={cancelEdit}
-                              className="text-[12px] text-ink-4 hover:text-accent transition-colors"
-                            >
-                              {locale === "en" ? "Cancel" : "取消"}
-                            </button>
-                          </div>
+                    editingId === source.id ? (
+                      <form
+                        onSubmit={saveInline}
+                        className="mt-4 rounded-control border border-line/70 bg-bg-sunk/40 p-4 sm:p-5 text-[12px] space-y-4"
+                      >
+                        <div className="flex items-center justify-between border-b border-line/60 pb-3">
+                          <h4 className="text-[14px] font-semibold text-ink flex items-center gap-2">
+                            <span>{locale === "en" ? "Edit Source Configuration" : "编辑信源配置"}</span>
+                            <span className="text-[12px] font-normal text-ink-3">({source.name})</span>
+                          </h4>
+                          <button
+                            type="button"
+                            onClick={cancelEdit}
+                            className="text-[12px] text-ink-4 hover:text-accent transition-colors"
+                          >
+                            {locale === "en" ? "Cancel" : "取消"}
+                          </button>
+                        </div>
 
-                          <div className="grid gap-4 sm:grid-cols-2">
-                            <div>
-                              <label className="block text-[12px] font-medium text-ink-2">
-                                {locale === "en" ? "My source name" : "我的备注名"}
-                                <input
-                                  className={`${fieldClass} mt-1.5`}
-                                  required={!editForm.nameInherited}
-                                  disabled={editForm.nameInherited}
-                                  maxLength={200}
-                                  value={editForm.name}
-                                  onChange={(e) => {
-                                    setEditForm({ ...editForm, name: e.target.value });
-                                  }}
-                                  placeholder={locale === "en" ? "Source Name" : "信源备注名"}
-                                />
-                              </label>
-                              <label className="mt-2 flex items-center gap-2 text-[12px] text-ink-3">
-                                <input
-                                  type="checkbox"
-                                  className="accent-accent"
-                                  checked={editForm.nameInherited}
-                                  onChange={(e) => {
-                                    setEditForm({ ...editForm, nameInherited: e.target.checked });
-                                  }}
-                                />
-                                {locale === "en" ? "Use shared source name" : "使用共享信源名"}
-                              </label>
-                            </div>
-
-                            <div>
-                              <label className="text-[12px] font-medium text-ink-2 block">
-                                {source.kind === "web_list"
-                                  ? locale === "en"
-                                    ? "Web Page List URL"
-                                    : "网页列表地址（HTML 页面）"
-                                  : locale === "en"
-                                  ? "RSS / Feed URL"
-                                  : "信源地址（RSS / Atom / 网站）"}
-                                <input
-                                  className={`${fieldClass} mt-1.5`}
-                                  required
-                                  type="url"
-                                  maxLength={2048}
-                                  value={editForm.url}
-                                  onChange={(e) => {
-                                    setEditForm({ ...editForm, url: e.target.value });
-                                  }}
-                                />
-                              </label>
-                            </div>
-
-                            {/* Optional CSS Selectors for Web List */}
-                            {source.kind === "web_list" && (
-                              <div className="sm:col-span-2 mt-1">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setEditShowAdvancedWeb(!editShowAdvancedWeb);
-                                  }}
-                                  className="text-[12px] font-medium text-accent hover:underline flex items-center gap-1"
-                                >
-                                  <span>
-                                    {editShowAdvancedWeb
-                                      ? locale === "en"
-                                        ? "Hide Advanced CSS Selectors"
-                                        : "收起高级 CSS 选择器配置"
-                                      : locale === "en"
-                                      ? "⚙️ Advanced: Custom CSS Selectors (Optional)"
-                                      : "⚙️ 高级配置：自定义 CSS 选择器（可选，默认智能提取）"}
-                                  </span>
-                                </button>
-
-                                {editShowAdvancedWeb && (
-                                  <div className="mt-3 rounded-control border border-line bg-surface p-3.5 grid gap-3 sm:grid-cols-2">
-                                    <label className="text-[11.5px] text-ink-2">
-                                      {locale === "en" ? "Item Selector" : "文章列表项选择器（Item Selector）"}
-                                      <input
-                                        className={`${fieldClass} mt-1`}
-                                        value={editForm.itemSelector}
-                                        onChange={(e) => {
-                                          setEditForm({ ...editForm, itemSelector: e.target.value });
-                                        }}
-                                        placeholder="例如：article, .news-item, li.post"
-                                      />
-                                    </label>
-                                    <label className="text-[11.5px] text-ink-2">
-                                      {locale === "en" ? "Title Selector" : "文章标题选择器（Title Selector）"}
-                                      <input
-                                        className={`${fieldClass} mt-1`}
-                                        value={editForm.titleSelector}
-                                        onChange={(e) => {
-                                          setEditForm({ ...editForm, titleSelector: e.target.value });
-                                        }}
-                                        placeholder="例如：h2 a, .title a, a"
-                                      />
-                                    </label>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-
-                            <label className="text-[12px] font-medium text-ink-2">
-                              {locale === "en" ? "Interval (Minutes)" : "抓取间隔（分钟）"}
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <div>
+                            <label className="block text-[12px] font-medium text-ink-2">
+                              {locale === "en" ? "My source name" : "我的备注名"}
                               <input
                                 className={`${fieldClass} mt-1.5`}
-                                type="number"
-                                min={1}
-                                max={1440}
-                                required
-                                value={editForm.intervalMinutes}
+                                required={!editForm.nameInherited}
+                                disabled={editForm.nameInherited}
+                                maxLength={200}
+                                value={editForm.name}
                                 onChange={(e) => {
-                                  setEditForm({ ...editForm, intervalMinutes: Number(e.target.value) });
+                                  setEditForm({ ...editForm, name: e.target.value });
                                 }}
+                                placeholder={locale === "en" ? "Source Name" : "信源备注名"}
                               />
                             </label>
-
-                            <label className="text-[12px] font-medium text-ink-2">
-                              {locale === "en" ? "Reuse Window (Minutes)" : "复用窗口（分钟）"}
-                              <input
-                                className={`${fieldClass} mt-1.5`}
-                                type="number"
-                                min={1}
-                                max={1440}
-                                required
-                                value={editForm.reuseWindowMinutes}
-                                onChange={(e) => {
-                                  setEditForm({ ...editForm, reuseWindowMinutes: Number(e.target.value) });
-                                }}
-                              />
-                            </label>
-
-                            <label className="sm:col-span-2 flex items-center gap-2 text-[12px] text-ink-2">
+                            <label className="mt-2 flex items-center gap-2 text-[12px] text-ink-3">
                               <input
                                 type="checkbox"
                                 className="accent-accent"
-                                checked={editForm.enabled}
+                                checked={editForm.nameInherited}
                                 onChange={(e) => {
-                                  setEditForm({ ...editForm, enabled: e.target.checked });
+                                  setEditForm({ ...editForm, nameInherited: e.target.checked });
                                 }}
                               />
-                              {locale === "en" ? "Enable this subscription" : "启用此订阅"}
+                              {locale === "en" ? "Use shared source name" : "使用共享信源名"}
                             </label>
                           </div>
 
-                          {editError && (
-                            <FormMessage error>{editError}</FormMessage>
-                          )}
-                          {editMessage && (
-                            <FormMessage>{editMessage}</FormMessage>
+                          <div>
+                            <label className="text-[12px] font-medium text-ink-2 block">
+                              {source.kind === "web_list"
+                                ? locale === "en"
+                                  ? "Web Page List URL"
+                                  : "网页列表地址（HTML 页面）"
+                                : locale === "en"
+                                ? "RSS / Feed URL"
+                                : "信源地址（RSS / Atom / 网站）"}
+                              <input
+                                className={`${fieldClass} mt-1.5`}
+                                required
+                                type="url"
+                                maxLength={2048}
+                                value={editForm.url}
+                                onChange={(e) => {
+                                  setEditForm({ ...editForm, url: e.target.value });
+                                }}
+                              />
+                            </label>
+                          </div>
+
+                          {/* Optional CSS Selectors for Web List */}
+                          {source.kind === "web_list" && (
+                            <div className="sm:col-span-2 mt-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditShowAdvancedWeb(!editShowAdvancedWeb);
+                                }}
+                                className="text-[12px] font-medium text-accent hover:underline flex items-center gap-1"
+                              >
+                                <span>
+                                  {editShowAdvancedWeb
+                                    ? locale === "en"
+                                      ? "Hide Advanced CSS Selectors"
+                                      : "收起高级 CSS 选择器配置"
+                                    : locale === "en"
+                                    ? "⚙️ Advanced: Custom CSS Selectors (Optional)"
+                                    : "⚙️ 高级配置：自定义 CSS 选择器（可选，默认智能提取）"}
+                                </span>
+                              </button>
+
+                              {editShowAdvancedWeb && (
+                                <div className="mt-3 rounded-control border border-line bg-surface p-3.5 grid gap-3 sm:grid-cols-2">
+                                  <label className="text-[11.5px] text-ink-2">
+                                    {locale === "en" ? "Item Selector" : "文章列表项选择器（Item Selector）"}
+                                    <input
+                                      className={`${fieldClass} mt-1`}
+                                      value={editForm.itemSelector}
+                                      onChange={(e) => {
+                                        setEditForm({ ...editForm, itemSelector: e.target.value });
+                                      }}
+                                      placeholder="例如：article, .news-item, li.post"
+                                    />
+                                  </label>
+                                  <label className="text-[11.5px] text-ink-2">
+                                    {locale === "en" ? "Title Selector" : "文章标题选择器（Title Selector）"}
+                                    <input
+                                      className={`${fieldClass} mt-1`}
+                                      value={editForm.titleSelector}
+                                      onChange={(e) => {
+                                        setEditForm({ ...editForm, titleSelector: e.target.value });
+                                      }}
+                                      placeholder="例如：h2 a, .title a, a"
+                                    />
+                                  </label>
+                                </div>
+                              )}
+                            </div>
                           )}
 
-                          <div className="flex justify-end gap-3 pt-3 border-t border-line">
-                            <button
-                              type="button"
-                              disabled={editBusy}
-                              onClick={cancelEdit}
-                              className="rounded-full border border-line px-4 py-1.5 text-[12px] font-semibold text-ink-3 hover:border-accent transition-colors disabled:opacity-50"
-                            >
-                              {locale === "en" ? "Cancel" : "取消"}
-                            </button>
-                            <button
-                              type="submit"
-                              disabled={editBusy}
-                              className="rounded-full bg-accent px-5 py-1.5 text-[12px] font-semibold text-accent-contrast hover:bg-accent-ink transition-colors disabled:opacity-50"
-                            >
-                              {editBusy
-                                ? locale === "en"
-                                  ? "Saving..."
-                                  : "保存中…"
-                                : locale === "en"
-                                ? "Save Changes"
-                                : "保存修改"}
-                            </button>
-                          </div>
-                        </form>
-                      ) : (
-                        <>
-                          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-line/60">
+                          <label className="text-[12px] font-medium text-ink-2">
+                            {locale === "en" ? "Interval (Minutes)" : "抓取间隔（分钟）"}
+                            <input
+                              className={`${fieldClass} mt-1.5`}
+                              type="number"
+                              min={1}
+                              max={1440}
+                              required
+                              value={editForm.intervalMinutes}
+                              onChange={(e) => {
+                                setEditForm({ ...editForm, intervalMinutes: Number(e.target.value) });
+                              }}
+                            />
+                          </label>
+
+                          <label className="text-[12px] font-medium text-ink-2">
+                            {locale === "en" ? "Reuse Window (Minutes)" : "复用窗口（分钟）"}
+                            <input
+                              className={`${fieldClass} mt-1.5`}
+                              type="number"
+                              min={1}
+                              max={1440}
+                              required
+                              value={editForm.reuseWindowMinutes}
+                              onChange={(e) => {
+                                setEditForm({ ...editForm, reuseWindowMinutes: Number(e.target.value) });
+                              }}
+                            />
+                          </label>
+
+                          <label className="sm:col-span-2 flex items-center gap-2 text-[12px] text-ink-2">
+                            <input
+                              type="checkbox"
+                              className="accent-accent"
+                              checked={editForm.enabled}
+                              onChange={(e) => {
+                                setEditForm({ ...editForm, enabled: e.target.checked });
+                              }}
+                            />
+                            {locale === "en" ? "Enable this subscription" : "启用此订阅"}
+                          </label>
+                        </div>
+
+                        {editError && (
+                          <FormMessage error>{editError}</FormMessage>
+                        )}
+                        {editMessage && (
+                          <FormMessage>{editMessage}</FormMessage>
+                        )}
+
+                        <div className="flex justify-end gap-3 pt-3 border-t border-line/60">
+                          <button
+                            type="button"
+                            disabled={editBusy}
+                            onClick={cancelEdit}
+                            className="rounded-full border border-line px-4 py-1.5 text-[12px] font-semibold text-ink-3 hover:border-accent transition-colors disabled:opacity-50"
+                          >
+                            {locale === "en" ? "Cancel" : "取消"}
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={editBusy}
+                            className="rounded-full bg-accent px-5 py-1.5 text-[12px] font-semibold text-accent-contrast hover:bg-accent-ink transition-colors disabled:opacity-50"
+                          >
+                            {editBusy
+                              ? locale === "en"
+                                ? "Saving..."
+                                : "保存中…"
+                              : locale === "en"
+                              ? "Save Changes"
+                              : "保存修改"}
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <div className="mt-4 rounded-control border border-line/70 bg-bg-sunk/40 p-4 text-[12px] space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-line/60">
                             <div className="min-w-0 flex-1">
                               <span className="text-[11px] font-medium text-ink-4 block">
                                 {locale === "en" ? "Source URL" : "信源完整地址"}
@@ -1743,9 +1742,8 @@ export default function SourcesRoute() {
                               </button>
                             </div>
                           </div>
-                        </>
-                      )}
-                    </div>
+                        </div>
+                      )
                   )}
 
                   {result && (
