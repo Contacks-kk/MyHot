@@ -90,6 +90,62 @@ func TestPersonalHotWindowOrderingAndHistoryIntegration(t *testing.T) {
 	if len(response.Items) != 0 {
 		t.Fatal("feed crossed user boundary")
 	}
+
+	// A historical date includes both edges of its Beijing day, without the rolling top-ten cap.
+	dayStart := time.Date(2000, 1, 1, 16, 0, 0, 0, time.UTC)
+	for i := -1; i <= 57; i++ {
+		id := fmt.Sprintf("%s_day_%02d", prefix, i)
+		timestamp := dayStart.Add(time.Duration(i) * time.Minute)
+		if i == 56 {
+			timestamp = dayStart.Add(24*time.Hour - time.Second)
+		}
+		if i == 57 {
+			timestamp = dayStart.Add(24 * time.Hour)
+		}
+		if _, err := pool.Exec(ctx, "INSERT INTO articles(id,source_id,identity_key,url,title,published_at,discovered_at,timeline_at) VALUES($1,$2,$1,$3,$1,$4,$4,$4)", id, source, "https://fixture.example.invalid/"+id, timestamp); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, "INSERT INTO user_article_results(user_id,article_id,input_revision,model,relevance_score,title,summary) VALUES($1,$2,1,'fixture',90,$2,'private-summary')", users[0], id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, "UPDATE articles SET published_at=NULL WHERE id=$1", prefix+"_day_00"); err != nil {
+		t.Fatal(err)
+	}
+	var dayResponse struct {
+		Items   []contentCard
+		HasMore bool
+	}
+	seen := map[string]bool{}
+	for page := 1; page <= 2; page++ {
+		result = clients[0].request(t, "GET", fmt.Sprintf("/api/me/hot?range=date&date=2000-01-02&page=%d", page), nil, 200)
+		if err := json.Unmarshal(result.Body.Bytes(), &dayResponse); err != nil {
+			t.Fatal(err)
+		}
+		want := 50
+		if page == 2 {
+			want = 7
+		}
+		if len(dayResponse.Items) != want || dayResponse.HasMore != (page == 1) {
+			t.Fatalf("historical page %d: got %d articles, hasMore=%v", page, len(dayResponse.Items), dayResponse.HasMore)
+		}
+		for _, item := range dayResponse.Items {
+			if seen[item.ArticleID] || item.ArticleID == prefix+"_day_-1" || item.ArticleID == prefix+"_day_57" {
+				t.Fatalf("duplicate or out-of-day result: %s", item.ArticleID)
+			}
+			seen[item.ArticleID] = true
+		}
+	}
+	if !seen[prefix+"_day_00"] || !seen[prefix+"_day_56"] {
+		t.Fatal("day start, discovered-time fallback, or day end was lost")
+	}
+	result = clients[1].request(t, "GET", "/api/me/hot?range=date&date=2000-01-02", nil, 200)
+	if err := json.Unmarshal(result.Body.Bytes(), &dayResponse); err != nil || len(dayResponse.Items) != 0 {
+		t.Fatal("historical hotspots crossed user boundary")
+	}
+	for _, path := range []string{"/api/me/hot?range=bad", "/api/me/hot?range=date&date=2000-02-30", "/api/me/hot?range=date&date=2999-01-01", "/api/me/hot?page=-1"} {
+		clients[0].request(t, "GET", path, nil, 400)
+	}
 	if _, err := pool.Exec(ctx, "INSERT INTO user_daily_reports(user_id,report_date,model,title,summary) VALUES($1,current_date,'fixture','user-one-only','private-daily')", users[0]); err != nil {
 		t.Fatal(err)
 	}

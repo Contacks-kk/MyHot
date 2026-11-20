@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import * as cheerio from "cheerio";
 
 let web: ChildProcess;
 let origin: string;
@@ -17,6 +18,7 @@ const cookies: Array<{ path: string; cookie: string | undefined }> = [];
 const adminApiPaths: string[] = [];
 const goUserPaths: Array<{ path: string; cookie: string | undefined }> = [];
 const forwarded: Array<{ host: string | string[] | undefined; ip: string | string[] | undefined }> = [];
+const hotQueries: string[] = [];
 const goApi = createServer((req,res)=>{
   const pathname = new URL(req.url!,"http://api.local").pathname;
   cookies.push({ path: pathname, cookie: req.headers.cookie });
@@ -68,6 +70,8 @@ const account = createServer((req,res)=>{
   if(pathname==="/api/me/model")return res.end(JSON.stringify({configured:true,baseUrl:"https://model.example.invalid/v1",model:"test",apiKeySet:true}));
   if(pathname==="/api/me/interests")return res.end(JSON.stringify({keywords:["AI"],entityIds:[]}));
   if(pathname==="/api/me/daily")return res.end(JSON.stringify({reports:[]}));
+  if(pathname==="/api/me/feed/funnel")return res.end(JSON.stringify({totalScanned:3,passedCount:2,filteredCount:1,filteredItems:[]}));
+  if(pathname==="/api/me/hot")hotQueries.push(req.url!);
   if(["/api/me/feed","/api/me/hot"].includes(pathname))return res.end(JSON.stringify({items:[{articleId:user,score:90,title:`${user} private title`,summary:`${user} private summary`,source:"Local",url:"https://example.invalid/article",createdAt:"2026-10-04T00:00:00Z"}]}));
   res.statusCode=404;res.end("{}");
 });
@@ -100,8 +104,33 @@ test("personal and API-backed pages require a verified user session before rende
   for(const path of ["/hot","/daily","/model","/interests","/history","/all","/items/example","/agent","/weekly","/monthly","/hot.data?_routes=root"]){const response=await fetch(origin+path,{redirect:"manual"});assert.equal(response.status,302,path);assert.match(response.headers.get("Location")!,/^\/login\?return=/);assert.equal(response.headers.get("Cache-Control"),"private, no-store");}
 });
 test("two user workspaces and their single-fetch identity are private and never mixed",async()=>{
-  for(const user of ["alice","bob"]){for(const path of ["/","/_.data?_routes=root","/hot"]){const response=await fetch(origin+path,{headers:{cookie:`myhot_session=${user}`}});assert.equal(response.status,200,logs);privateResponse(response);const body=await response.text();assert.match(body,new RegExp(user));assert.doesNotMatch(body,new RegExp(user==="alice"?"bob@example|bob private":"alice@example|alice private"));}}
+  for(const user of ["alice","bob"]){for(const path of ["/","/hot.data?_routes=root","/hot"]){const response=await fetch(origin+path,{headers:{cookie:`myhot_session=${user}`}});assert.equal(response.status,200,logs);privateResponse(response);const body=await response.text();assert.match(body,new RegExp(user));assert.doesNotMatch(body,new RegExp(user==="alice"?"bob@example|bob private":"alice@example|alice private"));}}
   const loggedOut=await fetch(origin+"/");assert.doesNotMatch(await loggedOut.text(),/alice private|bob private/);
+});
+
+test("unified hotspots carry today's funnel, date controls, and the requested desktop and mobile navigation", async () => {
+  const home = await fetch(origin + "/", { headers: alice, redirect: "manual" });
+  assert.equal(home.status, 302);
+  assert.equal(home.headers.get("Location"), "/hot");
+  const response = await fetch(origin + "/hot?range=date&date=2000-01-02&page=2", { headers: alice });
+  assert.equal(response.status, 200, logs);
+  privateResponse(response);
+  const $ = cheerio.load(await response.text());
+  assert.equal($("h1").text(), "个人热点榜单");
+  assert.match($("main").text(), /今日信息流与过滤动态/);
+  assert.match($("main").text(), /2000-01-02 · 北京时间全天/);
+  assert.deepEqual($("aside nav a").slice(0, 5).map((_, element) => $(element).text().trim()).get(), ["个人热点榜单", "关注项", "我的日报", "模型配置", "我的信源"]);
+  assert.deepEqual($('nav[aria-label="底部导航"] a').map((_, element) => $(element).text().trim()).get(), ["个人热点榜单", "关注项", "我的日报", "我的账号"]);
+  assert.deepEqual($('nav[aria-label="热点时间范围"]').children().map((_, element) => $(element).text().trim()).get(), ["今日", "48小时", "其他日期"]);
+  assert.equal($('input[type="date"]').attr("value"), "2000-01-02");
+  assert.ok(hotQueries.includes("/api/me/hot?range=date&page=2&date=2000-01-02"));
+  assert.equal($("aside").text().includes("我的热点"), false);
+  for (const range of ["today", "48h"]) {
+    const selected = await fetch(origin + `/hot?range=${range}`, { headers: alice });
+    assert.equal(selected.status, 200);
+    await selected.text();
+    assert.equal(hotQueries.at(-1), `/api/me/hot?range=${range}&page=1`);
+  }
 });
 test("report archive SSR forwards the user's own Cookie to Go and remains private",async()=>{
   const response=await fetch(origin+"/daily/archive",{headers:alice});assert.equal(response.status,200,logs);privateResponse(response);await response.text();assert.ok(goUserPaths.some(row=>row.path==="/api/site/reports/daily"&&row.cookie===alice.cookie));assert.ok(!cookies.some(row=>row.path==="/api/site/reports/daily"));
