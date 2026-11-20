@@ -195,7 +195,14 @@ const subscriptionSelect = `SELECT sub.id,sub.source_id,src.kind,sub.name,sub.na
 	     ELSE greatest(src.interval_minutes,src.reuse_window_minutes) END AS effective_interval_minutes,
 	CASE WHEN src.kind IN ('rss','web_list') THEN least(src.reuse_window_minutes,nullif(?,0))
 	     ELSE src.reuse_window_minutes END AS effective_reuse_window_minutes,
-	src.last_ok_at AS last_checked_at,src.next_fetch_at,src.health,src.tags
+	src.last_ok_at AS last_checked_at,src.next_fetch_at,src.health,
+	ARRAY(
+		SELECT l.name FROM article_discoveries d
+		JOIN article_interest_labels al ON al.article_id=d.article_id
+		JOIN interest_labels l ON l.id=al.label_id AND l.status='active'
+		WHERE d.source_id=src.id AND d.discovered_at BETWEEN now()-interval '7 days' AND now()
+		GROUP BY l.id ORDER BY count(DISTINCT d.article_id) DESC,l.name,l.id LIMIT 4
+	) AS tags
 	FROM user_source_subscriptions sub JOIN sources src ON src.id=sub.source_id`
 
 /** List retrieves all source subscriptions for a given user. */

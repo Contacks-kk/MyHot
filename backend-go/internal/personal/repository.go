@@ -38,6 +38,7 @@ type ModelConfig struct {
 type Interests struct {
 	Keywords  []string
 	EntityIDs []string
+	LabelIDs  []string
 	Version   int `gorm:"column:preference_version"`
 }
 
@@ -88,13 +89,60 @@ func (r *Repository) SaveModelConfig(ctx context.Context, userID int64, baseURL,
 }
 
 func (r *Repository) Interests(ctx context.Context, userID int64) (Interests, error) {
-	var value model.UserInterest
-	err := scanOne(r.db.WithContext(ctx).Model(&model.UserInterest{}).Select("keywords", "entity_ids", "preference_version").Where("user_id = ?", userID), &value)
-	return Interests{Keywords: value.Keywords, EntityIDs: value.EntityIDs, Version: value.PreferenceVersion}, err
+	var value struct {
+		Keywords  model.TextArray
+		EntityIDs model.TextArray
+		LabelIDs  model.TextArray
+		Version   int
+	}
+	err := scanOne(r.db.WithContext(ctx).Raw(`SELECT u.keywords,u.preference_version AS version,
+	ARRAY(SELECT coalesce(l.merged_into,f.id)
+		FROM unnest(u.entity_ids) WITH ORDINALITY AS f(id,ord)
+		LEFT JOIN interest_labels l ON l.id=f.id
+		LEFT JOIN interest_labels target ON target.id=coalesce(l.merged_into,l.id)
+		WHERE target.id IS NULL OR target.status IN ('active','dormant')
+		GROUP BY coalesce(l.merged_into,f.id) ORDER BY min(f.ord)) AS entity_ids,
+	ARRAY(SELECT DISTINCT coalesce(l.merged_into,l.id)
+		FROM unnest(u.label_ids) AS f(id) JOIN interest_labels l ON l.id=f.id
+		JOIN interest_labels target ON target.id=coalesce(l.merged_into,l.id)
+		WHERE target.status IN ('active','dormant') ORDER BY 1) AS label_ids
+	FROM user_interests u WHERE u.user_id=?`, userID), &value)
+	if err != nil {
+		return Interests{}, err
+	}
+	return Interests{
+		Keywords:  value.Keywords,
+		EntityIDs: value.EntityIDs,
+		LabelIDs:  append([]string{}, value.LabelIDs...),
+		Version:   value.Version,
+	}, nil
 }
 
 func (r *Repository) SaveInterests(ctx context.Context, userID int64, keywords, entityIDs []string) error {
 	return r.db.WithContext(ctx).Exec(`INSERT INTO user_interests(user_id,keywords,entity_ids) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET keywords=excluded.keywords,entity_ids=excluded.entity_ids,preference_version=user_interests.preference_version+1,updated_at=now()`, userID, model.TextArray(keywords), model.TextArray(entityIDs)).Error
+}
+
+/** SaveInterestsWithLabels replaces a user's label choices after validating stable IDs. */
+func (r *Repository) SaveInterestsWithLabels(ctx context.Context, userID int64, keywords, entities, labels []string) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext('interest-label-catalog'))").Error; err != nil {
+			return err
+		}
+		var valid []string
+		if err := tx.Raw(`SELECT DISTINCT l.id FROM interest_labels l WHERE l.id=ANY(?::text[])
+    AND (l.status='active' OR (l.status='dormant' AND EXISTS(
+      SELECT 1 FROM user_interests u JOIN interest_labels prev ON prev.id=ANY(u.label_ids)
+      WHERE u.user_id=? AND coalesce(prev.merged_into,prev.id)=l.id)))`, model.TextArray(labels), userID).Scan(&valid).Error; err != nil {
+			return err
+		}
+		if len(valid) != len(labels) {
+			return &InputError{Message: "只能选择可用的稳定标签"}
+		}
+		return tx.Exec(`INSERT INTO user_interests(user_id,keywords,entity_ids,label_ids) VALUES(?,?,?,?)
+    ON CONFLICT(user_id) DO UPDATE SET keywords=excluded.keywords,entity_ids=excluded.entity_ids,
+    label_ids=excluded.label_ids,preference_version=user_interests.preference_version+1,updated_at=now()`,
+			userID, model.TextArray(keywords), model.TextArray(entities), model.TextArray(labels)).Error
+	})
 }
 
 func (r *Repository) StartReceipt(ctx context.Context, userID int64, purpose, articleID, modelName, logicalKey, requestHash string) (int64, error) {

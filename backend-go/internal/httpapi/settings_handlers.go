@@ -120,18 +120,19 @@ func (s *Server) getInterests(w http.ResponseWriter, r *http.Request, u userCont
 		writeError(w, http.StatusServiceUnavailable, "关注项暂不可用")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"keywords": value.Keywords, "entityIds": value.EntityIDs, "version": value.Version})
+	writeJSON(w, http.StatusOK, map[string]any{"keywords": value.Keywords, "entityIds": value.EntityIDs, "labelIds": value.LabelIDs, "version": value.Version})
 }
 
 func (s *Server) putInterests(w http.ResponseWriter, r *http.Request, u userContext) {
 	var input struct {
 		Keywords  []string `json:"keywords"`
 		EntityIDs []string `json:"entityIds"`
+		LabelIDs  []string `json:"labelIds"`
 	}
 	if !readJSON(w, r, &input) {
 		return
 	}
-	value, err := s.Personal.PutInterests(r.Context(), u.ID, personal.Interests{Keywords: input.Keywords, EntityIDs: input.EntityIDs})
+	value, err := s.Personal.PutInterests(r.Context(), u.ID, personal.Interests{Keywords: input.Keywords, EntityIDs: input.EntityIDs, LabelIDs: input.LabelIDs})
 	var invalid *personal.InputError
 	if errors.As(err, &invalid) {
 		writeError(w, http.StatusBadRequest, invalid.Message)
@@ -141,7 +142,7 @@ func (s *Server) putInterests(w http.ResponseWriter, r *http.Request, u userCont
 		writeError(w, http.StatusServiceUnavailable, "关注项暂不可保存")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"keywords": value.Keywords, "entityIds": value.EntityIDs})
+	writeJSON(w, http.StatusOK, map[string]any{"keywords": value.Keywords, "entityIds": value.EntityIDs, "labelIds": value.LabelIDs})
 }
 
 func (s *Server) getEntities(w http.ResponseWriter, _ *http.Request, _ userContext) {

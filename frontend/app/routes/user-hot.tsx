@@ -54,7 +54,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       return null;
     }),
     userApiGet<{ configured: boolean }>(request, "/api/me/model"),
-    userApiGet<{ keywords: string[]; entityIds: string[] }>(request, "/api/me/interests"),
+    userApiGet<{ keywords: string[]; entityIds: string[]; labelIds?: string[] }>(request, "/api/me/interests"),
   ]);
   return {
     ...hot,
@@ -63,7 +63,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     date,
     page,
     today,
-    configured: model.configured && interests.keywords.length + interests.entityIds.length > 0,
+    configured: model.configured && interests.keywords.length + interests.entityIds.length + (interests.labelIds?.length ?? 0) > 0,
   };
 }
 

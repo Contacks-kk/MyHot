@@ -17,6 +17,7 @@ import (
 	"aihot/backend-go/internal/modelcall"
 	"aihot/backend-go/internal/modelconfig"
 	"aihot/backend-go/internal/provider"
+	"aihot/backend-go/internal/tagging"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -46,6 +47,7 @@ type Service struct {
 	chat         provider.ChatFunc
 	entities     map[string]interests.Entity
 	SharedModels *modelcall.Client
+	Labels       *tagging.Service
 }
 
 func NewService(repository *Repository, cfg config.Config, chat provider.ChatFunc) *Service {
@@ -98,18 +100,23 @@ func (s *Service) ScanWithTriage(ctx context.Context, enqueueArticle ArticleEnqu
 		return err
 	}
 
+	var labels tagging.MatchRules
+	if s.Labels != nil {
+		if _, err := s.Labels.Prepare(ctx); err != nil {
+			return err
+		}
+		labels, err = s.Labels.LoadMatchRules(ctx)
+		if err != nil {
+			return err
+		}
+	}
 	return s.repository.WithPersonalScanLockTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		byUser := make(map[int64]*userScanBucket)
+		var indexedIDs []string
 		appendCandidate := func(row scanUserArticle) {
-			var hits []string
-			if row.FilterMode == "all" {
-				hits, _ = s.matchesUserInterests(row.Title, row.Excerpt, row.Body, row.Keywords, row.EntityIDs)
-			} else {
-				var ok bool
-				hits, ok = s.matchesUserInterests(row.Title, row.Excerpt, row.Body, row.Keywords, row.EntityIDs)
-				if !ok {
-					return
-				}
+			hits, ok := s.matchesWithLabels(labels, row.Title, row.Excerpt, row.Body, row.Keywords, row.EntityIDs, row.LabelIDs)
+			if !ok && row.FilterMode != "all" {
+				return
 			}
 			bucket := byUser[row.UserID]
 			if bucket == nil {
@@ -148,6 +155,7 @@ func (s *Service) ScanWithTriage(ctx context.Context, enqueueArticle ArticleEnqu
 			return err
 		}
 		for _, article := range articles {
+			indexedIDs = append(indexedIDs, article.ID)
 			candidates, err := s.repository.IncrementalCandidatesTx(ctx, tx, article)
 			if err != nil {
 				return err
@@ -172,9 +180,15 @@ func (s *Service) ScanWithTriage(ctx context.Context, enqueueArticle ArticleEnqu
 				return err
 			}
 			for _, candidate := range sliceItems {
+				indexedIDs = append(indexedIDs, candidate.ArticleID)
 				appendCandidate(candidate)
 			}
 			clearedSubIDs = append(clearedSubIDs, sub.SubscriptionID)
+		}
+		if s.Labels != nil {
+			if err := s.Labels.IndexSelected(ctx, labels, indexedIDs); err != nil {
+				return err
+			}
 		}
 		if err := s.repository.ClearColdStartPendingTx(ctx, tx, clearedSubIDs); err != nil {
 			return err
@@ -350,7 +364,14 @@ func (s *Service) ProcessArticle(ctx context.Context, args ArticleArgs, jobID in
 		return err
 	}
 
-	hits, matched := s.matchesUserInterests(input.Title, input.Excerpt, input.Body, input.Keywords, input.EntityIDs)
+	var labels tagging.MatchRules
+	if s.Labels != nil && len(input.LabelIDs)+len(input.EntityIDs) > 0 {
+		labels, err = s.Labels.LoadMatchRules(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	hits, matched := s.matchesWithLabels(labels, input.Title, input.Excerpt, input.Body, input.Keywords, input.EntityIDs, input.LabelIDs)
 	if !matched && args.FilterMode != "all" {
 		return nil
 	}
@@ -702,6 +723,17 @@ func (s *Service) matchesUserInterests(title, excerpt, body string, keywords, en
 	combinedBody := strings.TrimSpace(excerpt + "\n" + body)
 	hits := interests.Match(title, combinedBody, keywords, entityIDs, s.entities)
 	return hits, len(hits) > 0
+}
+
+/** matchesWithLabels combines keyword, entity and stable label matches with OR semantics. */
+func (s *Service) matchesWithLabels(labels tagging.MatchRules, title, excerpt, body string, keywords, entities, labelIDs []string) ([]string, bool) {
+	resolved := labels.ResolveEntities(entities)
+	hits, matched := s.matchesUserInterests(title, excerpt, body, keywords, resolved)
+	labelHits, hasLabels := labels.Match(labelIDs, title, excerpt)
+	if hasLabels || len(resolved) != len(entities) {
+		return append(hits, labelHits...), len(hits) > 0 || len(labelHits) > 0
+	}
+	return hits, matched
 }
 
 func hasConfiguredInterests(keywords, entityIDs []string) bool {

@@ -199,7 +199,7 @@ func (s *Service) ModelTest(ctx context.Context, id, userID int64, kind string) 
 func (s *Service) GetInterests(ctx context.Context, userID int64) (Interests, error) {
 	value, err := s.repository.Interests(ctx, userID)
 	if errors.Is(err, ErrNotFound) {
-		return Interests{Keywords: []string{}, EntityIDs: []string{}, Version: 1}, nil
+		return Interests{Keywords: []string{}, EntityIDs: []string{}, LabelIDs: []string{}, Version: 1}, nil
 	}
 	if err != nil {
 		return Interests{}, err
@@ -214,7 +214,7 @@ func (s *Service) GetInterests(ctx context.Context, userID int64) (Interests, er
 }
 
 func (s *Service) PutInterests(ctx context.Context, userID int64, input Interests) (Interests, error) {
-	if len(input.Keywords) > 30 || len(input.EntityIDs) > 100 {
+	if len(input.Keywords) > 30 || len(input.EntityIDs) > 100 || len(input.LabelIDs) > 100 {
 		return Interests{}, &InputError{Message: "关键词或实体数量超过上限"}
 	}
 	seen := map[string]bool{}
@@ -245,10 +245,24 @@ func (s *Service) PutInterests(ctx context.Context, userID int64, input Interest
 			seen[id] = true
 		}
 	}
-	if err := s.repository.SaveInterests(ctx, userID, keywords, ids); err != nil {
-		return Interests{}, ErrUnavailable
+	if input.LabelIDs == nil {
+		if err := s.repository.SaveInterests(ctx, userID, keywords, ids); err != nil {
+			return Interests{}, err
+		}
+	} else {
+		labels := make([]string, 0, len(input.LabelIDs))
+		seen := map[string]bool{}
+		for _, id := range input.LabelIDs {
+			if !seen[id] {
+				seen[id] = true
+				labels = append(labels, id)
+			}
+		}
+		if err := s.repository.SaveInterestsWithLabels(ctx, userID, keywords, ids, labels); err != nil {
+			return Interests{}, err
+		}
 	}
-	return Interests{Keywords: keywords, EntityIDs: ids}, nil
+	return s.GetInterests(ctx, userID)
 }
 
 func (s *Service) Entities() map[string]interests.Entity { return s.entities }

@@ -41,6 +41,7 @@ import (
 	"aihot/backend-go/internal/personal"
 	"aihot/backend-go/internal/publiccontent"
 	"aihot/backend-go/internal/receiptrecovery"
+	"aihot/backend-go/internal/tagging"
 	"aihot/backend-go/internal/topics"
 	"aihot/backend-go/internal/usersources"
 )
@@ -87,6 +88,7 @@ type Server struct {
 	Feeds                 *feeds.Service
 	Discovery             *discovery.Service
 	Personal              *personal.Service
+	InterestLabels        *tagging.Service
 	PublicContent         *publiccontent.Service
 	MCPService            *mcpapi.Service
 	MCPHandler            http.Handler
@@ -275,6 +277,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/me/interests", s.withUser(s.getInterests))
 	mux.HandleFunc("PUT /api/me/interests", s.withUser(s.putInterests))
 	mux.HandleFunc("GET /api/me/entities", s.withUser(s.getEntities))
+	mux.HandleFunc("GET /api/me/labels", s.withUser(s.getInterestLabels))
+	mux.HandleFunc("GET /api/admin/interest-labels", s.adminInterestLabels)
+	mux.HandleFunc("GET /api/admin/interest-labels/{id}/articles", s.adminInterestLabelArticles)
+	mux.HandleFunc("POST /api/admin/interest-labels/{id}", s.adminCurateInterestLabel)
 	mux.HandleFunc("GET /api/me/catalog", s.userCatalog)
 	mux.HandleFunc("GET /api/me/feed", s.withUser(s.feed))
 	mux.HandleFunc("GET /api/me/feed/funnel", s.withUser(s.funnel))

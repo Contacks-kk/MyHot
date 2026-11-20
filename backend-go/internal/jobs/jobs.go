@@ -832,14 +832,13 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 		sourceWorker = &SourceWorker{
 			Service: collectorService,
 			Naming:  sourceScanWorker.Naming,
-			DB:      orm,
 			Enabled: true,
 		}
 		river.AddWorker(workers, sourceWorker)
 	}
 
-	taggingEngine := tagging.NewEngine(entities, topicDefinitions)
-	taggingService := tagging.NewService(orm, taggingEngine, chat, "")
+	taggingService := tagging.NewService(tagging.NewRepository(orm), tagging.Builtins(entities, topicDefinitions), sharedModelClient)
+	service.Labels = taggingService
 	river.AddWorker(workers, &SourceTaggingWorker{Service: taggingService})
 	if xShardWorker != nil {
 		river.AddWorker(workers, xShardWorker)
@@ -882,6 +881,9 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 
 	// 每分钟创建SourceScanArgs，配置RunInStart
 	periodicJobs := []*river.PeriodicJob{
+		river.NewPeriodicJob(river.PeriodicInterval(5*time.Minute), func() (river.JobArgs, *river.InsertOpts) {
+			return SourceTaggingArgs{}, &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByPeriod: 5 * time.Minute}}
+		}, &river.PeriodicJobOpts{ID: "myhot-interest-labels", RunOnStart: true}),
 		river.NewPeriodicJob(river.PeriodicInterval(time.Minute), func() (river.JobArgs, *river.InsertOpts) {
 			return SourceScanArgs{}, &river.InsertOpts{Priority: 1, UniqueOpts: river.UniqueOpts{ByPeriod: time.Minute}}
 		}, &river.PeriodicJobOpts{ID: "myhot-source-pool-scan", RunOnStart: true}),

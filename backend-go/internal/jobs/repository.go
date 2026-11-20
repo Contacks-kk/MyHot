@@ -53,6 +53,7 @@ type scanUserArticle struct {
 	PreferenceVersion int
 	Keywords          []string
 	EntityIDs         []string
+	LabelIDs          []string
 	ColdStart         bool
 	FilterMode        string
 }
@@ -65,6 +66,7 @@ type coldStartSubscription struct {
 	PreferenceVersion int
 	Keywords          []string
 	EntityIDs         []string
+	LabelIDs          []string
 	FilterMode        string
 }
 
@@ -90,6 +92,7 @@ type articleInput struct {
 	ModelVersion      int             `gorm:"column:config_version"`
 	PreferenceVersion int             `gorm:"column:preference_version"`
 	Keywords          model.TextArray `gorm:"column:keywords;type:text[]"`
+	LabelIDs          model.TextArray `gorm:"column:label_ids;type:text[]"`
 	EntityIDs         model.TextArray `gorm:"column:entity_ids;type:text[]"`
 }
 
@@ -192,6 +195,7 @@ func (r *Repository) IncrementalCandidatesTx(ctx context.Context, tx pgx.Tx, art
 		       coalesce(ui.preference_version, 1) AS preference_version,
 		       coalesce(ui.keywords, '{}'::text[]) AS keywords,
 		       coalesce(ui.entity_ids, '{}'::text[]) AS entity_ids,
+ coalesce(ui.label_ids, '{}'::text[]) AS label_ids,
 		       sub.filter_mode
 		FROM user_accounts u
 		JOIN user_model_configs m ON m.user_id = u.id
@@ -233,7 +237,7 @@ func (r *Repository) IncrementalCandidatesTx(ctx context.Context, tx pgx.Tx, art
 			Body:      article.Body,
 			Excerpt:   article.Excerpt,
 		}
-		if err := rows.Scan(&candidate.SourceID, &candidate.UserID, &candidate.ModelVersion, &candidate.PreferenceVersion, &candidate.Keywords, &candidate.EntityIDs, &candidate.FilterMode); err != nil {
+		if err := rows.Scan(&candidate.SourceID, &candidate.UserID, &candidate.ModelVersion, &candidate.PreferenceVersion, &candidate.Keywords, &candidate.EntityIDs, &candidate.LabelIDs, &candidate.FilterMode); err != nil {
 			return nil, err
 		}
 		out = append(out, candidate)
@@ -260,6 +264,7 @@ func (r *Repository) ColdStartSubscriptionsTx(ctx context.Context, tx pgx.Tx) ([
 		       coalesce(ui.preference_version, 1) AS preference_version,
 		       coalesce(ui.keywords, '{}'::text[]) AS keywords,
 		       coalesce(ui.entity_ids, '{}'::text[]) AS entity_ids,
+ coalesce(ui.label_ids, '{}'::text[]) AS label_ids,
 		       sub.filter_mode
 		FROM user_source_subscriptions sub
 		JOIN sources src ON src.id = sub.source_id
@@ -280,7 +285,7 @@ func (r *Repository) ColdStartSubscriptionsTx(ctx context.Context, tx pgx.Tx) ([
 	var subs []coldStartSubscription
 	for rows.Next() {
 		var sub coldStartSubscription
-		if err := rows.Scan(&sub.SubscriptionID, &sub.UserID, &sub.SourceID, &sub.ModelVersion, &sub.PreferenceVersion, &sub.Keywords, &sub.EntityIDs, &sub.FilterMode); err != nil {
+		if err := rows.Scan(&sub.SubscriptionID, &sub.UserID, &sub.SourceID, &sub.ModelVersion, &sub.PreferenceVersion, &sub.Keywords, &sub.EntityIDs, &sub.LabelIDs, &sub.FilterMode); err != nil {
 			return nil, err
 		}
 		subs = append(subs, sub)
@@ -330,6 +335,7 @@ func (r *Repository) ColdStartArticlesTx(ctx context.Context, tx pgx.Tx, sub col
 			PreferenceVersion: sub.PreferenceVersion,
 			Keywords:          sub.Keywords,
 			EntityIDs:         sub.EntityIDs,
+			LabelIDs:          sub.LabelIDs,
 			ColdStart:         true,
 			FilterMode:        sub.FilterMode,
 		}
@@ -437,7 +443,8 @@ func (r *Repository) ArticleInput(
 			m.config_version,
 			coalesce(ui.preference_version, 1) AS preference_version,
 			coalesce(ui.keywords, '{}'::text[]) AS keywords,
-			coalesce(ui.entity_ids, '{}'::text[]) AS entity_ids
+			coalesce(ui.entity_ids, '{}'::text[]) AS entity_ids,
+			coalesce(ui.label_ids, '{}'::text[]) AS label_ids
 		FROM user_accounts u
 		JOIN user_model_configs m
 			ON m.user_id = u.id

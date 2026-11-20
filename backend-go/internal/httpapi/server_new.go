@@ -36,6 +36,7 @@ import (
 	"aihot/backend-go/internal/publiccontent"
 	"aihot/backend-go/internal/receiptrecovery"
 	"aihot/backend-go/internal/siteinfo"
+	"aihot/backend-go/internal/tagging"
 	"aihot/backend-go/internal/topics"
 	"aihot/backend-go/internal/usersources"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -201,6 +202,7 @@ func New(cfg config.Config, db *pgxpool.Pool, orm *gorm.DB, entities map[string]
 		return jobs.InsertFeedbackForward(ctx, db, id)
 	})
 	server.Personal = personal.NewService(personal.NewRepository(orm), cfg, entities)
+	server.InterestLabels = tagging.NewService(tagging.NewRepository(orm), nil, nil)
 	server.EnqueueManualDaily = func(ctx context.Context, userID int64) (int64, error) {
 		return jobs.InsertManualDaily(ctx, db, userID)
 	}

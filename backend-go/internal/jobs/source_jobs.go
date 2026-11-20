@@ -72,7 +72,6 @@ type SourceWorker struct {
 	Service *collector.Service
 	Naming  *sourcenaming.Service
 	Client  *river.Client[pgx.Tx]
-	DB      *gorm.DB
 	Enabled bool
 }
 type XShardWorker struct {
@@ -264,32 +263,7 @@ func (w *SourceWorker) Work(ctx context.Context, job *river.Job[SourceArgs]) err
 			log.Printf("source naming deferred to scan source_id=%q: %v", job.Args.SourceID, enqueueErr)
 		}
 	}
-	err = finishSourceWork(err)
-
-	// 抓取成功后检查是否需要自动打标
-	if err == nil && w.Client != nil && w.DB != nil {
-		var needTagging bool
-		checkSQL := `SELECT EXISTS(SELECT 1 FROM sources WHERE id = ? AND (cardinality(tags) = 0 OR tags IS NULL))`
-		if scanErr := w.DB.WithContext(ctx).Raw(checkSQL, job.Args.SourceID).Scan(&needTagging).Error; scanErr == nil && needTagging {
-			_, _ = w.Client.Insert(ctx, SourceTaggingArgs{
-				SourceID: job.Args.SourceID,
-			}, &river.InsertOpts{
-				Priority: 3,
-				UniqueOpts: river.UniqueOpts{
-					ByArgs: true,
-					ByState: []rivertype.JobState{
-						rivertype.JobStateAvailable,
-						rivertype.JobStatePending,
-						rivertype.JobStateRunning,
-						rivertype.JobStateRetryable,
-						rivertype.JobStateScheduled,
-					},
-				},
-			})
-		}
-	}
-
-	return err
+	return finishSourceWork(err)
 }
 
 func (w *XShardWorker) Work(ctx context.Context, job *river.Job[XShardArgs]) error {
