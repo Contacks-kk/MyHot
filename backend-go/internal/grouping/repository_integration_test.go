@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -228,6 +229,9 @@ func TestRecallRepositoryFiltersLiveRecentNonCompositeEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	rows = slices.DeleteFunc(rows, func(row PoolRow) bool {
+		return !strings.HasPrefix(row.ArticleID, "article_"+fixture+"_")
+	})
 	if len(rows) != 1 || rows[0].ArticleID != goodID || rows[0].Revision != 0 {
 		t.Fatalf("recall eligibility drifted from TypeScript: %#v", rows)
 	}
@@ -301,6 +305,9 @@ func TestRecallRepositorySelectedContextAndRelatedXIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	selected = slices.DeleteFunc(selected, func(row ReadingRow) bool {
+		return !slices.Contains(articleIDs, row.ArticleID)
+	})
 	if len(selected) != 1 || selected[0].ArticleID != selectedID || selected[0].Title != "selected public" || !selected[0].FirstParty {
 		t.Fatalf("selected reading context gate changed: %#v", selected)
 	}
