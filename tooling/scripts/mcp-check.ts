@@ -1,7 +1,8 @@
 // Verifies the public MCP contract with the official SDK client: server identity, the exact tool set,
 // representative read calls, domain errors and schema validation. It is safe against an empty database;
 // --full also has every tool answer once in full, which needs a populated site (reports and a hot story).
-// node tooling/scripts/mcp-check.ts [url] [--full]
+// node tooling/scripts/mcp-check.ts [url] [--full] [--cookie-file path]
+import { readFileSync } from "node:fs";
 import { Client } from "@modelcontextprotocol/client";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { PUBLIC_INTERFACE_VERSION } from "@aihot/contracts/http-policy";
@@ -11,7 +12,16 @@ import { SERVER_MODULES } from "@aihot/site/modules/server";
 
 const args = process.argv.slice(2);
 const full = args.includes("--full");
-const url = new URL(args.find((a) => !a.startsWith("--")) ?? "http://127.0.0.1:3001/api/mcp");
+const cookieAt = args.indexOf("--cookie-file");
+const cookiePath = cookieAt < 0 ? undefined : args[cookieAt + 1];
+if (cookieAt >= 0 && (!cookiePath || cookiePath.startsWith("--"))) {
+  throw new Error("--cookie-file requires a path");
+}
+const cookie = cookiePath ? readFileSync(cookiePath, "utf8").trim() : "";
+if (cookiePath && (!/(?:^|;)\s*myhot_session=[^;\s]+/.test(cookie) || /[\r\n]/.test(cookie))) {
+  throw new Error("the Cookie file must contain one line with myhot_session");
+}
+const url = new URL(args.find((arg, index) => !arg.startsWith("--") && (cookieAt < 0 || index !== cookieAt + 1)) ?? "http://127.0.0.1:3001/api/mcp");
 /** The site's modules' tools, after the engine's. */
 const moduleTools = SERVER_MODULES.flatMap((m) => m.agent?.abilities ?? []).map((a) => mcpToolName(a.mcp.tool));
 const client = new Client({ name: `${SITE.mcpPrefix}-mcp-check`, version: "1.0.0" });
@@ -44,7 +54,9 @@ async function call(
   return result;
 }
 
-await client.connect(new StreamableHTTPClientTransport(url));
+await client.connect(new StreamableHTTPClientTransport(url, {
+  requestInit: cookie ? { headers: { cookie } } : undefined,
+}));
 try {
   const info = client.getServerVersion?.();
   console.log("server:", JSON.stringify(info));

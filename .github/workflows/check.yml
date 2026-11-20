@@ -1,0 +1,157 @@
+# Checks on GitHub-hosted runners: install, Go and TypeScript typechecks, Web build, the Web and
+# backend tests on a fresh PostgreSQL,
+# PostgreSQL, the built site's smoke check on the empty database, and the Docker image brought up with docker compose.
+# Only GitHub-owned actions, pinned to a full commit SHA.
+name: Check
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: aihot_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      DATABASE_URL: postgres://postgres:ci@127.0.0.1:5432/aihot_ci
+      SITE_URL: http://127.0.0.1:3000
+      GO_API_BASE_URL: http://127.0.0.1:3002
+      SESSION_SECRET: ci-session-secret-0123456789abcdef
+      IMG_PROXY_SIGN_SECRET: ci-img-secret-0123456789abcdef
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+      - name: Online migration safety
+        # New migrations against the PR base: deployed ones unchanged, no whole-table rewrite or blocking index in a release.
+        env:
+          MIGRATION_BASE: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: node tooling/scripts/check-migrations.ts --base "$MIGRATION_BASE"
+      - name: PostgreSQL backup tools
+        # 恢复测试需要与 PostgreSQL 17 服务匹配的客户端，不能依赖 runner 的默认版本。
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl --fail --silent --show-error -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          . /etc/os-release
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client-17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/17/bin/pg_dump --version
+          /usr/lib/postgresql/17/bin/pg_restore --version
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Prepare Go integration database
+        run: |
+          PGPASSWORD=ci createdb -h 127.0.0.1 -U postgres aihot_test
+          DATABASE_URL=postgres://postgres:ci@127.0.0.1:5432/aihot_test node tooling/scripts/migrate.ts
+      - name: Go checks
+        working-directory: backend-go
+        env:
+          MYHOT_TEST_DATABASE_URL: postgres://postgres:ci@127.0.0.1:5432/aihot_test
+        run: go test ./... && go vet ./... && go build ./cmd/api ./cmd/worker
+      - name: Build web
+        run: npm run build -w @aihot/web
+      - name: Web tests
+        run: node --test frontend/tests/*.test.ts
+
+      # The test runner uses a disposable, migrated copy of aihot_ci for each file; the smoke check
+      # runs in a separate job against a fresh PostgreSQL service.
+      - name: Backend tests
+        run: npm test
+      - name: Smoke check of the built site
+        # The site itself runs with collection and model calls off (the tests above use local stubs).
+        env:
+          COLLECT_ENABLED: "false"
+          MODEL_CALLS_ENABLED: "false"
+        run: |
+          (cd backend-go && GO_API_ADDR=127.0.0.1:3002 GO_TRUST_PROXY=false go run ./cmd/api) > "$RUNNER_TEMP/go-api.log" 2>&1 &
+          (cd frontend && NODE_ENV=production exec node server.ts) > "$RUNNER_TEMP/web.log" 2>&1 &
+          for i in $(seq 1 120); do curl -fsS -o /dev/null http://127.0.0.1:3000/api/health 2>/dev/null && break; sleep 1; done
+          node --input-type=module - "$RUNNER_TEMP/myhot-cookie" <<'NODE'
+          import { createHash, randomBytes, randomUUID } from 'node:crypto';
+          import { writeFileSync } from 'node:fs';
+          import postgres from 'postgres';
+          const token = randomBytes(32).toString('base64url');
+          const email = `smoke-${randomUUID()}@example.invalid`;
+          const sql = postgres(process.env.DATABASE_URL, { max: 1 });
+          try {
+            const [{ id }] = await sql`INSERT INTO user_accounts(email,password_hash,verified_at) VALUES(${email},'smoke-only',now()) RETURNING id`;
+            const tokenHash = createHash('sha256').update(token).digest('hex');
+            await sql`INSERT INTO user_sessions(user_id,token_hash,csrf_token,expires_at) VALUES(${id},${tokenHash},'ci-smoke',now()+interval '1 day')`;
+            writeFileSync(process.argv[2], `myhot_session=${token}\n`, { mode: 0o600 });
+          } finally {
+            await sql.end();
+          }
+          NODE
+          node tooling/scripts/smoke.ts --base http://127.0.0.1:3000 --cookie-file "$RUNNER_TEMP/myhot-cookie"
+          node tooling/scripts/mcp-check.ts http://127.0.0.1:3000/api/mcp --cookie-file "$RUNNER_TEMP/myhot-cookie"
+          rm -f "$RUNNER_TEMP/myhot-cookie"
+      - name: Server logs
+        if: failure()
+        run: tail -n 60 "$RUNNER_TEMP/go-api.log" "$RUNNER_TEMP/web.log" 2>/dev/null || true
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Configure a throwaway site
+        run: |
+          # CI must work from tracked files, without a developer's ignored .env.example.
+          umask 077
+          cat > .env <<'ENV'
+          POSTGRES_PASSWORD=ci-only-postgres-password
+          ADMIN_PASSWORD=ci-only-admin-password
+          SESSION_SECRET=ci-session-secret-0123456789abcdef
+          IMG_PROXY_SIGN_SECRET=ci-img-secret-0123456789abcdef
+          SITE_URL=http://127.0.0.1:3000
+          COLLECT_ENABLED=false
+          MODEL_CALLS_ENABLED=false
+          PERSONALIZATION_ENABLED=false
+          MCP_ALLOWED_HOSTS=web
+          ENV
+      - name: Build and start with docker compose
+        run: docker compose --project-directory . --env-file .env -f deploy/compose.yaml up -d --build
+      - name: Smoke check
+        run: |
+          for i in $(seq 1 90); do curl -fsS -o /dev/null http://127.0.0.1:3000/api/health 2>/dev/null && break; sleep 2; done
+          docker compose --project-directory . --env-file .env -f deploy/compose.yaml ps
+          docker compose --project-directory . --env-file .env -f deploy/compose.yaml run --rm --no-deps --entrypoint node setup tooling/scripts/smoke.ts --base http://web:3000
+          # Setup applies migrations, not the optional source seed.
+          docker compose --project-directory . --env-file .env -f deploy/compose.yaml exec -T db psql -U aihot -d aihot -Atc "select count(*) from sources" | grep -qx '0'
+      - name: Logs
+        if: failure()
+        run: docker compose --project-directory . --env-file .env -f deploy/compose.yaml logs --tail 80
+      - name: Stop
+        if: always()
+        run: docker compose --project-directory . --env-file .env -f deploy/compose.yaml down -v

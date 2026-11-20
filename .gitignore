@@ -40,7 +40,8 @@ Thumbs.db
 fontsource-noto-sans-sc-*.tgz
 
 # docs
-docs
+docs/*
+!docs/deploy.md
 
 # env
 .env
@@ -49,7 +50,10 @@ docs
 .env.example
 
 # other
-.github
+.github/*
+!.github/workflows/
+.github/workflows/*
+!.github/workflows/check.yml
 README.md
 SECURITY.md
 LICENSE
