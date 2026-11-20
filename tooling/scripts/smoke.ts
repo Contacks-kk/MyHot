@@ -52,7 +52,8 @@ const initialize: RequestInit = { method: 'POST', headers: { 'content-type': 'ap
 await check('anonymous denied', '/api/mcp', 401, (res) => noStore(res) ? null : 'MCP denial must be no-store', initialize);
 if (cookie) {
   const headers = { cookie };
-  for (const path of ['/', '/hot', '/daily', '/model', '/interests', '/history']) await check('signed in', path, 200, namedPage, { headers });
+  await check('signed in', '/', 302, (res) => res.headers.get('location') === '/hot' && noStore(res) ? null : 'expected an uncached redirect to /hot', { headers });
+  for (const path of ['/hot', '/daily', '/model', '/interests', '/history']) await check('signed in', path, 200, namedPage, { headers });
   for (const path of privateEndpoints) await check('signed in', path, 200, (res, body) => !noStore(res) ? 'personal API must be no-store' : !/json/.test(res.headers.get('content-type') ?? '') ? 'expected JSON' : /"apiKey"\s*:/.test(body) ? 'personal API must not return the API Key' : null, { headers });
   for (const [path, type] of publicContentEndpoints) await check('signed in', path, 200, (res) => !noStore(res) ? 'authenticated content must be no-store' : !type.test(res.headers.get('content-type') ?? '') ? 'unexpected content type' : null, { headers });
   await check('signed in', '/api/mcp', 200, (res, body) => !noStore(res) ? 'MCP must be no-store' : !body.includes(`"name":"${SITE.mcpPrefix}"`) ? 'MCP server identity missing' : null, { ...initialize, headers: { ...initialize.headers, cookie } });
