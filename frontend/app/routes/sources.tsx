@@ -3,7 +3,7 @@ import { useState, useEffect, type FormEvent } from "react";
 import { Link, useLoaderData } from "react-router";
 import type { Route } from "./+types/sources";
 import type { Screen } from "../components/shell/screens";
-import { IconChevronRight } from "../components/icons";
+import { IconChevronRight, IconSearch } from "../components/icons";
 import { FormMessage, fieldClass } from "../features/account/common";
 import { userApiGet, userApiMe } from "../lib/user-api.server";
 import { useLocalePreference } from "../lib/local-state";
@@ -803,7 +803,6 @@ export default function SourcesRoute() {
               : "border-transparent text-ink-3 hover:text-ink"
           }`}
         >
-          <span>🔍</span>
           <span>{locale === "en" ? "Discover Public Sources" : "探索公共信源（免手动录入）"}</span>
           <span className="rounded-full bg-accent/15 px-1.5 py-0.2 text-[9px] font-bold text-accent uppercase">推荐</span>
         </button>
@@ -862,7 +861,6 @@ export default function SourcesRoute() {
           <div className="card p-4 sm:p-5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-[15px] font-semibold text-ink flex items-center gap-2">
-                <span>🌐</span>
                 <span>{locale === "en" ? "Public Source Marketplace" : "信源探索广场"}</span>
               </h2>
               <button
@@ -880,7 +878,7 @@ export default function SourcesRoute() {
             </p>
 
             <div className="mt-3 relative flex items-center">
-              <span className="absolute left-3.5 text-ink-4 text-[14px]">🔍</span>
+              <IconSearch size={15} className="absolute left-3.5 text-ink-4" />
               <input
                 className={`${fieldClass} pl-9 pr-9 h-11 text-[13px]`}
                 value={exploreQuery}
@@ -1123,7 +1121,7 @@ export default function SourcesRoute() {
                   onClick={() => setShowAdvancedWeb(!showAdvancedWeb)}
                   className="text-[12px] font-medium text-accent hover:underline flex items-center gap-1"
                 >
-                  <span>{showAdvancedWeb ? "收起高级 CSS 选择器配置" : "⚙️ 高级配置：自定义 CSS 选择器（可选，默认智能提取）"}</span>
+                  <span>{showAdvancedWeb ? "收起高级 CSS 选择器配置" : "高级配置：自定义 CSS 选择器（可选，默认智能提取）"}</span>
                 </button>
 
                 {showAdvancedWeb && (
@@ -1372,7 +1370,6 @@ export default function SourcesRoute() {
                     {source.tags && source.tags.length > 0 && (
                       <div className="mt-2 flex flex-wrap items-center gap-1.5 pl-[23px]">
                         <span className="text-[10.5px] text-ink-4 flex items-center gap-1 mr-0.5">
-                          <span>🏷️</span>
                           <span>{locale === "en" ? "Auto-Labels:" : "智能标签:"}</span>
                         </span>
                         {source.tags.map((tag) => (
@@ -1481,8 +1478,8 @@ export default function SourcesRoute() {
                                       ? "Hide Advanced CSS Selectors"
                                       : "收起高级 CSS 选择器配置"
                                     : locale === "en"
-                                    ? "⚙️ Advanced: Custom CSS Selectors (Optional)"
-                                    : "⚙️ 高级配置：自定义 CSS 选择器（可选，默认智能提取）"}
+                                    ? "Advanced: Custom CSS Selectors (Optional)"
+                                    : "高级配置：自定义 CSS 选择器（可选，默认智能提取）"}
                                 </span>
                               </button>
 

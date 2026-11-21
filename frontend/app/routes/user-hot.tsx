@@ -1,6 +1,6 @@
 import type { MediaView } from "@aihot/contracts/site";
 import type { Screen } from "../components/shell/screens";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { data, Link, useLoaderData, useNavigate, useNavigation } from "react-router";
 import type { Route } from "./+types/user-hot";
 import { MediaThumbs } from "../features/feed/parts";
@@ -9,7 +9,19 @@ import { useLocalePreference } from "../lib/local-state";
 import { getDict } from "../lib/i18n";
 import { PersonalFunnel, type FunnelView } from "../features/feed/PersonalFunnel";
 import { CalendarPopover } from "../components/ui/CalendarPopover";
-import { IconCalendar, IconChevronDown } from "../components/icons";
+import {
+  IconCalendar,
+  IconChevronDown,
+  IconChevronRight,
+  IconClose,
+  IconDoc,
+  IconGrid,
+  IconHeart,
+  IconHistory,
+  IconPlug,
+  IconRss,
+} from "../components/icons";
+import { ThemeSwitch } from "../components/shell/ThemeSwitch";
 
 export const handle: Screen = { tab: "hot", name: "个人热点榜单" };
 
@@ -90,6 +102,25 @@ export default function UserHot() {
   const isEn = locale === "en";
 
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // Handle escape key to close navigation drawer
+  useEffect(() => {
+    if (!drawerOpen) {
+      return;
+    }
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setDrawerOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [drawerOpen]);
 
   // Optimistic navigation states: update immediately on user action for silky smooth feel
   const pendingParams = navigation.location ? new URLSearchParams(navigation.location.search) : null;
@@ -112,7 +143,10 @@ export default function UserHot() {
 
   /** Preserve the selected calendar window when paging through the day's results. */
   function pageURL(nextPage: number): string {
-    const params = new URLSearchParams({ range: activeRange, page: String(nextPage) });
+    const params = new URLSearchParams({
+      range: activeRange,
+      page: String(nextPage),
+    });
     if (activeRange === "date") {
       params.set("date", activeDate);
     }
@@ -121,78 +155,249 @@ export default function UserHot() {
 
   return (
     <section className="pb-10 pt-5 lg:pt-0" aria-busy={isNavigating}>
-      <p className="mono text-[10px] uppercase tracking-[.16em] text-ink-4 transition-colors">
-        {windowLabel}
-      </p>
-      <div className="mt-1 flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
-        <h1 className="editorial-title text-[28px] font-semibold tracking-tight text-ink sm:text-[32px]">
-          {dict.article.hotRankTitle}
-        </h1>
-        <div className="relative">
-          <nav aria-label={isEn ? "Hotspot time range" : "热点时间范围"} className="flex items-center gap-1 rounded-full border border-line bg-bg-sunk p-1 text-[12px] shadow-xs">
-            {[{ key: "today", label: isEn ? "Today" : "今日" }, { key: "48h", label: isEn ? "48 hours" : "48小时" }].map((option) => (
-              <Link
-                key={option.key}
-                to={`/hot?range=${option.key}`}
-                prefetch="intent"
-                preventScrollReset
-                aria-current={activeRange === option.key ? "page" : undefined}
-                className={`rounded-full px-3.5 py-1.5 transition-all duration-150 ${
-                  activeRange === option.key
+      {/* 页面顶栏：包含标题、日期切换器以及移动端抽屉导航按钮 */}
+      <div className="flex flex-col gap-y-3">
+        {/* 顶部指示行：移动端左侧显示功能导航折叠按钮，右侧显示时间范围；桌面端仅靠左显示时间范围 */}
+        <div className="flex items-center justify-between lg:justify-start">
+          <button
+            type="button"
+            onClick={() => {
+              setDrawerOpen(true);
+            }}
+            aria-expanded={drawerOpen}
+            aria-label={isEn ? "Open navigation drawer" : "打开功能导航抽屉"}
+            className="inline-flex items-center gap-1.5 rounded-full border border-line-strong bg-surface px-3 py-1.5 text-[12.5px] font-medium text-ink shadow-xs transition-all hover:border-accent hover:text-accent active:scale-95 lg:hidden"
+          >
+            <IconGrid size={14} className="text-accent" />
+            <span>{isEn ? "Menu" : "功能导航"}</span>
+            <IconChevronRight size={13} className="text-ink-4" />
+          </button>
+
+          <p className="mono text-[10px] uppercase tracking-[.16em] text-ink-4 transition-colors">
+            {windowLabel}
+          </p>
+        </div>
+
+        {/* 标题与日期切换：同一行对齐（同一高度），左侧标题，右侧日期切换药丸条 */}
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2.5">
+          <h1 className="editorial-title text-[22px] font-semibold tracking-tight text-ink sm:text-[28px] lg:text-[32px]">
+            {dict.article.hotRankTitle}
+          </h1>
+
+          <div className="relative shrink-0">
+            <nav
+              aria-label={isEn ? "Hotspot time range" : "热点时间范围"}
+              className="flex items-center gap-1 rounded-full border border-line bg-bg-sunk p-1 text-[11.5px] sm:text-[12px] shadow-xs"
+            >
+              {[
+                { key: "today", label: isEn ? "Today" : "今日" },
+                { key: "48h", label: isEn ? "48 hours" : "48小时" },
+              ].map((option) => (
+                <Link
+                  key={option.key}
+                  to={`/hot?range=${option.key}`}
+                  prefetch="intent"
+                  preventScrollReset
+                  aria-current={activeRange === option.key ? "page" : undefined}
+                  className={`rounded-full px-2.5 sm:px-3.5 py-1 sm:py-1.5 transition-all duration-150 ${
+                    activeRange === option.key
+                      ? "bg-surface font-semibold text-accent shadow-xs"
+                      : "text-ink-3 hover:text-ink"
+                  }`}
+                >
+                  {option.label}
+                </Link>
+              ))}
+
+              <div
+                className={`relative flex items-center rounded-full px-2.5 sm:px-3.5 py-1 sm:py-1.5 transition-all duration-150 cursor-pointer ${
+                  activeRange === "date"
                     ? "bg-surface font-semibold text-accent shadow-xs"
                     : "text-ink-3 hover:text-ink"
                 }`}
               >
-                {option.label}
-              </Link>
-            ))}
-
-            <div
-              className={`relative flex items-center rounded-full px-3.5 py-1.5 transition-all duration-150 cursor-pointer ${
-                activeRange === "date"
-                  ? "bg-surface font-semibold text-accent shadow-xs"
-                  : "text-ink-3 hover:text-ink"
-              }`}
-            >
-              <button
-                type="button"
-                onClick={() => setCalendarOpen(!calendarOpen)}
-                aria-expanded={calendarOpen}
-                className="flex items-center gap-1.5 focus:outline-none"
-              >
-                <IconCalendar size={13} className={activeRange === "date" ? "text-accent" : "text-ink-4"} />
-                <span>{isEn ? "Other dates" : "其他日期"}</span>
-                <IconChevronDown
-                  size={12}
-                  className={`transition-transform duration-200 ${
-                    calendarOpen ? "rotate-180 text-accent" : "text-ink-4"
-                  }`}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCalendarOpen(!calendarOpen);
+                  }}
+                  aria-expanded={calendarOpen}
+                  className="flex items-center gap-1 sm:gap-1.5 focus:outline-none"
+                >
+                  <IconCalendar size={13} className={activeRange === "date" ? "text-accent" : "text-ink-4"} />
+                  <span>{isEn ? "Other dates" : "其他日期"}</span>
+                  <IconChevronDown
+                    size={12}
+                    className={`transition-transform duration-200 ${
+                      calendarOpen ? "rotate-180 text-accent" : "text-ink-4"
+                    }`}
+                  />
+                </button>
+                <input
+                  type="date"
+                  tabIndex={-1}
+                  aria-hidden="true"
+                  value={range === "date" ? date : ""}
+                  onChange={(event) => {
+                    if (event.target.value) {
+                      handleSelectDate(event.target.value);
+                    }
+                  }}
+                  className="sr-only"
                 />
-              </button>
-              <input
-                type="date"
-                tabIndex={-1}
-                aria-hidden="true"
-                value={range === "date" ? date : ""}
-                onChange={(event) => {
-                  if (event.target.value) {
-                    handleSelectDate(event.target.value);
-                  }
+              </div>
+            </nav>
+
+            <CalendarPopover
+              isOpen={calendarOpen}
+              onClose={() => {
+                setCalendarOpen(false);
+              }}
+              selectedDate={activeDate}
+              today={today}
+              locale={locale}
+              onSelectDate={handleSelectDate}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* 移动端侧滑抽屉柜（Drawer Cabinet：点击从左向右滑出） */}
+      <div
+        className={`fixed inset-0 z-50 transition-opacity duration-300 lg:hidden ${
+          drawerOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+        }`}
+        aria-hidden={!drawerOpen}
+      >
+        {/* 背景遮罩 */}
+        <div
+          className="absolute inset-0 bg-black/40 backdrop-blur-[2px]"
+          onClick={() => {
+            setDrawerOpen(false);
+          }}
+        />
+
+        {/* 抽屉面板（从左侧向右滑入） */}
+        <aside
+          className={`absolute inset-y-0 left-0 flex w-[280px] max-w-[82vw] flex-col border-r border-line bg-surface shadow-2xl transition-transform duration-300 ease-out ${
+            drawerOpen ? "translate-x-0" : "-translate-x-full"
+          }`}
+        >
+          {/* 抽屉顶栏 */}
+          <div className="flex h-14 items-center justify-between border-b border-line px-4">
+            <div className="flex items-center gap-2">
+              <IconGrid size={16} className="text-accent" />
+              <span className="text-[14px] font-semibold text-ink">{isEn ? "Menu" : "功能导航"}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setDrawerOpen(false);
+              }}
+              aria-label={isEn ? "Close menu" : "关闭菜单"}
+              className="flex size-8 items-center justify-center rounded-full text-ink-3 transition-colors hover:bg-bg-sunk hover:text-ink"
+            >
+              <IconClose size={17} />
+            </button>
+          </div>
+
+          {/* 抽屉内部导航列表（模型配置、关注项、我的日报、我的信源、历史归档、关于MyHOT） */}
+          <nav className="scrollbar-thin flex-1 overflow-y-auto px-3 py-4" aria-label="快捷导航抽屉">
+            <div className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink-4">
+              {dict.nav.workspace}
+            </div>
+            <div className="flex flex-col gap-1">
+              <Link
+                to="/model"
+                onClick={() => {
+                  setDrawerOpen(false);
                 }}
-                className="sr-only"
-              />
+                className="flex h-10 items-center gap-2.5 rounded-control px-2.5 text-[13.5px] font-medium text-ink-3 transition-colors hover:bg-bg-sunk hover:text-ink"
+              >
+                <span className="flex w-5 justify-center text-accent">
+                  <IconPlug size={17} />
+                </span>
+                <span>{dict.nav.model}</span>
+              </Link>
+              <Link
+                to="/interests"
+                onClick={() => {
+                  setDrawerOpen(false);
+                }}
+                className="flex h-10 items-center gap-2.5 rounded-control px-2.5 text-[13.5px] font-medium text-ink-3 transition-colors hover:bg-bg-sunk hover:text-ink"
+              >
+                <span className="flex w-5 justify-center text-accent">
+                  <IconGrid size={17} />
+                </span>
+                <span>{dict.nav.interests}</span>
+              </Link>
+              <Link
+                to="/daily"
+                onClick={() => {
+                  setDrawerOpen(false);
+                }}
+                className="flex h-10 items-center gap-2.5 rounded-control px-2.5 text-[13.5px] font-medium text-ink-3 transition-colors hover:bg-bg-sunk hover:text-ink"
+              >
+                <span className="flex w-5 justify-center text-accent">
+                  <IconDoc size={17} />
+                </span>
+                <span>{dict.nav.daily}</span>
+              </Link>
+              <Link
+                to="/sources"
+                onClick={() => {
+                  setDrawerOpen(false);
+                }}
+                className="flex h-10 items-center gap-2.5 rounded-control px-2.5 text-[13.5px] font-medium text-ink-3 transition-colors hover:bg-bg-sunk hover:text-ink"
+              >
+                <span className="flex w-5 justify-center text-accent">
+                  <IconRss size={17} />
+                </span>
+                <span>{dict.nav.sources}</span>
+              </Link>
+            </div>
+
+            <div className="mt-4 border-t border-line/60 px-2 pb-1.5 pt-3 text-[11px] font-semibold uppercase tracking-wider text-ink-4">
+              {dict.nav.historyAndAbout}
+            </div>
+            <div className="flex flex-col gap-1">
+              <Link
+                to="/history"
+                onClick={() => {
+                  setDrawerOpen(false);
+                }}
+                className="flex h-10 items-center gap-2.5 rounded-control px-2.5 text-[13.5px] font-medium text-ink-3 transition-colors hover:bg-bg-sunk hover:text-ink"
+              >
+                <span className="flex w-5 justify-center text-accent">
+                  <IconHistory size={17} />
+                </span>
+                <span>{dict.nav.history}</span>
+              </Link>
+              <Link
+                to="/about"
+                onClick={() => {
+                  setDrawerOpen(false);
+                }}
+                className="flex h-10 items-center gap-2.5 rounded-control px-2.5 text-[13.5px] font-medium text-ink-3 transition-colors hover:bg-bg-sunk hover:text-ink"
+              >
+                <span className="flex w-5 justify-center text-accent">
+                  <IconHeart size={17} />
+                </span>
+                <span>{dict.nav.about}</span>
+              </Link>
             </div>
           </nav>
 
-          <CalendarPopover
-            isOpen={calendarOpen}
-            onClose={() => setCalendarOpen(false)}
-            selectedDate={activeDate}
-            today={today}
-            locale={locale}
-            onSelectDate={handleSelectDate}
-          />
-        </div>
+          {/* 抽屉底栏：外观主题切换按钮 */}
+          <div className="border-t border-line bg-surface/60 px-4 py-3.5">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[13px] font-medium text-ink-3">
+                {isEn ? "Theme Appearance" : "外观主题"}
+              </span>
+              <ThemeSwitch className="w-[112px]" />
+            </div>
+          </div>
+        </aside>
       </div>
 
       {/* Silky smooth subtle loading indicator line */}

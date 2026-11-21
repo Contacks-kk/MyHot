@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"aihot/backend-go/internal/interests"
@@ -16,16 +17,18 @@ import (
 )
 
 type Label struct {
-	ID         string          `json:"id"`
-	Name       string          `json:"name"`
-	NameKey    string          `json:"-"`
-	Kind       string          `json:"kind"`
-	Definition string          `json:"definition"`
-	Aliases    model.TextArray `json:"aliases"`
-	ParentID   *string         `json:"parentId,omitempty"`
-	Status     string          `json:"status"`
-	MergedInto *string         `json:"-"`
-	Builtin    bool            `json:"builtin"`
+	ID             string          `json:"id"`
+	Name           string          `json:"name"`
+	NameKey        string          `json:"-"`
+	Kind           string          `json:"kind"`
+	Definition     string          `json:"definition"`
+	Aliases        model.TextArray `json:"aliases"`
+	ParentID       *string         `json:"parentId,omitempty"`
+	Status         string          `json:"status"`
+	MergedInto     *string         `json:"-"`
+	Builtin        bool            `json:"builtin"`
+	CreatedAt      *time.Time      `json:"createdAt,omitempty"`
+	LastEvidenceAt *time.Time      `json:"lastEvidenceAt,omitempty"`
 }
 
 type matcher struct {

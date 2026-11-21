@@ -20,8 +20,9 @@ type Article struct {
 }
 
 type CatalogEntry struct {
-	Label `gorm:"embedded"`
-	Count *int64 `json:"count"`
+	Label     `gorm:"embedded"`
+	Count     *int64 `json:"count"`
+	UserCount int64  `gorm:"column:user_count" json:"userCount"`
 }
 
 type Evidence struct {
@@ -149,9 +150,18 @@ func (r *Repository) userCatalog(ctx context.Context, userID int64, version stri
 		WHERE i.article_id IS NULL OR i.revision<>s.revision OR i.catalog_version<>?) complete
 	), counts AS (
 		SELECT l.label_id,count(*) amount FROM article_interest_labels l JOIN scoped s ON s.id=l.article_id GROUP BY l.label_id
+	), followers AS (
+		SELECT coalesce(m.merged_into, tag.id) AS label_id, count(DISTINCT u.user_id) AS user_count
+		FROM user_interests u
+		CROSS JOIN LATERAL unnest(coalesce(u.entity_ids, '{}'::text[]) || coalesce(u.label_ids, '{}'::text[])) AS tag(id)
+		LEFT JOIN interest_labels m ON m.id=tag.id AND m.status='merged' AND m.merged_into IS NOT NULL
+		GROUP BY 1
 	)
-	SELECT l.*,CASE WHEN coverage.complete THEN coalesce(c.amount,0) END count FROM interest_labels l
+	SELECT l.*,CASE WHEN coverage.complete THEN coalesce(c.amount,0) END count,
+	       coalesce(f.user_count, 0) AS user_count
+	FROM interest_labels l
 	CROSS JOIN coverage LEFT JOIN counts c ON c.label_id=l.id
+	LEFT JOIN followers f ON f.label_id=l.id
 	WHERE l.status='active' OR (l.status='dormant' AND EXISTS (
 		SELECT 1 FROM user_interests u WHERE u.user_id=? AND (l.id=ANY(u.label_ids || u.entity_ids) OR EXISTS (
 			SELECT 1 FROM interest_labels m WHERE m.status='merged' AND m.merged_into=l.id AND m.id=ANY(u.label_ids || u.entity_ids)))))
