@@ -70,7 +70,7 @@ const account = createServer((req,res)=>{
   if(pathname==="/api/me/model")return res.end(JSON.stringify({configured:true,baseUrl:"https://model.example.invalid/v1",model:"test",apiKeySet:true}));
   if(pathname==="/api/me/interests")return res.end(JSON.stringify({keywords:["AI"],entityIds:[],labelIds:[]}));
   if(pathname==="/api/me/labels")return res.end(JSON.stringify({labels:[{
-    id:"agent", name:"Agent 智能体", kind:"topic", status:"active", aliases:["Agent","智能体"], definition:"自主规划与执行任务。", count:2,
+    id:"agent", name:"Agent 智能体", kind:"topic", status:"active", aliases:["Agent","智能体"], definition:"自主规划与执行任务。", count:2, userCount:1,
   }]}));
   if(pathname==="/api/me/daily")return res.end(JSON.stringify({reports:[]}));
   if(pathname==="/api/me/feed/funnel")return res.end(JSON.stringify({totalScanned:3,passedCount:2,filteredCount:1,filteredItems:[]}));
@@ -142,7 +142,7 @@ test("the verified workspace renders stable label choices with scoped recommenda
   const $ = cheerio.load(await response.text());
   assert.equal($("fieldset input[type=checkbox]").length, 1);
   assert.match($("fieldset").text(), /技术主题.*Agent 智能体.*2 篇/s);
-  assert.match($("form button").text(), /Agent 智能体 · 2 篇/);
+  assert.match($("fieldset").text(), /1 位用户关注/);
   assert.ok(goUserPaths.some(row => row.path === "/api/me/labels" && row.cookie === alice.cookie));
 });
 test("report archive SSR forwards the user's own Cookie to Go and remains private",async()=>{

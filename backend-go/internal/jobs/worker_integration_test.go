@@ -24,6 +24,8 @@ import (
 	publicationdomain "aihot/backend-go/internal/publication"
 	"aihot/backend-go/internal/receipts"
 	"aihot/backend-go/internal/sourcenaming"
+	"aihot/backend-go/internal/tagging"
+	"aihot/backend-go/internal/topics"
 	"aihot/backend-go/internal/usersources"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -599,6 +601,42 @@ func TestPersonalScanEnqueuesOnlyNewMatchingArticlesOnce(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = f.pool.Exec(ctx, `DELETE FROM river_job WHERE args->>'articleId' LIKE $1`, f.prefix+"_%")
 	})
+}
+
+/** TestStableLabelFollowQueuesOnlyMatchingArticle verifies that a label-only follow gates the scan. */
+func TestStableLabelFollowQueuesOnlyMatchingArticle(t *testing.T) {
+	f := fixture(t)
+	ctx := context.Background()
+	id := f.prefix + "-label"
+	t.Cleanup(func() { _, _ = f.pool.Exec(ctx, "DELETE FROM interest_labels WHERE id=$1", id) })
+	if _, err := f.pool.Exec(ctx, "UPDATE user_interests SET keywords='{}',label_ids=ARRAY[$1::text] WHERE user_id=$2", id, f.users[0]); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(NewRepository(f.orm, f.pool), f.cfg, nil)
+	service.Labels = tagging.NewService(tagging.NewRepository(f.orm), tagging.Builtins(nil, []topics.Definition{
+		{Slug: id, Name: "集成测试技术", Group: "field", Aliases: []string{"技术验证"}, Definition: "检查技术主题在真实队列扫描中的匹配行为"},
+	}), nil)
+	if err := service.repository.EnsureRollout(ctx); err != nil {
+		t.Fatal(err)
+	}
+	match := f.article(t, "tagged", "技术验证发布", time.Now())
+	f.article(t, "untagged", "天气预报", time.Now())
+	var queued []ArticleArgs
+	if err := service.Scan(ctx, func(_ context.Context, _ pgx.Tx, args ArticleArgs) error {
+		if args.UserID == f.users[0] {
+			queued = append(queued, args)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(queued) != 1 || queued[0].ArticleID != match {
+		t.Fatalf("label-only follow queued wrong articles: %+v", queued)
+	}
+	var linked bool
+	if err := f.pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM article_interest_labels WHERE article_id=$1 AND label_id=$2)", match, id).Scan(&linked); err != nil || !linked {
+		t.Fatalf("article was not indexed before dispatch: %v", err)
+	}
 }
 
 func TestPersonalScanRevisitsArticleWhenAnotherSubscribedSourceDiscoversItLater(t *testing.T) {
