@@ -68,7 +68,10 @@ const account = createServer((req,res)=>{
   }
   if(pathname==="/api/site/reports/daily") return res.end(JSON.stringify({kind:"daily",items:[]}));
   if(pathname==="/api/me/model")return res.end(JSON.stringify({configured:true,baseUrl:"https://model.example.invalid/v1",model:"test",apiKeySet:true}));
-  if(pathname==="/api/me/interests")return res.end(JSON.stringify({keywords:["AI"],entityIds:[]}));
+  if(pathname==="/api/me/interests")return res.end(JSON.stringify({keywords:["AI"],entityIds:[],labelIds:[]}));
+  if(pathname==="/api/me/labels")return res.end(JSON.stringify({labels:[{
+    id:"agent", name:"Agent 智能体", kind:"topic", status:"active", aliases:["Agent","智能体"], definition:"自主规划与执行任务。", count:2,
+  }]}));
   if(pathname==="/api/me/daily")return res.end(JSON.stringify({reports:[]}));
   if(pathname==="/api/me/feed/funnel")return res.end(JSON.stringify({totalScanned:3,passedCount:2,filteredCount:1,filteredItems:[]}));
   if(pathname==="/api/me/hot")hotQueries.push(req.url!);
@@ -131,6 +134,16 @@ test("unified hotspots carry today's funnel, date controls, and the requested de
     await selected.text();
     assert.equal(hotQueries.at(-1), `/api/me/hot?range=${range}&page=1`);
   }
+});
+test("the verified workspace renders stable label choices with scoped recommendation counts", async () => {
+  const response = await fetch(origin + "/interests", { headers: alice });
+  assert.equal(response.status, 200, logs);
+  privateResponse(response);
+  const $ = cheerio.load(await response.text());
+  assert.equal($("fieldset input[type=checkbox]").length, 1);
+  assert.match($("fieldset").text(), /技术主题.*Agent 智能体.*2 篇/s);
+  assert.match($("form button").text(), /Agent 智能体 · 2 篇/);
+  assert.ok(goUserPaths.some(row => row.path === "/api/me/labels" && row.cookie === alice.cookie));
 });
 test("report archive SSR forwards the user's own Cookie to Go and remains private",async()=>{
   const response=await fetch(origin+"/daily/archive",{headers:alice});assert.equal(response.status,200,logs);privateResponse(response);await response.text();assert.ok(goUserPaths.some(row=>row.path==="/api/site/reports/daily"&&row.cookie===alice.cookie));assert.ok(!cookies.some(row=>row.path==="/api/site/reports/daily"));
