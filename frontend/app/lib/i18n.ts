@@ -4,6 +4,7 @@ export type Locale = "zh" | "en";
 export interface TranslationDict {
   nav: {
     hot: string;
+    recommendations: string;
     daily: string;
     model: string;
     interests: string;
@@ -81,6 +82,7 @@ export const TRANSLATIONS: Record<Locale, TranslationDict> = {
   zh: {
     nav: {
       hot: "个人热点榜单",
+      recommendations: "为你推荐",
       daily: "我的日报",
       model: "模型配置",
       interests: "关注项",
@@ -156,6 +158,7 @@ export const TRANSLATIONS: Record<Locale, TranslationDict> = {
   en: {
     nav: {
       hot: "Hotspots",
+      recommendations: "Recommended",
       daily: "Daily Brief",
       model: "Model Settings",
       interests: "Interests",

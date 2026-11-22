@@ -165,6 +165,43 @@ type ExploreItem struct {
 	SubscriptionID  int64      `gorm:"column:subscription_id" json:"subscriptionId,omitempty"`
 }
 
+type MatchedTagItem struct {
+	LabelID      string `json:"labelId"`
+	LabelName    string `json:"labelName"`
+	ArticleCount int64  `json:"articleCount"`
+}
+
+type RecommendedSourceItem struct {
+	SourceID        string           `json:"sourceId"`
+	Name            string           `json:"name"`
+	Kind            string           `json:"kind"`
+	URL             string           `json:"url"`
+	Health          string           `json:"health"`
+	SubscriberCount int64            `json:"subscriberCount"`
+	ArticleCount    int64            `json:"articleCount"`
+	LastCheckedAt   *time.Time       `json:"lastCheckedAt"`
+	IsSubscribed    bool             `json:"isSubscribed"`
+	MatchedTags     []MatchedTagItem `json:"matchedTags"`
+	Reason          string           `json:"reason"`
+	Score           float64          `json:"score"`
+}
+
+type recommendQueryRow struct {
+	SourceID            string     `gorm:"column:source_id"`
+	Name                string     `gorm:"column:name"`
+	Kind                string     `gorm:"column:kind"`
+	URL                 string     `gorm:"column:url"`
+	Health              string     `gorm:"column:health"`
+	LastCheckedAt       *time.Time `gorm:"column:last_checked_at"`
+	SubscriberCount     int64      `gorm:"column:subscriber_count"`
+	ArticleCount        int64      `gorm:"column:article_count"`
+	MatchedTagCount     int64      `gorm:"column:matched_tag_count"`
+	MatchedArticleCount int64      `gorm:"column:matched_article_count"`
+	RecentArticleCount  int64      `gorm:"column:recent_article_count"`
+	MatchedTagsRaw      string     `gorm:"column:matched_tags_raw"`
+	Score               float64    `gorm:"column:score"`
+}
+
 type PreviewArticleItem struct {
 	ID          string     `gorm:"column:id" json:"id"`
 	Title       string     `gorm:"column:title" json:"title"`
@@ -209,6 +246,246 @@ func (s *Service) List(ctx context.Context, userID int64) ([]Subscription, error
 	}
 
 	return rows, err
+}
+
+/**
+ * Recommend generates personalized recommendations of un-subscribed sources based on user's subscribed tags.
+ */
+func (s *Service) Recommend(ctx context.Context, userID int64, limit int) ([]RecommendedSourceItem, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 6
+	}
+
+	// 读取用户关注的实体与技术主题标签
+	var tagIDs []string
+	tagErr := s.db.WithContext(ctx).Raw(`
+		SELECT DISTINCT coalesce(m.merged_into, tag.id) AS label_id
+		FROM user_interests u
+		CROSS JOIN LATERAL unnest(coalesce(u.entity_ids, '{}'::text[]) || coalesce(u.label_ids, '{}'::text[])) AS tag(id)
+		LEFT JOIN interest_labels m ON m.id = tag.id AND m.status = 'merged' AND m.merged_into IS NOT NULL
+		WHERE u.user_id = ?`, userID).Scan(&tagIDs).Error
+	if tagErr != nil {
+		return nil, tagErr
+	}
+
+	// 冷启动：用户未关注任何标签时直接推荐平台热门信源
+	if len(tagIDs) == 0 {
+		return s.recommendPopular(ctx, userID, nil, limit)
+	}
+
+	// 检索与用户关注标签相关且未订阅的公共信源并计算匹配密度
+	var matchedRows []recommendQueryRow
+	matchQuery := `WITH user_tags AS (
+		SELECT id, name FROM interest_labels WHERE id IN ?
+	),
+	candidate_articles AS (
+		SELECT 
+			a.source_id,
+			a.id AS article_id,
+			ail.label_id,
+			ut.name AS label_name
+		FROM articles a
+		JOIN article_interest_labels ail ON ail.article_id = a.id
+		JOIN user_tags ut ON ut.id = ail.label_id
+		WHERE a.discovered_at >= now() - interval '14 days'
+		  AND NOT a.backfill
+	),
+	source_tag_counts AS (
+		SELECT 
+			source_id,
+			label_id,
+			label_name,
+			COUNT(DISTINCT article_id) AS article_count
+		FROM candidate_articles
+		GROUP BY source_id, label_id, label_name
+	),
+	recent_source_totals AS (
+		SELECT 
+			source_id,
+			COUNT(*) AS recent_count
+		FROM articles
+		WHERE discovered_at >= now() - interval '14 days'
+		  AND NOT backfill
+		GROUP BY source_id
+	),
+	source_aggregated AS (
+		SELECT 
+			stc.source_id,
+			COUNT(DISTINCT stc.label_id) AS matched_tag_count,
+			SUM(stc.article_count) AS matched_article_count,
+			jsonb_agg(
+				jsonb_build_object(
+					'labelId', stc.label_id,
+					'labelName', stc.label_name,
+					'articleCount', stc.article_count
+				) ORDER BY stc.article_count DESC
+			) AS matched_tags_json
+		FROM source_tag_counts stc
+		GROUP BY stc.source_id
+	)
+	SELECT 
+		s.id AS source_id,
+		s.name,
+		s.kind,
+		coalesce(s.config->>'feedUrl', s.config->>'url', '') AS url,
+		s.health,
+		s.last_ok_at AS last_checked_at,
+		coalesce(sub_count.count, 0) AS subscriber_count,
+		coalesce(art_count.count, 0) AS article_count,
+		sa.matched_tag_count,
+		sa.matched_article_count,
+		coalesce(rst.recent_count, 1) AS recent_article_count,
+		sa.matched_tags_json::text AS matched_tags_raw,
+		(
+			(sa.matched_tag_count * 10 + sa.matched_article_count)::float * 
+			(sa.matched_article_count::float / greatest(coalesce(rst.recent_count, 1), 1))
+		) AS score
+	FROM source_aggregated sa
+	JOIN sources s ON s.id = sa.source_id
+	LEFT JOIN recent_source_totals rst ON rst.source_id = s.id
+	LEFT JOIN (
+		SELECT source_id, COUNT(*) AS count 
+		FROM user_source_subscriptions 
+		WHERE enabled = true 
+		GROUP BY source_id
+	) sub_count ON sub_count.source_id = s.id
+	LEFT JOIN (
+		SELECT source_id, COUNT(*) AS count 
+		FROM articles 
+		GROUP BY source_id
+	) art_count ON art_count.source_id = s.id
+	WHERE s.kind IN ('rss', 'web_list')
+	  AND s.health != 'failing'
+	  AND s.id NOT IN (
+		SELECT source_id FROM user_source_subscriptions WHERE user_id = ?
+	  )
+	ORDER BY score DESC, subscriber_count DESC, s.last_ok_at DESC NULLS LAST, s.id ASC
+	LIMIT ?`
+
+	err := s.db.WithContext(ctx).Raw(matchQuery, tagIDs, userID, limit).Scan(&matchedRows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	// 组装格式化推荐结果与可信理由
+	results := make([]RecommendedSourceItem, 0, limit)
+	for _, row := range matchedRows {
+		var tags []MatchedTagItem
+		if row.MatchedTagsRaw != "" {
+			_ = json.Unmarshal([]byte(row.MatchedTagsRaw), &tags)
+		}
+
+		if tags == nil {
+			tags = []MatchedTagItem{}
+		}
+
+		reason := ""
+		if len(tags) == 1 {
+			reason = fmt.Sprintf("涵盖你关注的标签：%s (%d篇)", tags[0].LabelName, tags[0].ArticleCount)
+		} else if len(tags) == 2 {
+			reason = fmt.Sprintf("涵盖你关注的 2 个标签：%s (%d篇)、%s (%d篇)", tags[0].LabelName, tags[0].ArticleCount, tags[1].LabelName, tags[1].ArticleCount)
+		} else if len(tags) > 2 {
+			reason = fmt.Sprintf("涵盖你关注的 %d 个标签：%s (%d篇)、%s (%d篇) 等", len(tags), tags[0].LabelName, tags[0].ArticleCount, tags[1].LabelName, tags[1].ArticleCount)
+		}
+
+		displayName := sourcenaming.LegacyDisplayName(row.Kind, row.Name, row.SourceID, row.URL)
+
+		results = append(results, RecommendedSourceItem{
+			SourceID:        row.SourceID,
+			Name:            displayName,
+			Kind:            row.Kind,
+			URL:             row.URL,
+			Health:          row.Health,
+			SubscriberCount: row.SubscriberCount,
+			ArticleCount:    row.ArticleCount,
+			LastCheckedAt:   row.LastCheckedAt,
+			IsSubscribed:    false,
+			MatchedTags:     tags,
+			Reason:          reason,
+			Score:           row.Score,
+		})
+	}
+
+	// 若匹配信源不足 limit，用平台热门信源补足空位
+	if len(results) < limit {
+		excludeIDs := make([]string, len(results))
+		for i, r := range results {
+			excludeIDs[i] = r.SourceID
+		}
+
+		needed := limit - len(results)
+		popular, popErr := s.recommendPopular(ctx, userID, excludeIDs, needed)
+		if popErr == nil && len(popular) > 0 {
+			results = append(results, popular...)
+		}
+	}
+
+	return results, nil
+}
+
+/**
+ * recommendPopular returns popular healthy un-subscribed sources as cold start or padding.
+ */
+func (s *Service) recommendPopular(ctx context.Context, userID int64, excludeIDs []string, limit int) ([]RecommendedSourceItem, error) {
+	if limit <= 0 {
+		return []RecommendedSourceItem{}, nil
+	}
+
+	var rows []RecommendedSourceItem
+	query := `SELECT 
+		s.id AS source_id,
+		s.name,
+		s.kind,
+		coalesce(s.config->>'feedUrl', s.config->>'url', '') AS url,
+		s.health,
+		s.last_ok_at AS last_checked_at,
+		coalesce(sub_count.count, 0) AS subscriber_count,
+		coalesce(art_count.count, 0) AS article_count,
+		false AS is_subscribed
+	FROM sources s
+	LEFT JOIN (
+		SELECT source_id, COUNT(*) AS count 
+		FROM user_source_subscriptions 
+		WHERE enabled = true 
+		GROUP BY source_id
+	) sub_count ON sub_count.source_id = s.id
+	LEFT JOIN (
+		SELECT source_id, COUNT(*) AS count 
+		FROM articles 
+		GROUP BY source_id
+	) art_count ON art_count.source_id = s.id
+	WHERE s.kind IN ('rss', 'web_list')
+	  AND s.health != 'failing'
+	  AND s.id NOT IN (
+		SELECT source_id FROM user_source_subscriptions WHERE user_id = ?
+	  )`
+
+	args := []any{userID}
+	if len(excludeIDs) > 0 {
+		query += ` AND s.id NOT IN ?`
+		args = append(args, excludeIDs)
+	}
+
+	query += ` ORDER BY subscriber_count DESC, s.last_ok_at DESC NULLS LAST, s.id ASC LIMIT ?`
+	args = append(args, limit)
+
+	err := s.db.WithContext(ctx).Raw(query, args...).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	if rows == nil {
+		rows = []RecommendedSourceItem{}
+	}
+
+	for i := range rows {
+		rows[i].Name = sourcenaming.LegacyDisplayName(rows[i].Kind, rows[i].Name, rows[i].SourceID, rows[i].URL)
+		rows[i].MatchedTags = []MatchedTagItem{}
+		rows[i].Reason = "平台热门精选信源"
+		rows[i].Score = 1.0
+	}
+
+	return rows, nil
 }
 
 /** Get retrieves a single source subscription by ID for a given user. */

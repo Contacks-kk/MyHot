@@ -6,7 +6,7 @@ import type { Route } from "./+types/user-article";
 import type { Screen } from "../components/shell/screens";
 import { ArticleLayout, RailSection } from "../components/ui/Page";
 import { MediaGallery } from "../features/item/MediaGallery";
-import { userApiGet } from "../lib/user-api.server";
+import { userApiGet, userApiMe } from "../lib/user-api.server";
 import { useLocalePreference } from "../lib/local-state";
 import { getDict } from "../lib/i18n";
 import { translateText } from "../lib/translate";
@@ -21,6 +21,8 @@ interface PersonalArticle {
   reason: string | null;
   score: number;
   source: string;
+  sourceId?: string;
+  isSubscribed?: boolean;
   author: string | null;
   url: string;
   publishedAt: string | null;
@@ -28,10 +30,21 @@ interface PersonalArticle {
   media?: MediaView[];
 }
 
-/** Load the authenticated user's saved article result. */
+/** Load the authenticated user's saved article result and user session info. */
 export async function loader({ request, params }: Route.LoaderArgs) {
-  const article = await userApiGet<PersonalArticle>(request, `/api/me/articles/${encodeURIComponent(params.id)}`, { notFound: true });
-  return { article };
+  const [user, article] = await Promise.all([
+    userApiMe(request),
+    userApiGet<PersonalArticle>(
+      request,
+      `/api/me/articles/${encodeURIComponent(params.id)}`,
+      { notFound: true }
+    ),
+  ]);
+
+  return {
+    article,
+    csrfToken: user?.csrfToken ?? "",
+  };
 }
 
 export function meta({ loaderData }: Route.MetaArgs) {
@@ -54,7 +67,7 @@ function displayTime(value: string, locale: "zh" | "en") {
 
 /** Render the personal result in the article reading layout with summary decoupled from attached media. */
 export default function UserArticle() {
-  const { article } = useLoaderData<typeof loader>();
+  const { article, csrfToken } = useLoaderData<typeof loader>();
   const locale = useLocalePreference();
   const dict = getDict(locale);
   const isEn = locale === "en";
@@ -62,6 +75,66 @@ export default function UserArticle() {
   const [translatedSummary, setTranslatedSummary] = useState<string | null>(null);
   const [translating, setTranslating] = useState(false);
   const [showTranslated, setShowTranslated] = useState(false);
+
+  const [isSubscribed, setIsSubscribed] = useState<boolean>(Boolean(article.isSubscribed));
+  const [subscribing, setSubscribing] = useState<boolean>(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Clear toast alert automatically
+  useEffect(() => {
+    if (!toastMessage) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setToastMessage(null);
+    }, 4000);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [toastMessage]);
+
+  /** Follow the origin source of this recommended article. */
+  async function handleSubscribe() {
+    if (!article.sourceId || isSubscribed || subscribing) {
+      return;
+    }
+
+    setSubscribing(true);
+
+    try {
+      const res = await fetch("/api/me/sources/subscribe", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken,
+        },
+        body: JSON.stringify({
+          sourceId: article.sourceId,
+          intervalMinutes: 60,
+          reuseWindowMinutes: 10,
+        }),
+      });
+
+      if (!res.ok) {
+        const failure = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(failure?.error || (isEn ? "Failed to subscribe" : "关注信源失败"));
+      }
+
+      setIsSubscribed(true);
+      setToastMessage(
+        isEn
+          ? `Subscribed to "${article.source}". Future articles will be tracked.`
+          : `已成功关注信源「${article.source}」，后续将自动为你跟踪打分`
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setToastMessage(msg);
+    } finally {
+      setSubscribing(false);
+    }
+  }
 
   // Auto-translate summary when user switches to English, or user can toggle manually
   useEffect(() => {
@@ -151,6 +224,41 @@ export default function UserArticle() {
       >
         <div className="2xl:hidden"><BackLink to="/hot" label={dict.action.backToHot} /></div>
         <article className="pt-7 2xl:pt-0">
+          {article.sourceId && !isSubscribed && (
+            <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-accent/20 bg-accent-soft/30 p-4">
+              <div className="flex items-center gap-2.5">
+                <span className="text-[18px]">✨</span>
+                <div>
+                  <div className="text-[13px] font-semibold text-ink">
+                    {isEn ? `Recommended from "${article.source}"` : `来自推荐信源「${article.source}」`}
+                  </div>
+                  <div className="text-[11.5px] text-ink-3">
+                    {isEn
+                      ? "Discovered through your tag preferences. Follow to automatically track upcoming articles."
+                      : "根据你关注的标签推荐。关注该信源后，系统将自动为你跟踪后续资讯。"}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleSubscribe}
+                disabled={subscribing}
+                className="inline-flex items-center gap-1.5 rounded-full bg-accent px-4 py-1.5 text-[12px] font-semibold text-white shadow-sm transition hover:opacity-90 active:scale-95 disabled:opacity-50"
+              >
+                {subscribing ? (
+                  <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                ) : (
+                  <span>+</span>
+                )}
+                <span>{subscribing ? (isEn ? "Following..." : "关注中...") : (isEn ? "Follow Source" : "关注此信源")}</span>
+              </button>
+            </div>
+          )}
+          {article.sourceId && isSubscribed && (
+            <div className="mb-6 flex items-center justify-between rounded-2xl border border-moss/20 bg-moss-soft/20 px-4 py-2.5 text-[12px] text-moss">
+              <span>✓ {isEn ? `You are following "${article.source}"` : `你已关注信源「${article.source}」`}</span>
+            </div>
+          )}
           <h1 className="break-words text-[30px] font-bold leading-[1.3] tracking-[-0.025em] text-ink sm:text-[40px] lg:text-[44px]">
             {primaryTitle}
           </h1>

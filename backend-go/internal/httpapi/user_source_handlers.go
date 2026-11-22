@@ -197,6 +197,34 @@ func (s *Server) userIngestArticle(w http.ResponseWriter, r *http.Request, user 
 	writeJSON(w, http.StatusOK, result)
 }
 
+/**
+ * userSourcesRecommendations handles personalized recommendations of un-subscribed sources based on user's subscribed tags.
+ */
+func (s *Server) userSourcesRecommendations(w http.ResponseWriter, r *http.Request, user userContext) {
+	if s.UserSources == nil {
+		writeError(w, http.StatusServiceUnavailable, "服务暂不可用")
+		return
+	}
+
+	limit := 6
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if val, err := strconv.Atoi(l); err == nil && val > 0 && val <= 20 {
+			limit = val
+		}
+	}
+
+	// 计算并获取个性化信源推荐列表
+	result, err := s.UserSources.Recommend(r.Context(), user.ID, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "获取推荐信源失败")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sources": result,
+	})
+}
+
 /** userSourcesExplore handles fuzzy search and recommendations for public sources. */
 func (s *Server) userSourcesExplore(w http.ResponseWriter, r *http.Request, user userContext) {
 	if s.UserSources == nil {

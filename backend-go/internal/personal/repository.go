@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"aihot/backend-go/internal/model"
+	"aihot/backend-go/internal/sourcenaming"
 	"gorm.io/gorm"
 )
 
@@ -43,17 +44,37 @@ type Interests struct {
 }
 
 type Card struct {
-	ArticleID   string          `gorm:"column:article_id"`
-	Score       float64         `gorm:"column:score"`
-	Title       string          `gorm:"column:title"`
-	Summary     string          `gorm:"column:summary"`
-	Reason      *string         `gorm:"column:reason"`
-	URL         string          `gorm:"column:url"`
-	Source      string          `gorm:"column:source"`
-	PublishedAt *time.Time      `gorm:"column:published_at"`
-	CreatedAt   time.Time       `gorm:"column:created_at"`
-	MediaJSON   json.RawMessage `gorm:"column:media"`
-	Historical  bool            `gorm:"-"`
+	ArticleID    string          `gorm:"column:article_id"`
+	Score        float64         `gorm:"column:score"`
+	Title        string          `gorm:"column:title"`
+	Summary      string          `gorm:"column:summary"`
+	Reason       *string         `gorm:"column:reason"`
+	URL          string          `gorm:"column:url"`
+	Source       string          `gorm:"column:source"`
+	SourceID     string          `gorm:"column:source_id"`
+	IsSubscribed bool            `gorm:"column:is_subscribed"`
+	PublishedAt  *time.Time      `gorm:"column:published_at"`
+	CreatedAt    time.Time       `gorm:"column:created_at"`
+	MediaJSON    json.RawMessage `gorm:"column:media"`
+	Historical   bool            `gorm:"-"`
+}
+
+type RecommendedArticleItem struct {
+	ArticleID      string          `gorm:"column:article_id" json:"articleId"`
+	Score          int             `gorm:"column:score" json:"score"`
+	Title          string          `gorm:"column:title" json:"title"`
+	Summary        string          `gorm:"column:summary" json:"summary"`
+	Reason         string          `gorm:"column:reason" json:"reason"`
+	URL            string          `gorm:"column:url" json:"url"`
+	SourceID       string          `gorm:"column:source_id" json:"sourceId"`
+	SourceName     string          `gorm:"column:source_name" json:"sourceName"`
+	SourceKind     string          `gorm:"column:source_kind" json:"sourceKind"`
+	IsSubscribed   bool            `gorm:"column:is_subscribed" json:"isSubscribed"`
+	PublishedAt    *time.Time      `gorm:"column:published_at" json:"publishedAt"`
+	CreatedAt      time.Time       `gorm:"column:created_at" json:"createdAt"`
+	MediaJSON      json.RawMessage `gorm:"column:media" json:"media"`
+	MatchedTagsRaw string          `gorm:"column:matched_tags_raw" json:"-"`
+	MatchedTags    []string        `gorm:"-" json:"matchedTags"`
 }
 
 type ArticleDetail struct {
@@ -196,17 +217,252 @@ func (r *Repository) Hot(ctx context.Context, userID int64, window hotWindow) ([
 	return items, err
 }
 
-/** Article returns one personal result belonging to the requesting user. */
+/** Article returns one personal result belonging to the requesting user, or processed result from recommended sources. */
 func (r *Repository) Article(ctx context.Context, userID int64, articleID string) (ArticleDetail, error) {
 	var item ArticleDetail
-	result := r.db.WithContext(ctx).Raw(`SELECT r.article_id,r.relevance_score::float8 AS score,r.title,r.summary,r.reason,a.url,coalesce(sub.name,s.name) AS source,a.published_at,r.created_at,a.media,a.title AS original_title,a.author FROM user_article_results r JOIN articles a ON a.id=r.article_id JOIN sources s ON s.id=a.source_id LEFT JOIN user_source_subscriptions sub ON sub.user_id=r.user_id AND sub.source_id=s.id WHERE r.user_id=? AND r.article_id=?`, userID, articleID).Scan(&item)
+	result := r.db.WithContext(ctx).Raw(`SELECT r.article_id,s.id AS source_id,(coalesce(sub.id,0)>0) AS is_subscribed,r.relevance_score::float8 AS score,r.title,r.summary,r.reason,a.url,coalesce(sub.name,s.name) AS source,a.published_at,r.created_at,a.media,a.title AS original_title,a.author FROM user_article_results r JOIN articles a ON a.id=r.article_id JOIN sources s ON s.id=a.source_id LEFT JOIN user_source_subscriptions sub ON sub.user_id=r.user_id AND sub.source_id=s.id WHERE r.user_id=? AND r.article_id=?`, userID, articleID).Scan(&item)
 	if result.Error != nil {
 		return ArticleDetail{}, result.Error
 	}
 	if result.RowsAffected == 0 {
-		return ArticleDetail{}, ErrNotFound
+		// 若当前用户尚未加工该文章，允许查阅全站已有加工摘要（包含推荐文章详情）
+		fallbackResult := r.db.WithContext(ctx).Raw(`SELECT 
+			a.id AS article_id,
+			s.id AS source_id,
+			(coalesce(sub.id, 0) > 0) AS is_subscribed,
+			coalesce(uar.relevance_score, pub.score, 80)::float8 AS score,
+			coalesce(uar.title, pub.title, a.title) AS title,
+			coalesce(uar.summary, pub.summary, a.excerpt, '') AS summary,
+			coalesce(uar.reason, pub.reason, '') AS reason,
+			a.url,
+			coalesce(sub.name, s.name) AS source,
+			a.published_at,
+			coalesce(uar.created_at, pub.updated_at, a.created_at) AS created_at,
+			a.media,
+			a.title AS original_title,
+			a.author 
+		FROM articles a
+		JOIN sources s ON s.id = a.source_id
+		LEFT JOIN LATERAL (
+			SELECT title, summary, reason, relevance_score, created_at 
+			FROM user_article_results 
+			WHERE article_id = a.id 
+			ORDER BY relevance_score DESC, created_at DESC 
+			LIMIT 1
+		) uar ON true
+		LEFT JOIN publications pub ON pub.article_id = a.id AND pub.visibility != 'withdrawn'
+		LEFT JOIN user_source_subscriptions sub ON sub.user_id = ? AND sub.source_id = s.id
+		WHERE a.id = ? 
+		  AND (uar.summary IS NOT NULL OR pub.summary IS NOT NULL)
+		LIMIT 1`, userID, articleID).Scan(&item)
+		if fallbackResult.Error != nil {
+			return ArticleDetail{}, fallbackResult.Error
+		}
+		if fallbackResult.RowsAffected == 0 {
+			return ArticleDetail{}, ErrNotFound
+		}
 	}
 	return item, nil
+}
+
+/** RecommendedArticles retrieves processed articles from un-subscribed sources matching user tags or platform popular. */
+func (r *Repository) RecommendedArticles(ctx context.Context, userID int64, page, limit int) ([]RecommendedArticleItem, bool, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+
+	if page < 1 {
+		page = 1
+	}
+
+	offset := (page - 1) * limit
+
+	// 读取用户关注的所有标签
+	var tagIDs []string
+	tagErr := r.db.WithContext(ctx).Raw(`
+		SELECT DISTINCT coalesce(m.merged_into, tag.id) AS label_id
+		FROM user_interests u
+		CROSS JOIN LATERAL unnest(coalesce(u.entity_ids, '{}'::text[]) || coalesce(u.label_ids, '{}'::text[])) AS tag(id)
+		LEFT JOIN interest_labels m ON m.id = tag.id AND m.status = 'merged' AND m.merged_into IS NOT NULL
+		WHERE u.user_id = ?`, userID).Scan(&tagIDs).Error
+	if tagErr != nil {
+		return nil, false, tagErr
+	}
+
+	var rows []RecommendedArticleItem
+	var hasMore bool
+
+	// 若用户有关注标签，优先检索匹配关注标签的未订阅信源加工文章
+	if len(tagIDs) > 0 {
+		query := `WITH user_tags AS (
+			SELECT id, name FROM interest_labels WHERE id IN ?
+		),
+		my_sources AS (
+			SELECT source_id FROM user_source_subscriptions WHERE user_id = ? AND enabled = true
+		),
+		candidate_articles AS (
+			SELECT 
+				a.id AS article_id,
+				a.source_id,
+				a.url,
+				a.published_at,
+				a.discovered_at,
+				a.media,
+				s.name AS source_name,
+				s.kind AS source_kind,
+				ail.label_id,
+				ut.name AS label_name
+			FROM articles a
+			JOIN sources s ON s.id = a.source_id
+			JOIN article_interest_labels ail ON ail.article_id = a.id
+			JOIN user_tags ut ON ut.id = ail.label_id
+			WHERE a.discovered_at >= now() - interval '14 days'
+			  AND NOT a.backfill
+			  AND s.kind IN ('rss', 'web_list')
+			  AND s.health != 'failing'
+			  AND s.id NOT IN (SELECT source_id FROM my_sources)
+		),
+		processed_candidates AS (
+			SELECT 
+				ca.article_id,
+				ca.source_id,
+				ca.url,
+				ca.published_at,
+				ca.discovered_at,
+				ca.media,
+				ca.source_name,
+				ca.source_kind,
+				jsonb_agg(DISTINCT ca.label_name) AS matched_tags_json,
+				COUNT(DISTINCT ca.label_id) AS matched_tag_count,
+				coalesce(uar.title, pub.title) AS title,
+				coalesce(uar.summary, pub.summary) AS summary,
+				coalesce(uar.reason, pub.reason, '匹配你关注的标签') AS reason,
+				coalesce(uar.relevance_score, pub.score, 80) AS base_score,
+				coalesce(uar.created_at, pub.updated_at, ca.discovered_at) AS created_at
+			FROM candidate_articles ca
+			LEFT JOIN LATERAL (
+				SELECT title, summary, reason, relevance_score, created_at 
+				FROM user_article_results 
+				WHERE article_id = ca.article_id 
+				ORDER BY relevance_score DESC, created_at DESC 
+				LIMIT 1
+			) uar ON true
+			LEFT JOIN publications pub ON pub.article_id = ca.article_id AND pub.visibility != 'withdrawn'
+			WHERE (uar.summary IS NOT NULL OR pub.summary IS NOT NULL)
+			GROUP BY ca.article_id, ca.source_id, ca.url, ca.published_at, ca.discovered_at, ca.media, 
+			         ca.source_name, ca.source_kind, uar.title, uar.summary, uar.reason, uar.relevance_score, 
+			         uar.created_at, pub.title, pub.summary, pub.reason, pub.score, pub.updated_at
+		)
+		SELECT 
+			pc.article_id,
+			least(100, (pc.base_score + pc.matched_tag_count * 2))::int AS score,
+			pc.title,
+			pc.summary,
+			pc.reason,
+			pc.url,
+			pc.source_id,
+			pc.source_name,
+			pc.source_kind,
+			false AS is_subscribed,
+			pc.published_at,
+			pc.created_at,
+			pc.media,
+			pc.matched_tags_json::text AS matched_tags_raw
+		FROM processed_candidates pc
+		ORDER BY score DESC, pc.discovered_at DESC, pc.article_id DESC
+		LIMIT ? OFFSET ?`
+
+		err := r.db.WithContext(ctx).Raw(query, tagIDs, userID, limit+1, offset).Scan(&rows).Error
+		if err != nil {
+			return nil, false, err
+		}
+	}
+
+	// 冷启动或首期标签未匹配到足够文章时：从全站未订阅信源已加工文章中降级推荐
+	if len(rows) == 0 && page == 1 {
+		fallbackQuery := `WITH my_sources AS (
+			SELECT source_id FROM user_source_subscriptions WHERE user_id = ? AND enabled = true
+		),
+		candidate_articles AS (
+			SELECT 
+				a.id AS article_id,
+				a.source_id,
+				a.url,
+				a.published_at,
+				a.discovered_at,
+				a.media,
+				s.name AS source_name,
+				s.kind AS source_kind,
+				coalesce(uar.title, pub.title) AS title,
+				coalesce(uar.summary, pub.summary) AS summary,
+				coalesce(uar.reason, pub.reason, '全站热门精选文章') AS reason,
+				coalesce(uar.relevance_score, pub.score, 85) AS score,
+				coalesce(uar.created_at, pub.updated_at, a.discovered_at) AS created_at
+			FROM articles a
+			JOIN sources s ON s.id = a.source_id
+			LEFT JOIN LATERAL (
+				SELECT title, summary, reason, relevance_score, created_at 
+				FROM user_article_results 
+				WHERE article_id = a.id 
+				ORDER BY relevance_score DESC, created_at DESC 
+				LIMIT 1
+			) uar ON true
+			LEFT JOIN publications pub ON pub.article_id = a.id AND pub.visibility != 'withdrawn'
+			WHERE a.discovered_at >= now() - interval '14 days'
+			  AND NOT a.backfill
+			  AND s.kind IN ('rss', 'web_list')
+			  AND s.health != 'failing'
+			  AND s.id NOT IN (SELECT source_id FROM my_sources)
+			  AND (uar.summary IS NOT NULL OR pub.summary IS NOT NULL)
+		)
+		SELECT 
+			ca.article_id,
+			ca.score::int AS score,
+			ca.title,
+			ca.summary,
+			ca.reason,
+			ca.url,
+			ca.source_id,
+			ca.source_name,
+			ca.source_kind,
+			false AS is_subscribed,
+			ca.published_at,
+			ca.created_at,
+			ca.media,
+			'[]' AS matched_tags_raw
+		FROM candidate_articles ca
+		ORDER BY ca.score DESC, ca.discovered_at DESC, ca.article_id DESC
+		LIMIT ? OFFSET ?`
+
+		err := r.db.WithContext(ctx).Raw(fallbackQuery, userID, limit+1, offset).Scan(&rows).Error
+		if err != nil {
+			return nil, false, err
+		}
+	}
+
+	if len(rows) > limit {
+		hasMore = true
+		rows = rows[:limit]
+	}
+
+	if rows == nil {
+		rows = []RecommendedArticleItem{}
+	}
+
+	// 格式化解析标签和信源名称
+	for i := range rows {
+		rows[i].SourceName = sourcenaming.LegacyDisplayName(rows[i].SourceKind, rows[i].SourceName, rows[i].SourceID, rows[i].URL)
+
+		if rows[i].MatchedTagsRaw != "" {
+			_ = json.Unmarshal([]byte(rows[i].MatchedTagsRaw), &rows[i].MatchedTags)
+		}
+
+		if rows[i].MatchedTags == nil {
+			rows[i].MatchedTags = []string{}
+		}
+	}
+
+	return rows, hasMore, nil
 }
 
 func (r *Repository) Daily(ctx context.Context, userID int64) ([]DailyReport, error) {
@@ -346,4 +602,4 @@ func (r *Repository) Funnel(ctx context.Context, userID int64) (FunnelView, erro
 	}, nil
 }
 
-const personalSelect = `SELECT r.article_id,r.relevance_score::float8 AS score,r.title,r.summary,r.reason,a.url,coalesce(sub.name,s.name) AS source,a.published_at,r.created_at,a.media FROM user_article_results r JOIN articles a ON a.id=r.article_id JOIN sources s ON s.id=a.source_id LEFT JOIN user_source_subscriptions sub ON sub.user_id=r.user_id AND sub.source_id=s.id`
+const personalSelect = `SELECT r.article_id,s.id AS source_id,(coalesce(sub.id,0)>0) AS is_subscribed,r.relevance_score::float8 AS score,r.title,r.summary,r.reason,a.url,coalesce(sub.name,s.name) AS source,a.published_at,r.created_at,a.media FROM user_article_results r JOIN articles a ON a.id=r.article_id JOIN sources s ON s.id=a.source_id LEFT JOIN user_source_subscriptions sub ON sub.user_id=r.user_id AND sub.source_id=s.id`

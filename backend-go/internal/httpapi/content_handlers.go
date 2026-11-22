@@ -11,17 +11,19 @@ import (
 )
 
 type contentCard struct {
-	ArticleID   string               `json:"articleId"`
-	Score       float64              `json:"score"`
-	Title       string               `json:"title"`
-	Summary     string               `json:"summary"`
-	Reason      *string              `json:"reason"`
-	URL         string               `json:"url"`
-	Source      string               `json:"source"`
-	PublishedAt *time.Time           `json:"publishedAt"`
-	CreatedAt   time.Time            `json:"createdAt"`
-	Historical  bool                 `json:"historical"`
-	Media       []mediaurl.MediaView `json:"media"`
+	ArticleID    string               `json:"articleId"`
+	Score        float64              `json:"score"`
+	Title        string               `json:"title"`
+	Summary      string               `json:"summary"`
+	Reason       *string              `json:"reason"`
+	URL          string               `json:"url"`
+	Source       string               `json:"source"`
+	SourceID     string               `json:"sourceId,omitempty"`
+	IsSubscribed bool                 `json:"isSubscribed"`
+	PublishedAt  *time.Time           `json:"publishedAt"`
+	CreatedAt    time.Time            `json:"createdAt"`
+	Historical   bool                 `json:"historical"`
+	Media        []mediaurl.MediaView `json:"media"`
 }
 
 /** contentResponses projects personal result rows into API cards with signed media proxy URLs. */
@@ -30,17 +32,19 @@ func contentResponses(items []personal.Card, now time.Time, imageSecret, thumbMo
 	for _, item := range items {
 		mediaViews := mediaurl.BuildViews(item.MediaJSON, thumbMode, now, imageSecret, mediaLimit)
 		responses = append(responses, contentCard{
-			ArticleID:   item.ArticleID,
-			Score:       item.Score,
-			Title:       item.Title,
-			Summary:     item.Summary,
-			Reason:      item.Reason,
-			URL:         item.URL,
-			Source:      item.Source,
-			PublishedAt: item.PublishedAt,
-			CreatedAt:   item.CreatedAt,
-			Historical:  item.Historical,
-			Media:       mediaViews,
+			ArticleID:    item.ArticleID,
+			Score:        item.Score,
+			Title:        item.Title,
+			Summary:      item.Summary,
+			Reason:       item.Reason,
+			URL:          item.URL,
+			Source:       item.Source,
+			SourceID:     item.SourceID,
+			IsSubscribed: item.IsSubscribed,
+			PublishedAt:  item.PublishedAt,
+			CreatedAt:    item.CreatedAt,
+			Historical:   item.Historical,
+			Media:        mediaViews,
 		})
 	}
 
@@ -103,6 +107,80 @@ func (s *Server) hot(w http.ResponseWriter, r *http.Request, u userContext) {
 		"items":   contentResponses(result.Items, time.Now(), s.Config.ImageProxySignSecret, "image-336", 4),
 		"page":    result.Page,
 		"hasMore": result.HasMore,
+	})
+}
+
+type recommendedArticleResponse struct {
+	ArticleID    string               `json:"articleId"`
+	Score        int                  `json:"score"`
+	Title        string               `json:"title"`
+	Summary      string               `json:"summary"`
+	Reason       string               `json:"reason"`
+	URL          string               `json:"url"`
+	SourceID     string               `json:"sourceId"`
+	SourceName   string               `json:"sourceName"`
+	SourceKind   string               `json:"sourceKind"`
+	IsSubscribed bool                 `json:"isSubscribed"`
+	PublishedAt  *time.Time           `json:"publishedAt"`
+	CreatedAt    time.Time            `json:"createdAt"`
+	Media        []mediaurl.MediaView `json:"media"`
+	MatchedTags  []string             `json:"matchedTags"`
+}
+
+/** recommendedArticles returns personalized article recommendations from un-subscribed sources. */
+func (s *Server) recommendedArticles(w http.ResponseWriter, r *http.Request, u userContext) {
+	if s.Personal == nil {
+		writeError(w, http.StatusServiceUnavailable, "服务暂不可用")
+		return
+	}
+
+	page := 1
+	if raw := r.URL.Query().Get("page"); raw != "" {
+		if val, err := strconv.Atoi(raw); err == nil && val >= 1 {
+			page = val
+		}
+	}
+
+	limit := 20
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if val, err := strconv.Atoi(raw); err == nil && val >= 1 && val <= 50 {
+			limit = val
+		}
+	}
+
+	// 检索与用户标签匹配且未订阅信源的推荐文章
+	items, hasMore, err := s.Personal.RecommendedArticles(r.Context(), u.ID, page, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "获取推荐文章失败")
+		return
+	}
+
+	now := time.Now()
+	responses := make([]recommendedArticleResponse, 0, len(items))
+	for _, item := range items {
+		mediaViews := mediaurl.BuildViews(item.MediaJSON, "image-336", now, s.Config.ImageProxySignSecret, 4)
+		responses = append(responses, recommendedArticleResponse{
+			ArticleID:    item.ArticleID,
+			Score:        item.Score,
+			Title:        item.Title,
+			Summary:      item.Summary,
+			Reason:       item.Reason,
+			URL:          item.URL,
+			SourceID:     item.SourceID,
+			SourceName:   item.SourceName,
+			SourceKind:   item.SourceKind,
+			IsSubscribed: item.IsSubscribed,
+			PublishedAt:  item.PublishedAt,
+			CreatedAt:    item.CreatedAt,
+			Media:        mediaViews,
+			MatchedTags:  item.MatchedTags,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":   responses,
+		"page":    page,
+		"hasMore": hasMore,
 	})
 }
 

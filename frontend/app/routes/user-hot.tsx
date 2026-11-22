@@ -15,6 +15,8 @@ import {
   IconChevronRight,
   IconClose,
   IconDoc,
+  IconFlame,
+  IconSparkles,
   IconGrid,
   IconHeart,
   IconHistory,
@@ -177,11 +179,30 @@ export default function UserHot() {
           </p>
         </div>
 
-        {/* 标题与日期切换：同一行对齐（同一高度），左侧标题，右侧日期切换药丸条 */}
+        {/* 标题与日期切换：同一行对齐（同一高度），左侧标题与内容模式切换，右侧日期切换药丸条 */}
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2.5">
-          <h1 className="editorial-title text-[22px] font-semibold tracking-tight text-ink sm:text-[28px] lg:text-[32px]">
-            {dict.article.hotRankTitle}
-          </h1>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="editorial-title text-[22px] font-semibold tracking-tight text-ink sm:text-[28px] lg:text-[32px]">
+              {dict.article.hotRankTitle}
+            </h1>
+            <nav
+              aria-label={isEn ? "Content mode switch" : "内容模式切换"}
+              className="flex items-center gap-1 rounded-full border border-line bg-bg-sunk p-1 text-[11px] shadow-xs"
+            >
+              <span className="rounded-full bg-surface px-2.5 py-0.5 font-semibold text-accent shadow-xs flex items-center gap-1">
+                <IconFlame size={12} className="text-accent" />
+                <span>{dict.nav.hot}</span>
+              </span>
+              <Link
+                to="/recommendations"
+                prefetch="intent"
+                className="rounded-full px-2.5 py-0.5 text-ink-3 hover:text-ink transition-colors flex items-center gap-1"
+              >
+                <IconSparkles size={12} className="text-ink-4" />
+                <span>{dict.nav.recommendations}</span>
+              </Link>
+            </nav>
+          </div>
 
           <div className="relative shrink-0">
             <nav
@@ -307,16 +328,14 @@ export default function UserHot() {
             </div>
             <div className="flex flex-col gap-1">
               <Link
-                to="/model"
-                onClick={() => {
-                  setDrawerOpen(false);
-                }}
-                className="flex h-10 items-center gap-2.5 rounded-control px-2.5 text-[13.5px] font-medium text-ink-3 transition-colors hover:bg-bg-sunk hover:text-ink"
+                to="/hot"
+                onClick={() => setDrawerOpen(false)}
+                className="flex h-10 items-center gap-2.5 rounded-control bg-bg-sunk px-2.5 text-[13.5px] font-semibold text-accent transition-colors"
               >
                 <span className="flex w-5 justify-center text-accent">
-                  <IconPlug size={17} />
+                  <IconFlame size={17} />
                 </span>
-                <span>{dict.nav.model}</span>
+                <span>{dict.nav.hot}</span>
               </Link>
               <Link
                 to="/interests"
@@ -343,6 +362,18 @@ export default function UserHot() {
                 <span>{dict.nav.daily}</span>
               </Link>
               <Link
+                to="/model"
+                onClick={() => {
+                  setDrawerOpen(false);
+                }}
+                className="flex h-10 items-center gap-2.5 rounded-control px-2.5 text-[13.5px] font-medium text-ink-3 transition-colors hover:bg-bg-sunk hover:text-ink"
+              >
+                <span className="flex w-5 justify-center text-accent">
+                  <IconPlug size={17} />
+                </span>
+                <span>{dict.nav.model}</span>
+              </Link>
+              <Link
                 to="/sources"
                 onClick={() => {
                   setDrawerOpen(false);
@@ -354,8 +385,17 @@ export default function UserHot() {
                 </span>
                 <span>{dict.nav.sources}</span>
               </Link>
+              <Link
+                to="/recommendations"
+                onClick={() => setDrawerOpen(false)}
+                className="flex h-10 items-center gap-2.5 rounded-control px-2.5 text-[13.5px] font-medium text-ink-3 transition-colors hover:bg-bg-sunk hover:text-ink"
+              >
+                <span className="flex w-5 justify-center text-accent">
+                  <IconSparkles size={17} />
+                </span>
+                <span>{dict.nav.recommendations}</span>
+              </Link>
             </div>
-
             <div className="mt-4 border-t border-line/60 px-2 pb-1.5 pt-3 text-[11px] font-semibold uppercase tracking-wider text-ink-4">
               {dict.nav.historyAndAbout}
             </div>

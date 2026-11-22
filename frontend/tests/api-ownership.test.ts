@@ -37,8 +37,8 @@ test("Go owns user, admin, public, media and operational HTTP surfaces", () => {
     "POST /api/admin/content/{id}/visibility", "POST /api/admin/content/{id}/override",
     "POST /api/admin/content/{id}/rerun", "POST /api/admin/content/{id}/detach",
     "POST /api/admin/stories/merge",
-    "GET /api/me", "PUT /api/me/model", "PUT /api/me/interests",
-    "GET /api/me/sources", "POST /api/me/sources", "GET /api/me/sources/{id}",
+    "GET /api/me", "PUT /api/me/model", "PUT /api/me/interests", "GET /api/me/recommended-articles",
+    "GET /api/me/sources", "GET /api/me/sources/recommendations", "POST /api/me/sources", "GET /api/me/sources/{id}",
     "PUT /api/me/sources/{id}", "DELETE /api/me/sources/{id}", "POST /api/me/sources/{id}/fetch",
   ]) assert.ok(goServer.includes(`mux.HandleFunc("${route}`) || goServer.includes(`mux.Handle("${route}`), `Go route missing: ${route}`);
   for (const route of ["POST /api/admin/sources", "PATCH /api/admin/sources/{id}", "POST /api/admin/sources/{id}/fetch"]) {
