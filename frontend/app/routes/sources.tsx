@@ -3,7 +3,7 @@ import { useState, useEffect, type FormEvent } from "react";
 import { Link, useLoaderData } from "react-router";
 import type { Route } from "./+types/sources";
 import type { Screen } from "../components/shell/screens";
-import { IconChevronRight, IconSearch } from "../components/icons";
+import { IconChevronRight, IconRss, IconSearch } from "../components/icons";
 import { FormMessage, fieldClass } from "../features/account/common";
 import { userApiGet, userApiMe } from "../lib/user-api.server";
 import { useLocalePreference } from "../lib/local-state";
@@ -101,7 +101,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 export const meta: Route.MetaFunction = () => [{ title: "我的信源 · MyHOT" }, { name: "robots", content: "noindex, nofollow" }];
 export const headers: Route.HeadersFunction = () => ({ "Cache-Control": "private, no-store", "X-Robots-Tag": "noindex, nofollow" });
 
-type SourceKindTab = "explore" | "rss" | "web_list" | "ingest";
+type SourceKind = "rss" | "web_list" | "ingest";
 
 const emptyForm = {
   kind: "rss" as "rss" | "web_list",
@@ -131,12 +131,14 @@ export default function SourcesRoute() {
   const locale = useLocalePreference();
 
   const [sources, setSources] = useState<Subscription[]>(initial.sources);
-  const [activeTab, setActiveTab] = useState<SourceKindTab>("explore");
+  const [view, setView] = useState<"all" | "following">("all");
+  const [sourceKind, setSourceKind] = useState<SourceKind | null>(null);
 
   // 公共信源探索与模糊搜索
   const [exploreQuery, setExploreQuery] = useState("");
   const [exploreResults, setExploreResults] = useState<ExploreItem[]>(initial.initialExplore);
   const [exploreBusy, setExploreBusy] = useState(false);
+  const [exploreError, setExploreError] = useState("");
 
   // 信源历史收录预览抽屉状态
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -150,6 +152,28 @@ export default function SourcesRoute() {
   const [quickInterval, setQuickInterval] = useState(60);
   const [quickBusy, setQuickBusy] = useState(false);
   const [quickError, setQuickError] = useState("");
+
+  // 取消关注确认弹窗状态
+  const [unfollowTarget, setUnfollowTarget] = useState<Subscription | null>(null);
+  const [unfollowBusy, setUnfollowBusy] = useState(false);
+
+  // Handle escape key to close unfollow confirmation modal
+  useEffect(() => {
+    if (!unfollowTarget) {
+      return;
+    }
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !unfollowBusy) {
+        setUnfollowTarget(null);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [unfollowTarget, unfollowBusy]);
 
   // 自定义手动表单状态（用于顶部添加信源）
   const [form, setForm] = useState<FormValue>(emptyForm);
@@ -193,38 +217,46 @@ export default function SourcesRoute() {
 
   // 监听搜索词变动，执行防抖模糊匹配
   useEffect(() => {
-    if (activeTab !== "explore") {
+    if (view !== "all") {
       return;
     }
 
+    const controller = new AbortController();
     const timer = setTimeout(() => {
-      void searchExplore(exploreQuery);
+      void searchExplore(exploreQuery, controller.signal);
     }, 300);
 
     return () => {
       clearTimeout(timer);
+      controller.abort();
     };
-  }, [exploreQuery, activeTab]);
+  }, [exploreQuery, view]);
 
   /** 执行公共信源模糊检索 */
-  async function searchExplore(query: string) {
+  async function searchExplore(query: string, signal: AbortSignal) {
     setExploreBusy(true);
-    setError("");
+    setExploreError("");
 
     try {
       const q = query.trim();
       const url = q ? `/api/me/sources/explore?q=${encodeURIComponent(q)}` : "/api/me/sources/explore";
-      const res = await fetch(url);
+      const res = await fetch(url, { signal });
       const data = await res.json() as { sources?: ExploreItem[]; error?: string };
       if (!res.ok) {
         throw new Error(data.error || "检索公共信源失败");
       }
 
-      setExploreResults(data.sources ?? []);
+      if (!signal.aborted) {
+        setExploreResults(data.sources ?? []);
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "检索公共信源失败");
+      if (!signal.aborted) {
+        setExploreError(e instanceof Error ? e.message : "检索公共信源失败");
+      }
     } finally {
-      setExploreBusy(false);
+      if (!signal.aborted) {
+        setExploreBusy(false);
+      }
     }
   }
 
@@ -321,7 +353,7 @@ export default function SourcesRoute() {
 
   /** 快捷切换至手动录入模式 */
   function jumpToManual(suggestedKind: "rss" | "web_list" = "rss") {
-    switchTab(suggestedKind);
+    chooseSourceKind(suggestedKind);
     if (exploreQuery.trim().startsWith("http://") || exploreQuery.trim().startsWith("https://")) {
       setForm(prev => ({
         ...prev,
@@ -373,9 +405,9 @@ export default function SourcesRoute() {
     setMessage("");
   }
 
-  /** Switch between source acquisition tabs. */
-  function switchTab(tab: SourceKindTab) {
-    setActiveTab(tab);
+  /** Choose the source type shown in the add panel. */
+  function chooseSourceKind(tab: SourceKind | null) {
+    setSourceKind(tab);
     setForm(prev => ({
       ...prev,
       kind: tab === "web_list" ? "web_list" : "rss",
@@ -416,11 +448,12 @@ export default function SourcesRoute() {
             : `成功探测到 ${data.candidates.length} 个可用信源，点击即可直接填入：`
         );
       } else {
+        chooseSourceKind("web_list");
         setDiscoverResult([]);
         setDiscoverNotice(
           locale === "en"
-            ? "No public feed or sitemap detected. You can subscribe directly via 'Web List Crawler' instead!"
-            : "未自动探测到公开 Feed 或 Sitemap。建议切换至【网页列表抓取】标签页直接订阅！"
+            ? "No public feed found. Review the web list settings before saving."
+            : "未找到公开订阅源，已切换到网页列表抓取。请检查抓取设置后保存。"
         );
       }
     } catch (e) {
@@ -437,7 +470,7 @@ export default function SourcesRoute() {
       url: candidate.url,
       name: prev.name.trim() === "" ? candidate.title : prev.name,
     }));
-    setActiveTab("rss");
+    setSourceKind("rss");
     setDiscoverNotice(
       locale === "en"
         ? `Applied: ${candidate.title}`
@@ -484,6 +517,8 @@ export default function SourcesRoute() {
       }
 
       setSources(rows => [body, ...rows.filter(row => row.id !== body.id)]);
+      setSourceKind(null);
+      setView("following");
       setMessage(locale === "en" ? "Subscribed." : "已关注。");
       setForm(emptyForm);
       setDiscoverResult(null);
@@ -680,12 +715,22 @@ export default function SourcesRoute() {
     }
   }
 
-  async function remove(source: Subscription) {
-    if (!window.confirm(locale === "en" ? `Delete subscription for "${source.name}"?` : `删除“${source.name}”的订阅吗？历史文章和个人结果会保留。`)) {
+  /** Open the confirmation modal to unfollow a subscription. */
+  function remove(source: Subscription) {
+    setUnfollowTarget(source);
+  }
+
+  /** Confirm and execute unfollow for the selected subscription. */
+  async function confirmUnfollow() {
+    if (!unfollowTarget) {
       return;
     }
-    setBusy(true);
+
+    const source = unfollowTarget;
+    setUnfollowBusy(true);
     setError("");
+
+    // Submit unfollow delete request to Go API
     try {
       const response = await fetch(`/api/me/sources/${source.id}`, {
         method: "DELETE",
@@ -693,10 +738,16 @@ export default function SourcesRoute() {
           "X-CSRF-Token": initial.csrfToken,
         },
       });
+
       if (!response.ok) {
-        throw new Error(locale === "en" ? "Failed to delete subscription" : "删除订阅失败");
+        const failure = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(failure?.error || (locale === "en" ? "Failed to unfollow source" : "取消关注失败"));
       }
-      setSources(rows => rows.filter(row => row.id !== source.id));
+
+      setSources((rows) => {
+        return rows.filter((row) => row.id !== source.id);
+      });
+
       if (editingId === source.id) {
         cancelEdit();
       }
@@ -704,18 +755,43 @@ export default function SourcesRoute() {
       if (expandedSourceId === source.id) {
         setExpandedSourceId(null);
       }
+
       // 同步探索列表中的已关注状态
-      setExploreResults(prev => prev.map(item => item.sourceId === source.sourceId ? {
-        ...item,
-        isSubscribed: false,
-        subscriptionId: undefined,
-        subscriberCount: Math.max(0, item.subscriberCount - 1),
-      } : item));
-      setMessage(locale === "en" ? "Subscription deleted." : "订阅已删除，历史内容已保留。");
+      setExploreResults((prev) => {
+        return prev.map((item) => {
+          if (item.sourceId === source.sourceId) {
+            return {
+              ...item,
+              isSubscribed: false,
+              subscriptionId: undefined,
+              subscriberCount: Math.max(0, item.subscriberCount - (item.isSubscribed ? 1 : 0)),
+            };
+          }
+          return item;
+        });
+      });
+
+      setPreviewData((current) => {
+        if (current?.source.sourceId === source.sourceId) {
+          return {
+            ...current,
+            source: {
+              ...current.source,
+              isSubscribed: false,
+              subscriptionId: undefined,
+              subscriberCount: Math.max(0, current.source.subscriberCount - (current.source.isSubscribed ? 1 : 0)),
+            },
+          };
+        }
+        return current;
+      });
+
+      setMessage(locale === "en" ? "Source unfollowed. History kept." : "已取消关注，历史内容已保留。");
+      setUnfollowTarget(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : (locale === "en" ? "Failed to delete subscription" : "删除订阅失败"));
+      setError(e instanceof Error ? e.message : (locale === "en" ? "Failed to unfollow source" : "取消关注失败"));
     } finally {
-      setBusy(false);
+      setUnfollowBusy(false);
     }
   }
 
@@ -776,6 +852,27 @@ export default function SourcesRoute() {
     }
   }
 
+  const sourceById = new Map(sources.map(source => [source.sourceId, source]));
+  const publicIDs = new Set(exploreResults.map(item => item.sourceId));
+  const sourceTerm = exploreQuery.trim().toLowerCase();
+  const allSources: ExploreItem[] = [
+    ...exploreResults,
+    ...sources.filter(source => !publicIDs.has(source.sourceId)
+      && [source.name, source.url].some(text => text.toLowerCase().includes(sourceTerm))).map(source => ({
+      sourceId: source.sourceId,
+      name: source.name,
+      kind: source.kind ?? "rss",
+      url: source.url,
+      health: source.health,
+      subscriberCount: 0,
+      articleCount: 0,
+      lastCheckedAt: source.lastCheckedAt,
+      isSubscribed: true,
+      subscriptionId: source.id,
+    })),
+  ];
+  const previewSubscription = previewData ? sourceById.get(previewData.source.sourceId) : undefined;
+
   return (
     <main className="mx-auto max-w-[900px] pb-12">
       <BackLink to="/hot" label={locale === "en" ? "Personal Hotspots" : "个人热点榜单"} />
@@ -789,61 +886,43 @@ export default function SourcesRoute() {
               : "支持直接搜索与一键关注公共信源，或手动添加专属 RSS、网页列表抓取及单篇投递 Webhook。"}
           </p>
         </div>
-        <span className="mono text-[11px] text-ink-4">{sources.length} {locale === "en" ? "subscriptions" : "个信源"}</span>
       </div>
 
-      {/* Source Type Navigation Tabs */}
-      <div className="mt-6 flex border-b border-line gap-2 overflow-x-auto scrollbar-none">
+      <div className="mt-6 flex items-end justify-between gap-3 border-b border-line">
+        <nav className="flex gap-2" aria-label={locale === "en" ? "Source lists" : "信源列表"}>
+          {(["all", "following"] as const).map(option => (
+            <button
+              key={option}
+              type="button"
+              aria-pressed={view === option}
+              onClick={() => setView(option)}
+              className={`whitespace-nowrap border-b-2 px-3 pb-3 text-[13px] font-semibold transition-colors ${view === option
+                ? "border-accent text-accent"
+                : "border-transparent text-ink-3 hover:text-ink"}`}
+            >
+              {option === "all"
+                ? (locale === "en" ? "All Sources" : "全部信源")
+                : (locale === "en" ? `Following (${sources.length})` : `已关注（${sources.length}）`)}
+            </button>
+          ))}
+        </nav>
         <button
           type="button"
-          onClick={() => switchTab("explore")}
-          className={`pb-3 px-3 text-[13px] font-semibold border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap ${
-            activeTab === "explore"
-              ? "border-accent text-accent"
-              : "border-transparent text-ink-3 hover:text-ink"
-          }`}
+          disabled={busy || discovering}
+          aria-expanded={sourceKind !== null}
+          aria-controls="add-source"
+          onClick={() => {
+            if (sourceKind === null) {
+              jumpToManual();
+            } else {
+              chooseSourceKind(null);
+            }
+          }}
+          className="mb-2.5 shrink-0 rounded-full bg-accent px-3.5 py-1.5 text-[12px] font-semibold text-accent-contrast hover:bg-accent-ink"
         >
-          <span>{locale === "en" ? "Discover Public Sources" : "探索公共信源（免手动录入）"}</span>
-          <span className="rounded-full bg-accent/15 px-1.5 py-0.2 text-[9px] font-bold text-accent uppercase">推荐</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => switchTab("rss")}
-          className={`pb-3 px-3 text-[13px] font-semibold border-b-2 transition-colors whitespace-nowrap ${
-            activeTab === "rss"
-              ? "border-accent text-accent"
-              : "border-transparent text-ink-3 hover:text-ink"
-          }`}
-        >
-          {locale === "en" ? "RSS / Atom Feed" : "手动添加 RSS"}
-        </button>
-
-        <button
-          type="button"
-          onClick={() => switchTab("web_list")}
-          className={`pb-3 px-3 text-[13px] font-semibold border-b-2 transition-colors whitespace-nowrap ${
-            activeTab === "web_list"
-              ? "border-accent text-accent"
-              : "border-transparent text-ink-3 hover:text-ink"
-          }`}
-        >
-          {locale === "en" ? "Web List Crawler" : "网页列表抓取"}
-        </button>
-
-        <button
-          type="button"
-          onClick={() => switchTab("ingest")}
-          className={`pb-3 px-3 text-[13px] font-semibold border-b-2 transition-colors whitespace-nowrap ${
-            activeTab === "ingest"
-              ? "border-accent text-accent"
-              : "border-transparent text-ink-3 hover:text-ink"
-          }`}
-        >
-          <span className="flex items-center gap-1.5">
-            {locale === "en" ? "Quick Ingest & Webhook" : "单篇直接投递 / Webhook"}
-            <span className="rounded-full bg-purple-500/15 px-1.5 py-0.2 text-[9px] font-bold text-purple-600 dark:text-purple-300 uppercase">NEW</span>
-          </span>
+          {sourceKind === null
+            ? (locale === "en" ? "+ Add Source" : "＋ 添加信源")
+            : (locale === "en" ? "Close" : "收起")}
         </button>
       </div>
 
@@ -854,166 +933,39 @@ export default function SourcesRoute() {
         </div>
       )}
 
-      {/* Tab 0: Public Source Exploration & Discovery */}
-      {activeTab === "explore" && (
-        <section className="mt-6">
-          {/* Search Bar */}
-          <div className="card p-4 sm:p-5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-[15px] font-semibold text-ink flex items-center gap-2">
-                <span>{locale === "en" ? "Public Source Marketplace" : "信源探索广场"}</span>
-              </h2>
-              <button
-                type="button"
-                onClick={() => jumpToManual("rss")}
-                className="text-[12px] font-medium text-accent hover:underline"
-              >
-                {locale === "en" ? "+ Add Custom Source Manually" : "+ 库里没有？手动录入新信源"}
-              </button>
-            </div>
-            <p className="mt-1 text-[12px] text-ink-3">
-              {locale === "en"
-                ? "Search existing sources by name, keyword, or URL. Preview recent articles before following."
-                : "支持模糊搜索信源名称、关键词或域名。点击可查看收录历史与最新文章，一键关注直接复用。"}
-            </p>
-
-            <div className="mt-3 relative flex items-center">
-              <IconSearch size={15} className="absolute left-3.5 text-ink-4" />
-              <input
-                className={`${fieldClass} pl-9 pr-9 h-11 text-[13px]`}
-                value={exploreQuery}
-                onChange={e => setExploreQuery(e.target.value)}
-                placeholder={locale === "en" ? "Search sources (e.g. OpenAI, 36Kr, Hacker News, tech blogs)..." : "搜索信源名称、网址、关键词（如：OpenAI、知乎、36氪、Hacker News...）"}
-              />
-              {exploreQuery && (
-                <button
-                  type="button"
-                  onClick={() => setExploreQuery("")}
-                  className="absolute right-3 text-ink-4 hover:text-ink text-[13px] px-1"
-                  title="清空搜索"
-                >
-                  ✕
-                </button>
-              )}
-            </div>
-
-            <div className="mt-2.5 flex items-center justify-between text-[11px] text-ink-4">
-              <span>{exploreBusy ? "正在搜索…" : exploreQuery.trim() ? `搜索结果（${exploreResults.length} 个匹配）` : "平台热门与活跃信源推荐"}</span>
-              <span className="hidden sm:inline">关注后即刻同步已有收录历史</span>
-            </div>
-          </div>
-
-          {/* Source Cards Grid */}
-          {exploreResults.length === 0 ? (
-            <div className="card mt-4 border-dashed p-8 text-center">
-              <p className="text-[14px] font-semibold text-ink">
-                {locale === "en" ? "No matching public sources found" : "没有找到匹配的公共信源"}
-              </p>
-              <p className="mt-1.5 text-[12px] text-ink-3">
-                {locale === "en"
-                  ? "You can be the first to add this source! Support RSS/Atom feeds or regular Web List Crawlers."
-                  : "你可以成为第一个添加该信源的人！系统将为你开启定时采集与智能摘要。"}
-              </p>
-              <div className="mt-4 flex justify-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => jumpToManual("rss")}
-                  className="rounded-full bg-accent px-4 py-2 text-[12px] font-semibold text-accent-contrast hover:bg-accent-ink transition-colors"
-                >
-                  {locale === "en" ? "Add as RSS Feed" : "添加为 RSS 订阅"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => jumpToManual("web_list")}
-                  className="rounded-full border border-line bg-surface px-4 py-2 text-[12px] font-semibold text-ink-2 hover:border-accent hover:text-accent transition-colors"
-                >
-                  {locale === "en" ? "Add as Web List Crawler" : "添加为网页列表抓取"}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="mt-4 grid gap-3.5 sm:grid-cols-2">
-              {exploreResults.map(item => {
-                const isWebList = item.kind === "web_list";
-                return (
-                  <article key={item.sourceId} className="card p-4 sm:p-5 flex flex-col justify-between hover:border-accent/40 transition-colors">
-                    <div>
-                      <div className="flex items-start justify-between gap-2">
-                        <h3 className="text-[14px] font-bold text-ink leading-snug line-clamp-1" title={item.name}>
-                          {item.name}
-                        </h3>
-                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${isWebList ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"}`}>
-                          {isWebList ? "网页列表" : "RSS / Atom"}
-                        </span>
-                      </div>
-
-                      <a
-                        href={item.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-1.5 block max-w-full truncate text-[11px] text-ink-4 hover:text-accent"
-                        title={item.url}
-                      >
-                        {item.url} ↗
-                      </a>
-
-                      <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-ink-3">
-                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 ${item.health === "ok" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300" : "bg-bg-sunk text-ink-4"}`}>
-                          <span className={`size-1.5 rounded-full ${item.health === "ok" ? "bg-emerald-500" : "bg-ink-4"}`} />
-                          {item.health === "ok" ? "活跃运行" : "探测中"}
-                        </span>
-                        <span>·</span>
-                        <span>{item.subscriberCount} 人关注</span>
-                        <span>·</span>
-                        <span>收录 {item.articleCount} 篇</span>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 pt-3 border-t border-line flex items-center justify-between gap-2">
-                      <button
-                        type="button"
-                        onClick={() => openPreview(item.sourceId)}
-                        className="text-[12px] font-medium text-ink-3 hover:text-accent transition-colors flex items-center gap-1"
-                      >
-                        <span>历史预览</span>
-                        <span>↗</span>
-                      </button>
-
-                      {item.isSubscribed ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-3 py-1 text-[11px] font-semibold text-accent">
-                          <span>✓</span>
-                          <span>已关注</span>
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => beginQuickSubscribe(item)}
-                          className="rounded-full bg-accent px-3.5 py-1 text-[12px] font-semibold text-accent-contrast hover:bg-accent-ink transition-colors"
-                        >
-                          + 关注
-                        </button>
-                      )}
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )}
-        </section>
-      )}
-
+      {sourceKind !== null && (
+        <section id="add-source" className="mt-5" aria-label={locale === "en" ? "Add Source" : "添加信源"}>
+          <label htmlFor="source-kind" className="text-[13px] font-semibold text-ink">
+            {locale === "en" ? "Source type" : "信源类型"}
+          </label>
+          <select
+            id="source-kind"
+            className={fieldClass + " mt-2 max-w-xs"}
+            value={sourceKind}
+            disabled={busy || discovering || ingestBusy}
+            onChange={event => {
+              const kind = event.target.value;
+              if (kind === "rss" || kind === "web_list" || kind === "ingest") {
+                chooseSourceKind(kind);
+              }
+            }}
+          >
+            <option value="rss">RSS / Atom</option>
+            <option value="web_list">{locale === "en" ? "Web List Crawler" : "网页列表抓取"}</option>
+            <option value="ingest">{locale === "en" ? "Direct Ingest / Webhook" : "单篇投递 / Webhook"}</option>
+          </select>
       {/* Tab 1 & Tab 2: Regular Sources Form (RSS or Web List) */}
-      {(activeTab === "rss" || activeTab === "web_list") && (
+      {(sourceKind === "rss" || sourceKind === "web_list") && (
         <form onSubmit={save} className="card mt-6 p-5 sm:p-6">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-[15px] font-semibold text-ink">
-              {activeTab === "web_list"
+              {sourceKind === "web_list"
                 ? (locale === "en" ? "Add Web List Crawler" : "添加网页列表抓取（普通网页）")
                 : (locale === "en" ? "Add RSS / Atom" : "添加 RSS / Atom 订阅")}
             </h2>
           </div>
 
-          {activeTab === "web_list" && (
+          {sourceKind === "web_list" && (
             <p className="mt-2 text-[12px] text-ink-3 leading-relaxed">
               {locale === "en"
                 ? "Directly crawl any blog archive, news list, or community index page without requiring an RSS feed. The system parses links and automatically updates content."
@@ -1032,7 +984,7 @@ export default function SourcesRoute() {
                   maxLength={200}
                   value={form.name}
                   onChange={e => setForm({ ...form, name: e.target.value })}
-                  placeholder={activeTab === "web_list" ? (locale === "en" ? "e.g. OpenAI News" : "例如：OpenAI 官方动态") : (locale === "en" ? "e.g. Tech Blog" : "例如：技术博客")}
+                  placeholder={sourceKind === "web_list" ? (locale === "en" ? "e.g. OpenAI News" : "例如：OpenAI 官方动态") : (locale === "en" ? "e.g. Tech Blog" : "例如：技术博客")}
                 />
               </label>
 
@@ -1040,7 +992,7 @@ export default function SourcesRoute() {
 
             <div className="sm:col-span-1">
               <label className="text-[12px] font-medium text-ink-2 block">
-                {activeTab === "web_list"
+                {sourceKind === "web_list"
                   ? (locale === "en" ? "Web Page List URL" : "网页列表地址（HTML 页面）")
                   : (locale === "en" ? "RSS / Feed URL" : "信源地址（RSS / Atom / 网站）")}
               </label>
@@ -1057,9 +1009,9 @@ export default function SourcesRoute() {
                       setDiscoverResult(null);
                     }
                   }}
-                  placeholder={activeTab === "web_list" ? "https://openai.com/news 或 https://example.com/blog" : "https://example.com/feed.xml"}
+                  placeholder={sourceKind === "web_list" ? "https://openai.com/news 或 https://example.com/blog" : "https://example.com/feed.xml"}
                 />
-                {activeTab === "rss" && (
+                {sourceKind === "rss" && (
                   <button
                     type="button"
                     disabled={discovering || busy || !form.url.trim()}
@@ -1114,7 +1066,7 @@ export default function SourcesRoute() {
             )}
 
             {/* Optional CSS Selectors for Web List */}
-            {activeTab === "web_list" && (
+            {sourceKind === "web_list" && (
               <div className="sm:col-span-2 mt-1">
                 <button
                   type="button"
@@ -1190,7 +1142,7 @@ export default function SourcesRoute() {
       )}
 
       {/* Tab 3: Direct Ingest Article & Personal Webhook */}
-      {activeTab === "ingest" && (
+      {sourceKind === "ingest" && (
         <div className="mt-6 space-y-6">
           <form onSubmit={handleIngest} className="card p-5 sm:p-6">
             <h2 className="text-[15px] font-semibold text-ink">
@@ -1296,22 +1248,152 @@ export default function SourcesRoute() {
         </div>
       )}
 
+        </section>
+      )}
+
+      {/* Tab 0: Public Source Exploration & Discovery */}
+      {view === "all" && (
+        <section className="mt-6">
+          {/* Search Bar */}
+          <div className="card p-4 sm:p-5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-[15px] font-semibold text-ink flex items-center gap-2">
+                <span>{locale === "en" ? "Public Source Marketplace" : "信源探索广场"}</span>
+              </h2>
+
+            </div>
+            <p className="mt-1 text-[12px] text-ink-3">
+              {locale === "en"
+                ? "Search existing sources by name, keyword, or URL. Preview recent articles before following."
+                : "支持模糊搜索信源名称、关键词或域名。点击可查看收录历史与最新文章，一键关注直接复用。"}
+            </p>
+
+            <div className="mt-3 relative flex items-center">
+              <IconSearch size={15} className="absolute left-3.5 text-ink-4" />
+              <input
+                className={`${fieldClass} pl-9 pr-9 h-11 text-[13px]`}
+                value={exploreQuery}
+                onChange={e => setExploreQuery(e.target.value)}
+                placeholder={locale === "en" ? "Search sources (e.g. OpenAI, 36Kr, Hacker News, tech blogs)..." : "搜索信源名称、网址、关键词（如：OpenAI、知乎、36氪、Hacker News...）"}
+              />
+              {exploreQuery && (
+                <button
+                  type="button"
+                  onClick={() => setExploreQuery("")}
+                  className="absolute right-3 text-ink-4 hover:text-ink text-[13px] px-1"
+                  title="清空搜索"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
+            <div className="mt-2.5 flex items-center justify-between text-[11px] text-ink-4">
+              <span>{exploreBusy ? "正在搜索…" : exploreQuery.trim() ? `搜索结果（${allSources.length} 个匹配）` : "平台热门与活跃信源推荐"}</span>
+              <span className="hidden sm:inline">关注后即刻同步已有收录历史</span>
+            </div>
+          </div>
+
+          {exploreError && <div className="mt-3"><FormMessage error>{exploreError}</FormMessage></div>}
+          {/* Source rows */}
+          {allSources.length === 0 ? (
+            <div className="card mt-4 border-dashed p-8 text-center">
+              <p className="text-[14px] font-semibold text-ink">
+                {locale === "en" ? "No matching public sources found" : "没有找到匹配的公共信源"}
+              </p>
+              <p className="mt-1.5 text-[12px] text-ink-3">
+                {locale === "en"
+                  ? "You can be the first to add this source! Support RSS/Atom feeds or regular Web List Crawlers."
+                  : "你可以成为第一个添加该信源的人！系统将为你开启定时采集与智能摘要。"}
+              </p>
+
+            </div>
+          ) : (
+            <div className="mt-4 space-y-3">
+              {allSources.map(item => {
+                const subscription = sourceById.get(item.sourceId);
+                const isWebList = item.kind === "web_list";
+                const isIngest = item.kind === "external";
+                const publicResult = publicIDs.has(item.sourceId);
+                return (
+                  <article key={item.sourceId} className="card flex flex-col justify-between gap-3 p-4 transition-colors hover:border-accent/40 sm:flex-row sm:items-center sm:p-5">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <h3 className="text-[14px] font-bold text-ink leading-snug line-clamp-1" title={item.name}>
+                          {item.name}
+                        </h3>
+                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${isWebList ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"}`}>
+                          {isIngest ? "Webhook" : isWebList ? "网页列表" : "RSS / Atom"}
+                        </span>
+                      </div>
+
+                      {item.url && <a
+                        href={item.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-1.5 block max-w-full truncate text-[11px] text-ink-4 hover:text-accent"
+                        title={item.url}
+                      >
+                        {item.url} ↗
+                      </a>}
+
+                      <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-ink-3">
+                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 ${item.health === "ok" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300" : "bg-bg-sunk text-ink-4"}`}>
+                          <span className={`size-1.5 rounded-full ${item.health === "ok" ? "bg-emerald-500" : "bg-ink-4"}`} />
+                          {item.health === "ok" ? "活跃运行" : "探测中"}
+                        </span>
+                        {publicResult && (
+                          <span>· {item.subscriberCount} 人关注 · 收录 {item.articleCount} 篇</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex shrink-0 items-center justify-between gap-3 border-t border-line pt-3 sm:border-0 sm:pt-0">
+                      {!isIngest && <button
+                        type="button"
+                        onClick={() => openPreview(item.sourceId)}
+                        className="text-[12px] font-medium text-ink-3 hover:text-accent transition-colors flex items-center gap-1"
+                      >
+                        <span>历史预览</span>
+                        <span>↗</span>
+                      </button>}
+
+                      {subscription ? (
+                        <button type="button" disabled={busy || fetching === subscription.id || editBusy} onClick={() => void remove(subscription)}
+                          className="ml-auto rounded-full border border-line px-3 py-1 text-[12px] text-ink-3 hover:text-red-600 disabled:opacity-50">
+                          {locale === "en" ? "Unfollow" : "取消关注"}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => beginQuickSubscribe(item)}
+                          className="rounded-full bg-accent px-3.5 py-1 text-[12px] font-semibold text-accent-contrast hover:bg-accent-ink transition-colors"
+                        >
+                          + 关注
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
+
       {/* Subscribed Sources List */}
-      <section className="mt-10">
+      {view === "following" && <section aria-label={locale === "en" ? "Following" : "已关注信源"} className="mt-6">
         <div className="flex items-center justify-between">
           <h2 className="text-[16px] font-bold text-ink">
             {locale === "en" ? "My Subscribed Sources" : "已订阅信源列表"}
           </h2>
-          <span className="text-[12px] text-ink-4">
-            共 {sources.length} 个订阅
-          </span>
         </div>
 
         {sources.length === 0 ? (
           <div className="card mt-3 border-dashed p-6 text-center text-[13px] text-ink-4">
             {locale === "en"
-              ? "No subscriptions yet. Discover and follow sources above!"
-              : "还没有订阅。可以在上方搜索并关注公共信源，或手动添加。"}
+              ? "No subscriptions yet. Browse All Sources to follow one."
+              : "还没有关注信源。可切换到「全部信源」浏览，或添加新信源。"}
           </div>
         ) : (
           <div className="mt-3 grid gap-3">
@@ -1322,10 +1404,14 @@ export default function SourcesRoute() {
               const isExpanded = expandedSourceId === source.id;
 
               return (
-                <article className="card p-4 sm:p-5 transition-all" key={source.id}>
+                <article className="card relative p-4 sm:p-5 transition-all" key={source.id}>
+                  <button type="button" disabled={busy || fetching === source.id || editBusy} onClick={() => void remove(source)}
+                    className="absolute right-4 top-4 rounded-full border border-line px-3 py-1 text-[12px] text-ink-3 hover:text-red-600 disabled:opacity-50 sm:right-5 sm:top-5">
+                    {locale === "en" ? "Unfollow" : "取消关注"}
+                  </button>
                   {/* 信源列表卡片头部概要（点击展开/收起详情） */}
                   <div
-                    className="w-full cursor-pointer select-none group"
+                    className="group w-full cursor-pointer select-none pr-24"
                     onClick={() => toggleExpand(source.id)}
                     role="button"
                     tabIndex={0}
@@ -1730,16 +1816,6 @@ export default function SourcesRoute() {
                               </button>
                             </div>
 
-                            <div>
-                              <button
-                                type="button"
-                                disabled={busy}
-                                onClick={() => void remove(source)}
-                                className="h-8 rounded-full border border-line bg-surface px-3.5 text-[11px] font-medium text-ink-4 hover:border-red-300 hover:text-red-600 dark:hover:border-red-800 dark:hover:text-red-400 transition-colors disabled:opacity-50"
-                              >
-                                {locale === "en" ? "Delete" : "删除"}
-                              </button>
-                            </div>
                           </div>
                         </div>
                       )
@@ -1780,7 +1856,7 @@ export default function SourcesRoute() {
             })}
           </div>
         )}
-      </section>
+      </section>}
 
       {/* 信源历史文章预览抽屉/弹窗 */}
       {previewOpen && (
@@ -1813,7 +1889,7 @@ export default function SourcesRoute() {
               </div>
 
               <div className="flex items-center gap-2 shrink-0">
-                {previewData?.source && !previewData.source.isSubscribed && (
+                {previewData?.source && !previewSubscription && (
                   <button
                     type="button"
                     onClick={() => {
@@ -1825,22 +1901,24 @@ export default function SourcesRoute() {
                     + 关注此信源
                   </button>
                 )}
-                {previewData?.source.isSubscribed && (
-                  <span className="rounded-full bg-accent-soft px-3 py-1 text-[11px] font-semibold text-accent">
-                    ✓ 已关注
-                  </span>
+                {previewSubscription && (
+                  <button type="button" disabled={busy || fetching === previewSubscription.id || editBusy} onClick={() => void remove(previewSubscription)}
+                    className="rounded-full border border-line px-3 py-1 text-[12px] text-ink-3 hover:text-red-600 disabled:opacity-50">
+                    {locale === "en" ? "Unfollow" : "取消关注"}
+                  </button>
                 )}
                 <button
                   type="button"
                   onClick={() => setPreviewOpen(false)}
                   className="rounded-full p-1 text-ink-4 hover:text-ink text-[16px] leading-none"
-                  title="关闭"
+                  aria-label={locale === "en" ? "Close preview" : "关闭"}
                 >
                   ✕
                 </button>
               </div>
             </div>
 
+            {error && <div className="mt-3"><FormMessage error>{error}</FormMessage></div>}
             {previewBusy ? (
               <div className="py-12 text-center text-[13px] text-ink-4">
                 正在加载信源历史文章…
@@ -1954,6 +2032,63 @@ export default function SourcesRoute() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* 取消关注确认弹窗 */}
+      {unfollowTarget && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !unfollowBusy) {
+              setUnfollowTarget(null);
+            }
+          }}
+        >
+          <div className="card w-full max-w-[400px] p-5 sm:p-6 shadow-xl">
+            <div className="flex items-start gap-3.5">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-rose-500/10 text-rose-600 dark:bg-rose-500/20 dark:text-rose-400">
+                <IconRss size={20} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-[16px] font-bold text-ink">
+                  {locale === "en" ? "Unfollow Source" : "取消关注信源"}
+                </h3>
+                <p className="mt-1.5 text-[13px] leading-relaxed text-ink-3">
+                  {locale === "en"
+                    ? `Are you sure you want to unfollow "${unfollowTarget.name}"? Historical articles and personal results will be kept.`
+                    : `确定要取消关注“${unfollowTarget.name}”吗？历史文章和个人结果会完整保留。`}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-2.5">
+              <button
+                type="button"
+                disabled={unfollowBusy}
+                onClick={() => {
+                  setUnfollowTarget(null);
+                }}
+                className="rounded-full border border-line px-4 py-1.5 text-[12.5px] font-semibold text-ink-3 hover:border-accent hover:text-ink transition-colors disabled:opacity-50"
+              >
+                {locale === "en" ? "Cancel" : "取消"}
+              </button>
+              <button
+                type="button"
+                disabled={unfollowBusy}
+                onClick={() => {
+                  void confirmUnfollow();
+                }}
+                className="rounded-full bg-rose-600 px-5 py-1.5 text-[12.5px] font-semibold text-white shadow-xs hover:bg-rose-700 transition-colors disabled:opacity-50"
+              >
+                {unfollowBusy
+                  ? (locale === "en" ? "Unfollowing..." : "正在取消…")
+                  : (locale === "en" ? "Confirm Unfollow" : "确定取消关注")}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </main>
