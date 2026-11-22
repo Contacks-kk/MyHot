@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"aihot/backend-go/internal/model"
+	"aihot/backend-go/internal/tagging"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -81,6 +82,8 @@ type triageUserState struct {
 }
 
 type articleInput struct {
+	FilterMode        string
+	SourceLabelIDs    model.TextArray `gorm:"type:text[]"`
 	EncryptedKey      string          `gorm:"column:api_key_ciphertext"`
 	BaseURL           string          `gorm:"column:base_url"`
 	Model             string          `gorm:"column:model"`
@@ -185,10 +188,18 @@ func (r *Repository) UnscannedArticlesTx(ctx context.Context, tx pgx.Tx) ([]scan
 	return items, nil
 }
 
+/** SourceLabelIDsTx reads the source's current automatic follows in the scan transaction. */
+func (r *Repository) SourceLabelIDsTx(ctx context.Context, tx pgx.Tx, sourceID string) ([]string, error) {
+	var ids []string
+	err := tx.QueryRow(ctx, `SELECT ARRAY(SELECT id FROM (`+tagging.SourceLabelRanking+`) ranked)
+		FROM sources src WHERE src.id=$1`, sourceID).Scan(&ids)
+	return ids, err
+}
+
 /** IncrementalCandidatesTx loads eligible verified subscribers for one newly discovered article. */
 func (r *Repository) IncrementalCandidatesTx(ctx context.Context, tx pgx.Tx, article scanArticle) ([]scanUserArticle, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT DISTINCT ON (u.id)
+		SELECT DISTINCT
 		       ad.source_id,
 		       u.id,
 		       m.config_version,
@@ -444,7 +455,9 @@ func (r *Repository) ArticleInput(
 			coalesce(ui.preference_version, 1) AS preference_version,
 			coalesce(ui.keywords, '{}'::text[]) AS keywords,
 			coalesce(ui.entity_ids, '{}'::text[]) AS entity_ids,
-			coalesce(ui.label_ids, '{}'::text[]) AS label_ids
+			coalesce(ui.label_ids, '{}'::text[]) AS label_ids,
+			coalesce(current_sub.filter_mode, ?) AS filter_mode,
+			ARRAY(SELECT id FROM (`+tagging.SourceLabelRanking+`) ranked) AS source_label_ids
 		FROM user_accounts u
 		JOIN user_model_configs m
 			ON m.user_id = u.id
@@ -452,6 +465,9 @@ func (r *Repository) ArticleInput(
 			ON ui.user_id = u.id
 		JOIN articles a
 			ON a.id = ?
+		LEFT JOIN user_source_subscriptions current_sub
+			ON current_sub.user_id=u.id AND current_sub.source_id=? AND current_sub.enabled
+		LEFT JOIN sources src ON src.id=current_sub.source_id
 		WHERE u.id = ?
 			AND u.verified_at IS NOT NULL
 			AND m.config_version = ?
@@ -478,6 +494,7 @@ func (r *Repository) ArticleInput(
 					AND sub.user_id = u.id
 					AND sub.enabled
 				WHERE ad.article_id = a.id
+					AND (?='' OR ad.source_id=?)
 					AND (
 						(?::boolean AND ad.discovered_at >= now() - interval '48 hours')
 						OR (
@@ -491,7 +508,7 @@ func (r *Repository) ArticleInput(
 						)
 					)
 			)
-	`, args.ArticleID, args.UserID, args.ModelVersion, args.PreferenceVersion, args.ColdStart, args.ColdStart, args.ColdStart).Scan(&value)
+	`, args.FilterMode, args.ArticleID, args.SourceID, args.UserID, args.ModelVersion, args.PreferenceVersion, args.ColdStart, args.SourceID, args.SourceID, args.ColdStart, args.ColdStart).Scan(&value)
 
 	if result.Error != nil {
 		return articleInput{}, result.Error

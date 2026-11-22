@@ -57,7 +57,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   // Read existing results and settings; opening the page never triggers model processing.
-  const [hot, funnel, model, interests] = await Promise.all([
+  const [hot, funnel, model] = await Promise.all([
     userApiGet<{ items: HotItem[]; hasMore: boolean }>(request, `/api/me/hot?${selection}`),
     userApiGet<FunnelView>(request, "/api/me/feed/funnel").catch((error) => {
       if (request.signal.aborted) {
@@ -66,7 +66,6 @@ export async function loader({ request }: Route.LoaderArgs) {
       return null;
     }),
     userApiGet<{ configured: boolean }>(request, "/api/me/model"),
-    userApiGet<{ keywords: string[]; entityIds: string[]; labelIds?: string[] }>(request, "/api/me/interests"),
   ]);
   return {
     ...hot,
@@ -75,7 +74,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     date,
     page,
     today,
-    configured: model.configured && interests.keywords.length + interests.entityIds.length + (interests.labelIds?.length ?? 0) > 0,
+    configured: model.configured,
   };
 }
 
@@ -413,10 +412,10 @@ export default function UserHot() {
 
       {!configured && (
         <div className="mb-6 rounded-card border border-accent/20 bg-accent-soft/45 p-4 text-[12.5px] leading-relaxed text-ink-2">
-          <p>{isEn ? "Configure your model and interests to process new matching articles. Historical articles are not backfilled." : "完成模型和关注项设置后，系统会在新文章命中时为你生成私人摘要。历史文章不会自动回填。"}</p>
+          <p>{isEn ? "Configure your model and follow a source to receive personalized hotspots. The source's top tags are followed automatically." : "配置模型并关注信源后，即可接收个人热点。系统会自动关注该信源最相关的标签。"}</p>
           <div className="mt-2 flex gap-3 font-medium text-accent">
             <Link to="/model">{isEn ? "Configure Model" : "配置模型"}</Link>
-            <Link to="/interests">{isEn ? "Set Interests" : "设置关注项"}</Link>
+            <Link to="/sources">{isEn ? "Follow Sources" : "关注信源"}</Link>
           </div>
         </div>
       )}

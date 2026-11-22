@@ -10,6 +10,18 @@ import (
 
 type Repository struct{ db *gorm.DB }
 
+// SourceLabelRanking selects the same active labels for display and personal filtering.
+// The outer query supplies the source as src.
+const SourceLabelRanking = `
+	SELECT l.id,l.name,count(DISTINCT d.article_id) AS article_count
+	FROM article_discoveries d
+	JOIN articles a ON a.id=d.article_id AND NOT a.backfill
+	JOIN article_interest_labels al ON al.article_id=d.article_id
+	JOIN interest_labels l ON l.id=al.label_id AND l.status='active'
+	WHERE d.source_id=src.id AND d.discovered_at BETWEEN now()-interval '7 days' AND now()
+	GROUP BY l.id ORDER BY article_count DESC,l.name,l.id LIMIT 3
+`
+
 type Article struct {
 	ID       string    `json:"id"`
 	Title    string    `json:"title"`

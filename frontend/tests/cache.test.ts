@@ -69,6 +69,10 @@ const account = createServer((req,res)=>{
   if(pathname==="/api/site/reports/daily") return res.end(JSON.stringify({kind:"daily",items:[]}));
   if(pathname==="/api/me/model")return res.end(JSON.stringify({configured:true,baseUrl:"https://model.example.invalid/v1",model:"test",apiKeySet:true}));
   if(pathname==="/api/me/interests")return res.end(JSON.stringify({keywords:["AI"],entityIds:[],labelIds:[]}));
+  if(pathname==="/api/me/sources")return res.end(JSON.stringify({sources:[
+    {id:1,name:"Local source",enabled:true,filterMode:"label",tags:["Agent 智能体"]},
+    {id:2,name:"Paused source",enabled:false,filterMode:"label",tags:["Hidden label"]},
+  ]}));
   if(pathname==="/api/me/labels")return res.end(JSON.stringify({labels:[{
     id:"agent", name:"Agent 智能体", kind:"topic", status:"active", aliases:["Agent","智能体"], definition:"自主规划与执行任务。", count:2, userCount:1,
   }]}));
@@ -143,6 +147,8 @@ test("the verified workspace renders stable label choices with scoped recommenda
   assert.equal($("fieldset input[type=checkbox]").length, 1);
   assert.match($("fieldset").text(), /技术主题.*Agent 智能体.*2 篇/s);
   assert.match($("fieldset").text(), /1 位用户关注/);
+  assert.match($('[aria-label="信源自动关注"]').text(), /Local source.*Agent 智能体/s);
+  assert.doesNotMatch($('[aria-label="信源自动关注"]').text(), /Hidden label/);
   assert.ok(goUserPaths.some(row => row.path === "/api/me/labels" && row.cookie === alice.cookie));
 });
 test("report archive SSR forwards the user's own Cookie to Go and remains private",async()=>{

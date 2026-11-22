@@ -1,4 +1,4 @@
-import { useState, useMemo, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLoaderData } from "react-router";
 import { BackLink } from "../components/ui/BackLink";
 import type { Screen } from "../components/shell/screens";
@@ -24,12 +24,18 @@ interface Label {
 
 /** Load the user's saved preferences and subscription-scoped label directory. */
 export async function loader({ request }: Route.LoaderArgs) {
-  const [user, interests, catalog] = await Promise.all([
+  const [user, interests, catalog, subscriptions] = await Promise.all([
     userApiMe(request),
     userApiGet<{ keywords: string[]; entityIds: string[]; labelIds: string[] }>(request, "/api/me/interests"),
     userApiGet<{ labels: Label[] }>(request, "/api/me/labels"),
+    userApiGet<{ sources: { id: number; name: string; enabled: boolean; filterMode: "label" | "all"; tags: string[] }[] }>(request, "/api/me/sources"),
   ]);
-  return { csrfToken: user?.csrfToken ?? "", ...interests, labels: catalog.labels };
+  return {
+    csrfToken: user?.csrfToken ?? "",
+    ...interests,
+    labels: catalog.labels,
+    automaticFollows: subscriptions.sources.filter(source => source.enabled && source.filterMode === "label"),
+  };
 }
 
 export const meta: Route.MetaFunction = () => [{ title: "关注项 · MyHOT" }, { name: "robots", content: "noindex, nofollow" }];
@@ -245,9 +251,12 @@ export default function InterestSettings() {
   const [followedTagFilter, setFollowedTagFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<"hot" | "time" | "articles">("hot");
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
+
+  const savingRef = useRef(false);
+  const pendingSaveRef = useRef<Set<string> | null>(null);
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
 
   const entityIDs = useMemo(
     () => new Set(initial.labels.filter(label => label.kind === "entity").map(label => label.id)),
@@ -259,46 +268,32 @@ export default function InterestSettings() {
     return initial.labels.filter(label => selected.has(label.id));
   }, [initial.labels, selected]);
 
-  // Check if selection changed
-  const hasUnsavedChanges = useMemo(() => {
-    if (selected.size !== initialSelected.size) {
-      return true;
+  // Reset tag filter if currently filtered tag was unfollowed
+  useEffect(() => {
+    if (followedTagFilter !== "all" && !selected.has(followedTagFilter)) {
+      setFollowedTagFilter("all");
     }
-    for (const id of selected) {
-      if (!initialSelected.has(id)) {
-        return true;
-      }
+  }, [selected, followedTagFilter]);
+
+  /** Synchronize updated interest tags to backend API. */
+  async function syncInterests(currentSelected: Set<string>) {
+    if (savingRef.current) {
+      pendingSaveRef.current = currentSelected;
+      return;
     }
-    return false;
-  }, [selected, initialSelected]);
 
-  /** Toggle a label in the pending form selection. */
-  function toggle(id: string) {
-    setSelected(values => {
-      const next = new Set(values);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  }
-
-  /** Reset selection back to initially loaded values. */
-  function resetChanges() {
-    setSelected(new Set(initialSelected));
-  }
-
-  /** Save label preferences to backend API. */
-  async function save(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setBusy(true);
+    savingRef.current = true;
     setError("");
-    setMessage("");
 
-    // Submit interests to Go backend
+    // Submit updated interests to Go backend
     try {
+      const entityIds = [...currentSelected].filter((id) => {
+        return entityIDs.has(id) || initial.entityIds.includes(id);
+      });
+      const labelIds = [...currentSelected].filter((id) => {
+        return !entityIDs.has(id) && !initial.entityIds.includes(id);
+      });
+
       const response = await fetch("/api/me/interests", {
         method: "PUT",
         headers: {
@@ -307,22 +302,40 @@ export default function InterestSettings() {
         },
         body: JSON.stringify({
           keywords: initial.keywords,
-          entityIds: [...selected].filter(id => entityIDs.has(id) || initial.entityIds.includes(id)),
-          labelIds: [...selected].filter(id => !entityIDs.has(id) && !initial.entityIds.includes(id)),
+          entityIds,
+          labelIds,
         }),
       });
 
-      const result = await response.json() as { error?: string };
+      const result = (await response.json().catch(() => ({}))) as { error?: string };
       if (!response.ok) {
-        throw new Error(result.error || "保存失败");
+        throw new Error(result.error || "关注状态同步失败");
       }
-
-      setMessage("关注项已保存，新设置从后续采集文章开始生效。");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "保存失败");
+      setError(err instanceof Error ? err.message : "关注状态同步失败");
     } finally {
-      setBusy(false);
+      savingRef.current = false;
+      if (pendingSaveRef.current) {
+        const next = pendingSaveRef.current;
+        pendingSaveRef.current = null;
+        void syncInterests(next);
+      }
     }
+  }
+
+  /** Toggle follow status for a single tag and immediately persist. */
+  function toggle(id: string) {
+    const next = new Set(selectedRef.current);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    selectedRef.current = next;
+    setSelected(next);
+
+    // Persist immediately to backend
+    void syncInterests(next);
   }
 
   // Filter and sort items based on active tab and toolbar criteria
@@ -353,13 +366,28 @@ export default function InterestSettings() {
         <div>
           <h1 className="text-[25px] font-semibold tracking-tight text-ink">关注项</h1>
           <p className="mt-1 text-[13px] text-ink-3">
-            新文章命中任一关注的公司、产品或技术主题后，会自动进入个人筛选与热点排序。
+            关注信源后会自动关注它最相关的 3 个稳定标签。你也可以手动补充关注。
           </p>
         </div>
         <div className="text-[12px] text-ink-4">
-          已关注 <strong className="text-accent">{selected.size}</strong> 个标签
+          手动关注 <strong className="text-accent">{selected.size}</strong> 个标签
         </div>
       </div>
+
+      {initial.automaticFollows.length > 0 && (
+        <section className="card mt-5 p-4" aria-label="信源自动关注">
+          <h2 className="text-[14px] font-semibold text-ink">信源自动关注</h2>
+          <p className="mt-1 text-[12px] text-ink-4">自动标签按信源分别生效，随近期文章更新。</p>
+          <ul className="mt-2 divide-y divide-line">
+            {initial.automaticFollows.map(source => (
+              <li key={source.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-[12px]">
+                <span className="font-medium text-ink">{source.name}</span>
+                <span className="text-ink-3">{source.tags.length > 0 ? source.tags.join(" · ") : "待识别，文章可先进入个人筛选"}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {/* Horizontal Tabs: Reserved only [全部标签] and [我关注的标签] */}
       <div className="mt-6 flex border-b border-line gap-2 overflow-x-auto scrollbar-none">
@@ -400,10 +428,9 @@ export default function InterestSettings() {
         </button>
       </div>
 
-      <form onSubmit={save} className="mt-5 space-y-5">
+      <div className="mt-5 space-y-5">
         {/* Messages */}
         {error && <FormMessage error>{error}</FormMessage>}
-        {message && <FormMessage>{message}</FormMessage>}
 
         {/* In 'Following' tab: horizontal tag switching bar when user has followed tags */}
         {activeTab === "following" && followedLabels.length > 0 && (
@@ -559,41 +586,7 @@ export default function InterestSettings() {
             </div>
           </fieldset>
         )}
-
-        {/* Sticky Action Footer */}
-        <div className="sticky bottom-4 z-10 rounded-control border border-line/80 bg-surface/95 p-3.5 sm:p-4 shadow-md backdrop-blur-xs flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-[13px] font-medium text-ink">
-              已选择 <strong className="text-accent font-bold">{selected.size}</strong> 个关注标签
-            </span>
-            {hasUnsavedChanges && (
-              <span className="rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 px-2 py-0.5 text-[10.5px] font-semibold">
-                有未保存修改
-              </span>
-            )}
-          </div>
-
-          <div className="flex items-center gap-3">
-            {hasUnsavedChanges && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={resetChanges}
-                className="text-[12px] text-ink-4 hover:text-ink transition-colors disabled:opacity-50"
-              >
-                还原
-              </button>
-            )}
-            <button
-              type="submit"
-              disabled={busy}
-              className="h-9 rounded-full bg-accent px-5 text-[12.5px] font-semibold text-accent-contrast shadow-xs hover:bg-accent-ink transition-colors disabled:opacity-50"
-            >
-              {busy ? "正在保存…" : "保存关注项"}
-            </button>
-          </div>
-        </div>
-      </form>
+      </div>
     </section>
   );
 }

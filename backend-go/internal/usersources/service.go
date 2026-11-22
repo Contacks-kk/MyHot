@@ -19,6 +19,7 @@ import (
 	"aihot/backend-go/internal/model"
 	"aihot/backend-go/internal/sourcenaming"
 	"aihot/backend-go/internal/sourceschedule"
+	"aihot/backend-go/internal/tagging"
 
 	"gorm.io/gorm"
 )
@@ -196,13 +197,7 @@ const subscriptionSelect = `SELECT sub.id,sub.source_id,src.kind,sub.name,sub.na
 	CASE WHEN src.kind IN ('rss','web_list') THEN least(src.reuse_window_minutes,nullif(?,0))
 	     ELSE src.reuse_window_minutes END AS effective_reuse_window_minutes,
 	src.last_ok_at AS last_checked_at,src.next_fetch_at,src.health,
-	ARRAY(
-		SELECT l.name FROM article_discoveries d
-		JOIN article_interest_labels al ON al.article_id=d.article_id
-		JOIN interest_labels l ON l.id=al.label_id AND l.status='active'
-		WHERE d.source_id=src.id AND d.discovered_at BETWEEN now()-interval '7 days' AND now()
-		GROUP BY l.id ORDER BY count(DISTINCT d.article_id) DESC,l.name,l.id LIMIT 4
-	) AS tags
+	ARRAY(SELECT name FROM (` + tagging.SourceLabelRanking + `) ranked ORDER BY article_count DESC,name,id) AS tags
 	FROM user_source_subscriptions sub JOIN sources src ON src.id=sub.source_id`
 
 /** List retrieves all source subscriptions for a given user. */

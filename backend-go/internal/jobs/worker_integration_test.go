@@ -603,13 +603,16 @@ func TestPersonalScanEnqueuesOnlyNewMatchingArticlesOnce(t *testing.T) {
 	})
 }
 
-/** TestStableLabelFollowQueuesOnlyMatchingArticle verifies that a label-only follow gates the scan. */
-func TestStableLabelFollowQueuesOnlyMatchingArticle(t *testing.T) {
+/** TestSourceAutomaticallyFollowsStableLabels verifies automatic and manual follows through the same scan. */
+func TestSourceAutomaticallyFollowsStableLabels(t *testing.T) {
 	f := fixture(t)
 	ctx := context.Background()
 	id := f.prefix + "-label"
 	t.Cleanup(func() { _, _ = f.pool.Exec(ctx, "DELETE FROM interest_labels WHERE id=$1", id) })
 	if _, err := f.pool.Exec(ctx, "UPDATE user_interests SET keywords='{}',label_ids=ARRAY[$1::text] WHERE user_id=$2", id, f.users[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, "UPDATE user_interests SET keywords='{}' WHERE user_id=$1", f.users[1]); err != nil {
 		t.Fatal(err)
 	}
 	service := NewService(NewRepository(f.orm, f.pool), f.cfg, nil)
@@ -621,17 +624,53 @@ func TestStableLabelFollowQueuesOnlyMatchingArticle(t *testing.T) {
 	}
 	match := f.article(t, "tagged", "技术验证发布", time.Now())
 	f.article(t, "untagged", "天气预报", time.Now())
+	unclassified := f.prefix + "_unclassified"
+	firstArticle := f.prefix + "_first"
+	t.Cleanup(func() {
+		_, _ = f.pool.Exec(ctx, "DELETE FROM articles WHERE id=$1", firstArticle)
+		_, _ = f.pool.Exec(ctx, "DELETE FROM sources WHERE id=$1", unclassified)
+	})
+	if _, err := f.pool.Exec(ctx, "INSERT INTO sources(id,name,kind) VALUES($1,'Unclassified','rss')", unclassified); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, "INSERT INTO user_source_subscriptions(user_id,source_id,name,activated_at) VALUES($1,$2,'Unclassified',now()-interval '1 minute')", f.users[1], unclassified); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, "INSERT INTO articles(id,source_id,identity_key,url,title,discovered_at,timeline_at,created_at) VALUES($1,$2,$1,$3,'海洋观测报告',now(),now(),now())", firstArticle, unclassified, "https://articles.example.invalid/"+firstArticle); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, "INSERT INTO article_discoveries(article_id,source_id,via) VALUES($1,$2,'fetch')", firstArticle, unclassified); err != nil {
+		t.Fatal(err)
+	}
 	var queued []ArticleArgs
 	if err := service.Scan(ctx, func(_ context.Context, _ pgx.Tx, args ArticleArgs) error {
-		if args.UserID == f.users[0] {
+		if args.UserID == f.users[0] || args.UserID == f.users[1] {
 			queued = append(queued, args)
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(queued) != 1 || queued[0].ArticleID != match {
-		t.Fatalf("label-only follow queued wrong articles: %+v", queued)
+	if len(queued) != 3 {
+		t.Fatalf("expected two tag matches and one article from the unclassified source: %+v", queued)
+	}
+	for _, args := range queued {
+		input, err := service.repository.ArticleInput(ctx, args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if args.ArticleID == firstArticle && args.UserID == f.users[1] && args.SourceID == unclassified {
+			if len(input.SourceLabelIDs) != 0 {
+				t.Fatalf("unclassified source inherited another source's labels: %v", input.SourceLabelIDs)
+			}
+			continue
+		}
+		if args.ArticleID != match || args.SourceID != f.source {
+			t.Fatalf("wrong queued article or subscription: %+v", args)
+		}
+		if len(input.SourceLabelIDs) != 1 || input.SourceLabelIDs[0] != id {
+			t.Fatalf("worker did not read the source's automatic follow: %v", input.SourceLabelIDs)
+		}
 	}
 	var linked bool
 	if err := f.pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM article_interest_labels WHERE article_id=$1 AND label_id=$2)", match, id).Scan(&linked); err != nil || !linked {

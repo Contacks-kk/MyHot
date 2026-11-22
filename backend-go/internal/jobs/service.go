@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -113,10 +114,25 @@ func (s *Service) ScanWithTriage(ctx context.Context, enqueueArticle ArticleEnqu
 	return s.repository.WithPersonalScanLockTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		byUser := make(map[int64]*userScanBucket)
 		var indexedIDs []string
-		appendCandidate := func(row scanUserArticle) {
-			hits, ok := s.matchesWithLabels(labels, row.Title, row.Excerpt, row.Body, row.Keywords, row.EntityIDs, row.LabelIDs)
+		sourceLabels := make(map[string][]string)
+		appendCandidate := func(row scanUserArticle) error {
+			var automatic []string
+			useSourceLabels := s.Labels != nil && row.FilterMode != "all"
+			if useSourceLabels {
+				var loaded bool
+				automatic, loaded = sourceLabels[row.SourceID]
+				if !loaded {
+					var err error
+					automatic, err = s.repository.SourceLabelIDsTx(ctx, tx, row.SourceID)
+					if err != nil {
+						return err
+					}
+					sourceLabels[row.SourceID] = automatic
+				}
+			}
+			hits, ok := s.matchesWithSourceLabels(labels, row.Title, row.Excerpt, row.Body, row.Keywords, row.EntityIDs, row.LabelIDs, automatic, useSourceLabels)
 			if !ok && row.FilterMode != "all" {
-				return
+				return nil
 			}
 			bucket := byUser[row.UserID]
 			if bucket == nil {
@@ -127,10 +143,10 @@ func (s *Service) ScanWithTriage(ctx context.Context, enqueueArticle ArticleEnqu
 				byUser[row.UserID] = bucket
 			}
 			if bucket.seenArticles[row.ArticleID] {
-				return
+				return nil
 			}
 			if bucket.perSourceCount[row.SourceID] >= perSourceUserRoundCap {
-				return
+				return nil
 			}
 			bucket.perSourceCount[row.SourceID]++
 			bucket.seenArticles[row.ArticleID] = true
@@ -147,6 +163,7 @@ func (s *Service) ScanWithTriage(ctx context.Context, enqueueArticle ArticleEnqu
 				coldStart:         row.ColdStart,
 				filterMode:        row.FilterMode,
 			})
+			return nil
 		}
 
 		// Collect incremental unscanned articles first so live arrivals retain incremental semantics.
@@ -161,7 +178,9 @@ func (s *Service) ScanWithTriage(ctx context.Context, enqueueArticle ArticleEnqu
 				return err
 			}
 			for _, candidate := range candidates {
-				appendCandidate(candidate)
+				if err := appendCandidate(candidate); err != nil {
+					return err
+				}
 			}
 			if err := s.repository.MarkArticleScannedTx(ctx, tx, article); err != nil {
 				return err
@@ -181,7 +200,9 @@ func (s *Service) ScanWithTriage(ctx context.Context, enqueueArticle ArticleEnqu
 			}
 			for _, candidate := range sliceItems {
 				indexedIDs = append(indexedIDs, candidate.ArticleID)
-				appendCandidate(candidate)
+				if err := appendCandidate(candidate); err != nil {
+					return err
+				}
 			}
 			clearedSubIDs = append(clearedSubIDs, sub.SubscriptionID)
 		}
@@ -287,6 +308,7 @@ func (s *Service) ProcessTriageBatch(ctx context.Context, args TriageBatchArgs, 
 			if err := enqueueArticle(ctx, ArticleArgs{
 				UserID:            args.UserID,
 				ArticleID:         item.ArticleID,
+				SourceID:          item.SourceID,
 				Revision:          item.Revision,
 				ModelVersion:      state.ModelVersion,
 				PreferenceVersion: state.PreferenceVersion,
@@ -336,6 +358,7 @@ func (s *Service) ProcessTriageBatch(ctx context.Context, args TriageBatchArgs, 
 		if err := enqueueArticle(ctx, ArticleArgs{
 			UserID:            args.UserID,
 			ArticleID:         chosen.ArticleID,
+			SourceID:          chosen.SourceID,
 			Revision:          chosen.Revision,
 			ModelVersion:      state.ModelVersion,
 			PreferenceVersion: state.PreferenceVersion,
@@ -365,14 +388,15 @@ func (s *Service) ProcessArticle(ctx context.Context, args ArticleArgs, jobID in
 	}
 
 	var labels tagging.MatchRules
-	if s.Labels != nil && len(input.LabelIDs)+len(input.EntityIDs) > 0 {
+	if s.Labels != nil && len(input.LabelIDs)+len(input.EntityIDs)+len(input.SourceLabelIDs) > 0 {
 		labels, err = s.Labels.LoadMatchRules(ctx)
 		if err != nil {
 			return err
 		}
 	}
-	hits, matched := s.matchesWithLabels(labels, input.Title, input.Excerpt, input.Body, input.Keywords, input.EntityIDs, input.LabelIDs)
-	if !matched && args.FilterMode != "all" {
+	useSourceLabels := s.Labels != nil && args.SourceID != "" && input.FilterMode != "all"
+	hits, matched := s.matchesWithSourceLabels(labels, input.Title, input.Excerpt, input.Body, input.Keywords, input.EntityIDs, input.LabelIDs, input.SourceLabelIDs, useSourceLabels)
+	if !matched && input.FilterMode != "all" {
 		return nil
 	}
 	dayStartUTC, err := shanghaiDayStartUTC(time.Now())
@@ -725,6 +749,21 @@ func (s *Service) matchesUserInterests(title, excerpt, body string, keywords, en
 	return hits, len(hits) > 0
 }
 
+/** matchesWithSourceLabels adds automatic source follows to explicit keyword and label matches. */
+func (s *Service) matchesWithSourceLabels(labels tagging.MatchRules, title, excerpt, body string, keywords, entities, manual, automatic []string, useSourceLabels bool) ([]string, bool) {
+	hits, matched := s.matchesWithLabels(labels, title, excerpt, body, keywords, entities, manual)
+	if !useSourceLabels {
+		return hits, matched
+	}
+	sourceHits, _ := labels.Match(automatic, title, excerpt)
+	for _, hit := range sourceHits {
+		if !slices.Contains(hits, hit) {
+			hits = append(hits, hit)
+		}
+	}
+	return hits, len(hits) > 0 || len(automatic) == 0
+}
+
 /** matchesWithLabels combines keyword, entity and stable label matches with OR semantics. */
 func (s *Service) matchesWithLabels(labels tagging.MatchRules, title, excerpt, body string, keywords, entities, labelIDs []string) ([]string, bool) {
 	resolved := labels.ResolveEntities(entities)
@@ -762,6 +801,7 @@ func planUserDispatches(userID int64, items []userScanCandidate, remaining int, 
 		return ArticleArgs{
 			UserID:            userID,
 			ArticleID:         item.articleID,
+			SourceID:          item.sourceID,
 			Revision:          item.revision,
 			ModelVersion:      item.modelVersion,
 			PreferenceVersion: item.preferenceVersion,

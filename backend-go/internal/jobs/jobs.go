@@ -61,6 +61,7 @@ import (
 )
 
 type ArticleArgs struct {
+	SourceID          string `json:"sourceId,omitempty"`
 	UserID            int64  `json:"userId" river:"unique"`
 	ArticleID         string `json:"articleId" river:"unique"`
 	Revision          int    `json:"revision"`

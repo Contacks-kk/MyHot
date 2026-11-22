@@ -1370,7 +1370,9 @@ export default function SourcesRoute() {
                     {source.tags && source.tags.length > 0 && (
                       <div className="mt-2 flex flex-wrap items-center gap-1.5 pl-[23px]">
                         <span className="text-[10.5px] text-ink-4 flex items-center gap-1 mr-0.5">
-                          <span>{locale === "en" ? "Auto-Labels:" : "智能标签:"}</span>
+                          <span>{source.enabled && source.filterMode !== "all"
+                            ? (locale === "en" ? "Automatically followed:" : "自动关注：")
+                            : (locale === "en" ? "Source tags:" : "信源标签：")}</span>
                         </span>
                         {source.tags.map((tag) => (
                           <span
@@ -1702,8 +1704,8 @@ export default function SourcesRoute() {
                                         ? "Full Tracking: all articles are evaluated. Click to switch to Label Filter."
                                         : "当前为全量跟踪：该信源所有新文章均进入精选打分。点击切换为按标签过滤。")
                                     : (locale === "en"
-                                        ? "Label Filter: only matching articles are evaluated (saves tokens). Click to switch to Full Tracking."
-                                        : "当前按标签过滤：仅命中关注项的文章打分（省Token）。点击切换为全量跟踪。")
+                                        ? "Matches automatically followed source tags or manual interests. When no stable source tags are available, articles continue to model selection."
+                                        : "匹配该信源自动关注的标签或手动关注项。标签尚未识别时，直接进入后续筛选。点击切换为全量跟踪。")
                                 }
                                 className={`h-8 rounded-full border px-3.5 text-[11px] font-medium transition-colors disabled:opacity-50 ${
                                   source.filterMode === "all"
