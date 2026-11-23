@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -62,9 +64,11 @@ func TestRepositoryTranslationEligibilityAttemptsAndRevisionSafeUpsert(t *testin
 		t.Fatal(err)
 	}
 
-	ids, err := repository.DueArticles(ctx, 30)
-	if err != nil || len(ids) != 1 || ids[0] != articleID {
-		t.Fatalf("due IDs = %v, err=%v", ids, err)
+	// Other packages share the CI database, so their fixtures can also be due.
+	// Use a limit large enough that unrelated rows cannot hide this test article.
+	ids, err := repository.DueArticles(ctx, math.MaxInt32)
+	if err != nil || !slices.Contains(ids, articleID) {
+		t.Fatalf("article %q missing from due IDs %v, err=%v", articleID, ids, err)
 	}
 	article, err := repository.Article(ctx, articleID)
 	if err != nil || article == nil || article.Revision != 3 || article.Channel != "news" || !article.Selected || *article.BodyText != "Original body" {
@@ -79,6 +83,10 @@ func TestRepositoryTranslationEligibilityAttemptsAndRevisionSafeUpsert(t *testin
 	var attempts int
 	if err := orm.Table("translation_attempts").Select("attempts").Where("article_id = ?", articleID).Scan(&attempts).Error; err != nil || attempts != 2 {
 		t.Fatalf("recorded attempts = %d, err=%v", attempts, err)
+	}
+	ids, err = repository.DueArticles(ctx, math.MaxInt32)
+	if err != nil || slices.Contains(ids, articleID) {
+		t.Fatalf("article %q with terminal current-revision attempt: due IDs = %v, err=%v", articleID, ids, err)
 	}
 
 	changed, err := repository.SaveTranslation(ctx, Translation{ArticleID: articleID, Revision: 3, Title: "标题", BodyHTML: "<p>正文</p>", BodyText: "正文", Complete: true})
@@ -102,10 +110,6 @@ func TestRepositoryTranslationEligibilityAttemptsAndRevisionSafeUpsert(t *testin
 	changed, err = repository.SaveTranslation(ctx, Translation{ArticleID: articleID, Revision: 3, Title: "替换", BodyHTML: "<p>替换</p>", BodyText: "替换", Complete: true})
 	if err != nil || changed {
 		t.Fatalf("source translation was overwritten: changed=%t err=%v", changed, err)
-	}
-	ids, err = repository.DueArticles(ctx, 30)
-	if err != nil || len(ids) != 0 {
-		t.Fatalf("article with terminal current-revision attempt remained due: %v err=%v", ids, err)
 	}
 }
 
