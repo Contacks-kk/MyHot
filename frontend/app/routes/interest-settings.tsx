@@ -6,8 +6,10 @@ import type { Route } from "./+types/interest-settings";
 import { IconSearch } from "../components/icons";
 import { FormMessage, fieldClass } from "../features/account/common";
 import { userApiGet, userApiMe } from "../lib/user-api.server";
+import { getDict } from "../lib/i18n";
+import { useLocalePreference } from "../lib/local-state";
 
-export const handle: Screen = { tab: "interests", name: "关注项" };
+export const handle: Screen = { tab: "me", name: getDict("zh").nav.interests };
 
 interface Label {
   id: string;
@@ -38,7 +40,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   };
 }
 
-export const meta: Route.MetaFunction = () => [{ title: "关注项 · MyHOT" }, { name: "robots", content: "noindex, nofollow" }];
+export const meta: Route.MetaFunction = () => [{ title: `${handle.name} · MyHOT` }, { name: "robots", content: "noindex, nofollow" }];
 export const headers: Route.HeadersFunction = () => ({ "Cache-Control": "private, no-store", "X-Robots-Tag": "noindex, nofollow" });
 
 /** Calculate hotness score for sorting by hot. */
@@ -241,6 +243,7 @@ function TagRow({
 /** Render search list with fuzzy search, hot/time/article sorting, and two horizontal tabs. */
 export default function InterestSettings() {
   const initial = useLoaderData<typeof loader>();
+  const locale = useLocalePreference();
   const initialSelected = useMemo(
     () => new Set([...initial.entityIds, ...initial.labelIds]),
     [initial.entityIds, initial.labelIds],
@@ -364,7 +367,7 @@ export default function InterestSettings() {
       {/* Header section */}
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-[25px] font-semibold tracking-tight text-ink">关注项</h1>
+          <h1 className="text-[25px] font-semibold tracking-tight text-ink">{getDict(locale).nav.interests}</h1>
           <p className="mt-1 text-[13px] text-ink-3">
             关注信源后会自动关注它最相关的 3 个稳定标签。你也可以手动补充关注。
           </p>

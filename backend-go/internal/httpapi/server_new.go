@@ -39,6 +39,7 @@ import (
 	"aihot/backend-go/internal/tagging"
 	"aihot/backend-go/internal/topics"
 	"aihot/backend-go/internal/usersources"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 	"gorm.io/gorm"
 )
@@ -182,6 +183,7 @@ func New(cfg config.Config, db *pgxpool.Pool, orm *gorm.DB, entities map[string]
 	vocabulary, _ := editorial.LoadVocabulary()
 	server.AdminLabels = adminlabels.NewService(adminlabels.NewRepository(orm, vocabulary))
 	server.UserSources = usersources.NewService(orm, cfg.SourceSchedule)
+	server.UserSources.SetImageProxySecret(cfg.ImageProxySignSecret)
 	server.UserSources.SetMaterials(materialService)
 	server.UserSources.SetCollectorEnabled(cfg.CollectorEnabled)
 	server.UserSources.SetEnqueuer(func(ctx context.Context, sourceID, sourceKind string, userID int64) (int64, error) {

@@ -53,7 +53,7 @@ export function PersonalFunnel({ funnel, isEn }: { funnel: FunnelView; isEn: boo
             </button>
           )}
           <Link to="/interests" className="text-ink-4 hover:text-accent">
-            {isEn ? "Interests" : "调整关注项"}
+            {isEn ? "Manage tags" : "调整标签"}
           </Link>
           <Link to="/sources" className="text-ink-4 hover:text-accent">
             {isEn ? "Sources" : "管理信源"}

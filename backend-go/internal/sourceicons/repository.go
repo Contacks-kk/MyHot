@@ -35,8 +35,10 @@ func (r *GormRepository) Missing(ctx context.Context, now time.Time, limit int) 
 				SELECT url, discovered_at FROM articles WHERE source_id = s.id ORDER BY discovered_at DESC LIMIT 10
 			) recent
 		) a ON true
-		WHERE s.icon_url IS NULL AND s.kind <> 'x_search' AND EXISTS (SELECT 1 FROM user_source_subscriptions u WHERE u.source_id=s.id AND u.enabled)
-		  AND (s.icon_checked_at IS NULL OR s.icon_checked_at < ? - make_interval(days => CASE WHEN s.kind = 'mp_account' THEN ?::int ELSE ?::int END))
+		WHERE s.icon_url IS NULL AND s.kind <> 'x_search'
+		  AND ((s.kind IN ('rss', 'web_list') AND s.health <> 'failing')
+		    OR EXISTS (SELECT 1 FROM user_source_subscriptions u WHERE u.source_id=s.id AND u.enabled))
+		  AND (s.icon_checked_at IS NULL OR s.icon_checked_at < ?::timestamptz - make_interval(days => CASE WHEN s.kind = 'mp_account' THEN ?::int ELSE ?::int END))
 		ORDER BY s.icon_checked_at NULLS FIRST, s.id
 		LIMIT ?`, now, MPRetryDays, RetryDays, limit).Scan(&sources)
 	return sources, result.Error

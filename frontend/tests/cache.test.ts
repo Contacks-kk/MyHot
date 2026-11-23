@@ -77,9 +77,43 @@ const account = createServer((req,res)=>{
     id:"agent", name:"Agent 智能体", kind:"topic", status:"active", aliases:["Agent","智能体"], definition:"自主规划与执行任务。", count:2, userCount:1,
   }]}));
   if(pathname==="/api/me/daily")return res.end(JSON.stringify({reports:[]}));
+  if (pathname === "/api/me/recommended-articles") {
+    return res.end(JSON.stringify({
+      items: [{
+        articleId: "fixture-recommendation",
+        score: 89,
+        title: "Fixture recommendation",
+        summary: "Fixture summary",
+        url: "https://papers.example.invalid/article",
+        sourceId: "fixture-source",
+        sourceName: "Research feed",
+        sourceIconUrl: "/api/img-proxy?fixture=recommendation-logo",
+        sourceKind: "rss",
+        isSubscribed: false,
+        createdAt: "2026-10-04T00:00:00Z",
+        matchedTags: [],
+      }],
+      page: 1,
+      hasMore: false,
+    }));
+  }
   if(pathname==="/api/me/feed/funnel")return res.end(JSON.stringify({totalScanned:3,passedCount:2,filteredCount:1,filteredItems:[]}));
   if(pathname==="/api/me/hot")hotQueries.push(req.url!);
-  if(["/api/me/feed","/api/me/hot"].includes(pathname))return res.end(JSON.stringify({items:[{articleId:user,score:90,title:`${user} private title`,summary:`${user} private summary`,source:"Local",url:"https://example.invalid/article",createdAt:"2026-10-04T00:00:00Z"}]}));
+  if (["/api/me/feed", "/api/me/hot"].includes(pathname)) {
+    const range = new URL(req.url!, "http://account.local").searchParams.get("range");
+    return res.end(JSON.stringify({
+      items: [{
+        articleId: user,
+        score: 90,
+        title: `${user} private title`,
+        summary: `${user} private summary`,
+        source: "Local",
+        sourceIconUrl: range === "today" ? "/api/img-proxy?fixture=hot-logo" : undefined,
+        url: "https://example.invalid/article",
+        createdAt: "2026-10-04T00:00:00Z",
+      }],
+    }));
+  }
   res.statusCode=404;res.end("{}");
 });
 before(async()=>{
@@ -126,8 +160,12 @@ test("unified hotspots carry today's funnel, date controls, and the requested de
   assert.equal($("h1").text(), "个人热点榜单");
   assert.match($("main").text(), /今日信息流与过滤动态/);
   assert.match($("main").text(), /2000-01-02 · 北京时间全天/);
-  assert.deepEqual($("aside nav a").slice(0, 5).map((_, element) => $(element).text().trim()).get(), ["个人热点榜单", "关注项", "我的日报", "模型配置", "我的信源"]);
-  assert.deepEqual($('nav[aria-label="底部导航"] a').map((_, element) => $(element).text().trim()).get(), ["个人热点榜单", "关注项", "我的日报", "我的账号"]);
+  const sidebar = $('nav[aria-label="主导航"]');
+  assert.deepEqual(sidebar.find("a").slice(0, 6).map((_, element) => $(element).text().trim()).get(), ["个人热点榜单", "为你推荐", "我的日报", "信源", "标签", "模型配置"]);
+  assert.deepEqual($('nav[aria-label="底部导航"] a').map((_, element) => $(element).text().trim()).get(), ["个人热点榜单", "为你推荐", "我的日报", "我的账号"]);
+  assert.equal(sidebar.find("button").length, 0);
+  assert.equal($('nav[aria-label="内容模式切换"]').length, 0);
+  assert.equal($('article [title="https://example.invalid/article"] [aria-hidden="true"]').text(), "E");
   assert.deepEqual($('nav[aria-label="热点时间范围"]').children().map((_, element) => $(element).text().trim()).get(), ["今日", "48小时", "其他日期"]);
   assert.equal($('input[type="date"]').attr("value"), "2000-01-02");
   assert.ok(hotQueries.includes("/api/me/hot?range=date&page=2&date=2000-01-02"));
@@ -135,9 +173,27 @@ test("unified hotspots carry today's funnel, date controls, and the requested de
   for (const range of ["today", "48h"]) {
     const selected = await fetch(origin + `/hot?range=${range}`, { headers: alice });
     assert.equal(selected.status, 200);
-    await selected.text();
+    const hotPage = cheerio.load(await selected.text());
+    if (range === "today") {
+      assert.equal(hotPage('article [title="https://example.invalid/article"] img').attr("src"), "/api/img-proxy?fixture=hot-logo");
+    }
     assert.equal(hotQueries.at(-1), `/api/me/hot?range=${range}&page=1`);
   }
+  const recommended = await fetch(origin + "/recommendations", { headers: alice });
+  assert.equal(recommended.status, 200, logs);
+  const recommendationPage = cheerio.load(await recommended.text());
+  assert.equal(recommendationPage('nav[aria-label="内容模式切换"]').length, 0);
+  assert.equal(recommendationPage('nav[aria-label="底部导航"] [aria-current="page"]').attr("href"), "/recommendations");
+  assert.equal(recommendationPage('article [title="Research feed"] img').attr("src"), "/api/img-proxy?fixture=recommendation-logo");
+
+  const account = await fetch(origin + "/more", { headers: alice });
+  assert.equal(account.status, 200, logs);
+  const accountPage = cheerio.load(await account.text());
+  const logout = accountPage("main button").filter((_, element) => accountPage(element).text().trim() === "退出登录");
+  assert.equal(logout.length, 1);
+  assert.equal(logout.closest(".lg\\:hidden").length, 0);
+  assert.equal(accountPage('main a[href="/interests"] span').first().text(), "标签");
+  assert.equal(accountPage('main a[href="/sources"] span').first().text(), "信源");
 });
 test("the verified workspace renders stable label choices with scoped recommendation counts", async () => {
   const response = await fetch(origin + "/interests", { headers: alice });

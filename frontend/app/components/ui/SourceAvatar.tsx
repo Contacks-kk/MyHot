@@ -3,20 +3,27 @@ import { sourceInitial } from "../../lib/format";
 
 /** Round avatar for X accounts (or a source icon); a tinted initial when there is no image. */
 export function SourceAvatar({ name, iconUrl, avatarUrl, iconSrcSet, avatarSrcSet, size = 18 }: { name: string; iconUrl?: string | null; avatarUrl?: string | null; iconSrcSet?: string; avatarSrcSet?: string; size?: number }) {
-  const [failed, setFailed] = useState(false);
+  const [failedURL, setFailedURL] = useState<string | null>(null);
   const src = avatarUrl ?? iconUrl;
-  if (src && !failed) {
+  if (src && src !== failedURL) {
     return (
       <img
         src={src}
         srcSet={avatarUrl ? avatarSrcSet : iconSrcSet}
         sizes={`${size}px`}
         decoding="async"
+        referrerPolicy="no-referrer"
         alt=""
         width={size}
         height={size}
         loading="lazy"
-        onError={() => setFailed(true)}
+        ref={(image) => {
+          // A cached failure can occur before React attaches the error handler.
+          if (image?.complete && image.naturalWidth === 0) {
+            setFailedURL(src);
+          }
+        }}
+        onError={() => setFailedURL(src)}
         className="shrink-0 rounded-full bg-bg-sunk object-cover"
         style={{ width: size, height: size }}
       />

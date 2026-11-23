@@ -19,6 +19,7 @@ import {
   IconSparkles,
 } from "../components/icons";
 import { ThemeSwitch } from "../components/shell/ThemeSwitch";
+import { SourceAvatar } from "../components/ui/SourceAvatar";
 
 export const handle: Screen = { tab: "recommendations", name: "为你推荐" };
 
@@ -32,6 +33,7 @@ interface RecommendedItem {
   url: string;
   sourceId: string;
   sourceName: string;
+  sourceIconUrl?: string;
   sourceKind: string;
   isSubscribed: boolean;
   createdAt: string;
@@ -226,34 +228,10 @@ export default function UserRecommendations() {
           </p>
         </div>
 
-        {/* 标题与内容模式切换：同一行对齐，左侧标题，右侧切换药丸条 */}
-        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2.5">
-          <h1 className="editorial-title text-[22px] font-semibold tracking-tight text-ink sm:text-[28px] lg:text-[32px] flex items-center gap-2">
-            <span>{isEn ? "Recommended for You" : "为你推荐"}</span>
-            <span className="text-[18px]">✨</span>
-          </h1>
-
-          <div className="relative shrink-0">
-            <nav
-              aria-label={isEn ? "Content mode switch" : "内容模式切换"}
-              className="flex items-center gap-1 rounded-full border border-line bg-bg-sunk p-1 text-[11.5px] sm:text-[12px] shadow-xs"
-            >
-              <Link
-                to="/hot"
-                prefetch="intent"
-                className="rounded-full px-3 py-1 text-ink-3 hover:text-ink transition-colors flex items-center gap-1"
-              >
-                <IconFlame size={12} className="text-ink-4" />
-                <span>{dict.nav.hot}</span>
-              </Link>
-
-              <span className="rounded-full bg-surface px-3.5 py-1 font-semibold text-accent shadow-xs flex items-center gap-1">
-                <IconSparkles size={12} className="text-accent" />
-                <span>{isEn ? "Recommended" : "为你推荐"}</span>
-              </span>
-            </nav>
-          </div>
-        </div>
+        <h1 className="editorial-title text-[22px] font-semibold tracking-tight text-ink sm:text-[28px] lg:text-[32px] flex items-center gap-2">
+          <span>{isEn ? "Recommended for You" : "为你推荐"}</span>
+          <span className="text-[18px]">✨</span>
+        </h1>
       </div>
 
       {/* 移动端侧滑抽屉柜 */}
@@ -467,9 +445,10 @@ export default function UserRecommendations() {
 
                   {/* Card bottom: Source follow action & timestamp */}
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line/60 pt-2.5 text-[11px] text-ink-4">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-ink-2 truncate max-w-[200px]" title={item.sourceName}>
-                        {isEn ? "Source: " : "来源："}{item.sourceName}
+                    <div className="flex min-w-0 max-w-full items-center gap-2">
+                      <span className="flex min-w-0 max-w-[200px] items-center gap-1.5 font-medium text-ink-2" title={item.sourceName}>
+                        <SourceAvatar name={hostOf(item.url)} iconUrl={item.sourceIconUrl} size={16} />
+                        <span className="truncate">{isEn ? "Source: " : "来源："}{item.sourceName}</span>
                       </span>
                       <span
                         className={`rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold ${

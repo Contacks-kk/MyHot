@@ -11,19 +11,20 @@ import (
 )
 
 type contentCard struct {
-	ArticleID    string               `json:"articleId"`
-	Score        float64              `json:"score"`
-	Title        string               `json:"title"`
-	Summary      string               `json:"summary"`
-	Reason       *string              `json:"reason"`
-	URL          string               `json:"url"`
-	Source       string               `json:"source"`
-	SourceID     string               `json:"sourceId,omitempty"`
-	IsSubscribed bool                 `json:"isSubscribed"`
-	PublishedAt  *time.Time           `json:"publishedAt"`
-	CreatedAt    time.Time            `json:"createdAt"`
-	Historical   bool                 `json:"historical"`
-	Media        []mediaurl.MediaView `json:"media"`
+	ArticleID     string               `json:"articleId"`
+	Score         float64              `json:"score"`
+	Title         string               `json:"title"`
+	Summary       string               `json:"summary"`
+	Reason        *string              `json:"reason"`
+	URL           string               `json:"url"`
+	Source        string               `json:"source"`
+	SourceID      string               `json:"sourceId,omitempty"`
+	SourceIconURL *string              `json:"sourceIconUrl,omitempty"`
+	IsSubscribed  bool                 `json:"isSubscribed"`
+	PublishedAt   *time.Time           `json:"publishedAt"`
+	CreatedAt     time.Time            `json:"createdAt"`
+	Historical    bool                 `json:"historical"`
+	Media         []mediaurl.MediaView `json:"media"`
 }
 
 /** contentResponses projects personal result rows into API cards with signed media proxy URLs. */
@@ -32,19 +33,20 @@ func contentResponses(items []personal.Card, now time.Time, imageSecret, thumbMo
 	for _, item := range items {
 		mediaViews := mediaurl.BuildViews(item.MediaJSON, thumbMode, now, imageSecret, mediaLimit)
 		responses = append(responses, contentCard{
-			ArticleID:    item.ArticleID,
-			Score:        item.Score,
-			Title:        item.Title,
-			Summary:      item.Summary,
-			Reason:       item.Reason,
-			URL:          item.URL,
-			Source:       item.Source,
-			SourceID:     item.SourceID,
-			IsSubscribed: item.IsSubscribed,
-			PublishedAt:  item.PublishedAt,
-			CreatedAt:    item.CreatedAt,
-			Historical:   item.Historical,
-			Media:        mediaViews,
+			ArticleID:     item.ArticleID,
+			Score:         item.Score,
+			Title:         item.Title,
+			Summary:       item.Summary,
+			Reason:        item.Reason,
+			URL:           item.URL,
+			Source:        item.Source,
+			SourceID:      item.SourceID,
+			SourceIconURL: mediaurl.SourceIconDisplayURL(item.SourceIconURL, now, imageSecret),
+			IsSubscribed:  item.IsSubscribed,
+			PublishedAt:   item.PublishedAt,
+			CreatedAt:     item.CreatedAt,
+			Historical:    item.Historical,
+			Media:         mediaViews,
 		})
 	}
 
@@ -111,20 +113,21 @@ func (s *Server) hot(w http.ResponseWriter, r *http.Request, u userContext) {
 }
 
 type recommendedArticleResponse struct {
-	ArticleID    string               `json:"articleId"`
-	Score        int                  `json:"score"`
-	Title        string               `json:"title"`
-	Summary      string               `json:"summary"`
-	Reason       string               `json:"reason"`
-	URL          string               `json:"url"`
-	SourceID     string               `json:"sourceId"`
-	SourceName   string               `json:"sourceName"`
-	SourceKind   string               `json:"sourceKind"`
-	IsSubscribed bool                 `json:"isSubscribed"`
-	PublishedAt  *time.Time           `json:"publishedAt"`
-	CreatedAt    time.Time            `json:"createdAt"`
-	Media        []mediaurl.MediaView `json:"media"`
-	MatchedTags  []string             `json:"matchedTags"`
+	ArticleID     string               `json:"articleId"`
+	Score         int                  `json:"score"`
+	Title         string               `json:"title"`
+	Summary       string               `json:"summary"`
+	Reason        string               `json:"reason"`
+	URL           string               `json:"url"`
+	SourceID      string               `json:"sourceId"`
+	SourceName    string               `json:"sourceName"`
+	SourceKind    string               `json:"sourceKind"`
+	SourceIconURL *string              `json:"sourceIconUrl,omitempty"`
+	IsSubscribed  bool                 `json:"isSubscribed"`
+	PublishedAt   *time.Time           `json:"publishedAt"`
+	CreatedAt     time.Time            `json:"createdAt"`
+	Media         []mediaurl.MediaView `json:"media"`
+	MatchedTags   []string             `json:"matchedTags"`
 }
 
 /** recommendedArticles returns personalized article recommendations from un-subscribed sources. */
@@ -160,20 +163,21 @@ func (s *Server) recommendedArticles(w http.ResponseWriter, r *http.Request, u u
 	for _, item := range items {
 		mediaViews := mediaurl.BuildViews(item.MediaJSON, "image-336", now, s.Config.ImageProxySignSecret, 4)
 		responses = append(responses, recommendedArticleResponse{
-			ArticleID:    item.ArticleID,
-			Score:        item.Score,
-			Title:        item.Title,
-			Summary:      item.Summary,
-			Reason:       item.Reason,
-			URL:          item.URL,
-			SourceID:     item.SourceID,
-			SourceName:   item.SourceName,
-			SourceKind:   item.SourceKind,
-			IsSubscribed: item.IsSubscribed,
-			PublishedAt:  item.PublishedAt,
-			CreatedAt:    item.CreatedAt,
-			Media:        mediaViews,
-			MatchedTags:  item.MatchedTags,
+			ArticleID:     item.ArticleID,
+			Score:         item.Score,
+			Title:         item.Title,
+			Summary:       item.Summary,
+			Reason:        item.Reason,
+			URL:           item.URL,
+			SourceID:      item.SourceID,
+			SourceName:    item.SourceName,
+			SourceKind:    item.SourceKind,
+			SourceIconURL: mediaurl.SourceIconDisplayURL(item.SourceIconURL, now, s.Config.ImageProxySignSecret),
+			IsSubscribed:  item.IsSubscribed,
+			PublishedAt:   item.PublishedAt,
+			CreatedAt:     item.CreatedAt,
+			Media:         mediaViews,
+			MatchedTags:   item.MatchedTags,
 		})
 	}
 

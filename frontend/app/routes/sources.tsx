@@ -1,14 +1,16 @@
 import { BackLink } from "../components/ui/BackLink";
+import { SourceAvatar } from "../components/ui/SourceAvatar";
 import { useState, useEffect, type FormEvent } from "react";
 import { Link, useLoaderData } from "react-router";
 import type { Route } from "./+types/sources";
 import type { Screen } from "../components/shell/screens";
-import { IconChevronRight, IconRss, IconSearch } from "../components/icons";
+import { IconChevronRight, IconRss, IconSearch, IconTag, IconGlobe, IconFilter } from "../components/icons";
 import { FormMessage, fieldClass } from "../features/account/common";
 import { userApiGet, userApiMe } from "../lib/user-api.server";
 import { useLocalePreference } from "../lib/local-state";
+import { getDict } from "../lib/i18n";
 
-export const handle: Screen = { tab: "me", name: "我的信源" };
+export const handle: Screen = { tab: "me", name: getDict("zh").nav.sources };
 
 type Subscription = {
   id: number;
@@ -18,6 +20,7 @@ type Subscription = {
   nameInherited: boolean;
   updatedExisting?: boolean;
   url: string;
+  iconUrl?: string;
   itemSelector?: string;
   titleSelector?: string;
   enabled: boolean;
@@ -61,6 +64,7 @@ type ExploreItem = {
   name: string;
   kind: string;
   url: string;
+  iconUrl?: string;
   health: string;
   subscriberCount: number;
   articleCount: number;
@@ -83,12 +87,27 @@ type SourcePreviewData = {
   articles: PreviewArticle[];
 };
 
+const explorePageSize = 20;
+
+/** Build the same catalog request for the first page, search, and subsequent pages. */
+function exploreURL(query: string, offset: number) {
+  const params = new URLSearchParams({
+    sort: "name",
+    limit: String(explorePageSize + 1),
+    offset: String(offset),
+  });
+  if (query.trim()) {
+    params.set("q", query.trim());
+  }
+  return `/api/me/sources/explore?${params}`;
+}
+
 /** Load the current user's sources and initial public explore pool. */
 export async function loader({ request }: Route.LoaderArgs) {
   const [user, result, explore] = await Promise.all([
     userApiMe(request),
     userApiGet<{ sources: Subscription[] }>(request, "/api/me/sources"),
-    userApiGet<{ sources: ExploreItem[] }>(request, "/api/me/sources/explore"),
+    userApiGet<{ sources: ExploreItem[] }>(request, exploreURL("", 0)),
   ]);
 
   return {
@@ -98,7 +117,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   };
 }
 
-export const meta: Route.MetaFunction = () => [{ title: "我的信源 · MyHOT" }, { name: "robots", content: "noindex, nofollow" }];
+export const meta: Route.MetaFunction = () => [{ title: `${handle.name} · MyHOT` }, { name: "robots", content: "noindex, nofollow" }];
 export const headers: Route.HeadersFunction = () => ({ "Cache-Control": "private, no-store", "X-Robots-Tag": "noindex, nofollow" });
 
 type SourceKind = "rss" | "web_list" | "ingest";
@@ -135,8 +154,12 @@ export default function SourcesRoute() {
   const [sourceKind, setSourceKind] = useState<SourceKind | null>(null);
 
   // 公共信源探索与模糊搜索
-  const [exploreQuery, setExploreQuery] = useState("");
-  const [exploreResults, setExploreResults] = useState<ExploreItem[]>(initial.initialExplore);
+  const [exploreRequest, setExploreRequest] = useState<{ query: string; offset: number } | null>(null);
+  const exploreQuery = exploreRequest?.query ?? "";
+  const [exploreResults, setExploreResults] = useState<ExploreItem[]>(initial.initialExplore.slice(0, explorePageSize));
+  const [nextExploreOffset, setNextExploreOffset] = useState<number | null>(
+    initial.initialExplore.length > explorePageSize ? explorePageSize : null,
+  );
   const [exploreBusy, setExploreBusy] = useState(false);
   const [exploreError, setExploreError] = useState("");
 
@@ -190,6 +213,7 @@ export default function SourcesRoute() {
   const [editMessage, setEditMessage] = useState("");
   const [editShowAdvancedWeb, setEditShowAdvancedWeb] = useState(false);
   const [fetching, setFetching] = useState<number | null>(null);
+  const [switchingFilterId, setSwitchingFilterId] = useState<number | null>(null);
   const [fetchResults, setFetchResults] = useState<Record<number, FetchResult>>({});
 
   const [discovering, setDiscovering] = useState(false);
@@ -215,39 +239,60 @@ export default function SourcesRoute() {
   const [ingestMsg, setIngestMsg] = useState("");
   const [ingestErr, setIngestErr] = useState("");
 
-  // 监听搜索词变动，执行防抖模糊匹配
+  /** Start a new search or request the next page of the current one. */
+  function requestExplore(query: string, offset: number) {
+    if (query !== exploreQuery) {
+      setExploreResults([]);
+      setNextExploreOffset(null);
+    }
+    setExploreBusy(true);
+    setExploreError("");
+    setExploreRequest({
+      query,
+      offset,
+    });
+  }
+
+  // Cancel the current request when the search changes or the directory closes.
   useEffect(() => {
-    if (view !== "all") {
+    if (view !== "all" || !exploreRequest) {
       return;
     }
 
     const controller = new AbortController();
     const timer = setTimeout(() => {
-      void searchExplore(exploreQuery, controller.signal);
-    }, 300);
+      void searchExplore(exploreRequest.query, exploreRequest.offset, controller.signal);
+    }, exploreRequest.offset === 0 ? 300 : 0);
 
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [exploreQuery, view]);
+  }, [exploreRequest, view]);
 
-  /** 执行公共信源模糊检索 */
-  async function searchExplore(query: string, signal: AbortSignal) {
+  /** Fetch one catalog page and retain previously loaded rows for the same search. */
+  async function searchExplore(query: string, offset: number, signal: AbortSignal) {
     setExploreBusy(true);
     setExploreError("");
 
     try {
-      const q = query.trim();
-      const url = q ? `/api/me/sources/explore?q=${encodeURIComponent(q)}` : "/api/me/sources/explore";
-      const res = await fetch(url, { signal });
+      const res = await fetch(exploreURL(query, offset), { signal });
       const data = await res.json() as { sources?: ExploreItem[]; error?: string };
       if (!res.ok) {
         throw new Error(data.error || "检索公共信源失败");
       }
 
       if (!signal.aborted) {
-        setExploreResults(data.sources ?? []);
+        const batch = data.sources ?? [];
+        const page = batch.slice(0, explorePageSize);
+        setExploreResults((rows) => {
+          if (offset === 0) {
+            return page;
+          }
+          const seen = new Set(rows.map((row) => row.sourceId));
+          return [...rows, ...page.filter((row) => !seen.has(row.sourceId))];
+        });
+        setNextExploreOffset(batch.length > explorePageSize ? offset + explorePageSize : null);
       }
     } catch (e) {
       if (!signal.aborted) {
@@ -674,9 +719,13 @@ export default function SourcesRoute() {
     }
   }
 
-  async function toggleFilterMode(source: Subscription) {
-    const nextMode = source.filterMode === "all" ? "label" : "all";
+  async function toggleFilterMode(source: Subscription, targetMode?: "all" | "label") {
+    const nextMode = targetMode ?? (source.filterMode === "all" ? "label" : "all");
+    if (source.filterMode === nextMode) {
+      return;
+    }
     setBusy(true);
+    setSwitchingFilterId(source.id);
     setError("");
     try {
       const body = {
@@ -711,6 +760,7 @@ export default function SourcesRoute() {
     } catch (e) {
       setError(e instanceof Error ? e.message : (locale === "en" ? "Failed to update filter mode" : "更新过滤策略失败"));
     } finally {
+      setSwitchingFilterId(null);
       setBusy(false);
     }
   }
@@ -863,6 +913,7 @@ export default function SourcesRoute() {
       name: source.name,
       kind: source.kind ?? "rss",
       url: source.url,
+      iconUrl: source.iconUrl,
       health: source.health,
       subscriberCount: 0,
       articleCount: 0,
@@ -879,7 +930,7 @@ export default function SourcesRoute() {
 
       <div className="mt-3 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-[25px] font-semibold tracking-tight text-ink">{locale === "en" ? "My Sources" : "我的信源"}</h1>
+          <h1 className="text-[25px] font-semibold tracking-tight text-ink">{getDict(locale).nav.sources}</h1>
           <p className="mt-2 max-w-[680px] text-[13px] leading-relaxed text-ink-3">
             {locale === "en"
               ? "Discover and follow public tech sources directly, or manually add RSS feeds, web crawlers, and push Webhooks."
@@ -1273,13 +1324,13 @@ export default function SourcesRoute() {
               <input
                 className={`${fieldClass} pl-9 pr-9 h-11 text-[13px]`}
                 value={exploreQuery}
-                onChange={e => setExploreQuery(e.target.value)}
+                onChange={e => requestExplore(e.target.value, 0)}
                 placeholder={locale === "en" ? "Search sources (e.g. OpenAI, 36Kr, Hacker News, tech blogs)..." : "搜索信源名称、网址、关键词（如：OpenAI、知乎、36氪、Hacker News...）"}
               />
               {exploreQuery && (
                 <button
                   type="button"
-                  onClick={() => setExploreQuery("")}
+                  onClick={() => requestExplore("", 0)}
                   className="absolute right-3 text-ink-4 hover:text-ink text-[13px] px-1"
                   title="清空搜索"
                 >
@@ -1289,14 +1340,18 @@ export default function SourcesRoute() {
             </div>
 
             <div className="mt-2.5 flex items-center justify-between text-[11px] text-ink-4">
-              <span>{exploreBusy ? "正在搜索…" : exploreQuery.trim() ? `搜索结果（${allSources.length} 个匹配）` : "平台热门与活跃信源推荐"}</span>
+              <span role="status">
+                {exploreBusy
+                  ? (locale === "en" ? "Loading sources…" : "正在加载信源…")
+                  : (locale === "en" ? `${allSources.length} sources shown` : `已显示 ${allSources.length} 个信源`)}
+              </span>
               <span className="hidden sm:inline">关注后即刻同步已有收录历史</span>
             </div>
           </div>
 
           {exploreError && <div className="mt-3"><FormMessage error>{exploreError}</FormMessage></div>}
           {/* Source rows */}
-          {allSources.length === 0 ? (
+          {allSources.length === 0 ? !exploreBusy && !exploreError && (
             <div className="card mt-4 border-dashed p-8 text-center">
               <p className="text-[14px] font-semibold text-ink">
                 {locale === "en" ? "No matching public sources found" : "没有找到匹配的公共信源"}
@@ -1317,34 +1372,37 @@ export default function SourcesRoute() {
                 const publicResult = publicIDs.has(item.sourceId);
                 return (
                   <article key={item.sourceId} className="card flex flex-col justify-between gap-3 p-4 transition-colors hover:border-accent/40 sm:flex-row sm:items-center sm:p-5">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-start justify-between gap-2">
-                        <h3 className="text-[14px] font-bold text-ink leading-snug line-clamp-1" title={item.name}>
-                          {item.name}
-                        </h3>
-                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${isWebList ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"}`}>
-                          {isIngest ? "Webhook" : isWebList ? "网页列表" : "RSS / Atom"}
-                        </span>
-                      </div>
+                    <div className="flex min-w-0 flex-1 items-start gap-3">
+                      <SourceAvatar name={item.name} iconUrl={item.iconUrl} size={34} />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <h3 className="text-[14px] font-bold text-ink leading-snug line-clamp-1" title={item.name}>
+                            {item.name}
+                          </h3>
+                          <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${isWebList ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"}`}>
+                            {isIngest ? "Webhook" : isWebList ? "网页列表" : "RSS / Atom"}
+                          </span>
+                        </div>
 
-                      {item.url && <a
-                        href={item.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-1.5 block max-w-full truncate text-[11px] text-ink-4 hover:text-accent"
-                        title={item.url}
-                      >
-                        {item.url} ↗
-                      </a>}
+                        {item.url && <a
+                          href={item.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-1.5 block max-w-full truncate text-[11px] text-ink-4 hover:text-accent"
+                          title={item.url}
+                        >
+                          {item.url} ↗
+                        </a>}
 
-                      <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-ink-3">
-                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 ${item.health === "ok" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300" : "bg-bg-sunk text-ink-4"}`}>
-                          <span className={`size-1.5 rounded-full ${item.health === "ok" ? "bg-emerald-500" : "bg-ink-4"}`} />
-                          {item.health === "ok" ? "活跃运行" : "探测中"}
-                        </span>
-                        {publicResult && (
-                          <span>· {item.subscriberCount} 人关注 · 收录 {item.articleCount} 篇</span>
-                        )}
+                        <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-ink-3">
+                          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 ${item.health === "ok" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300" : "bg-bg-sunk text-ink-4"}`}>
+                            <span className={`size-1.5 rounded-full ${item.health === "ok" ? "bg-emerald-500" : "bg-ink-4"}`} />
+                            {item.health === "ok" ? "活跃运行" : "探测中"}
+                          </span>
+                          {publicResult && (
+                            <span>· {item.subscriberCount} 人关注 · 收录 {item.articleCount} 篇</span>
+                          )}
+                        </div>
                       </div>
                     </div>
 
@@ -1376,6 +1434,20 @@ export default function SourcesRoute() {
                   </article>
                 );
               })}
+            </div>
+          )}
+          {(nextExploreOffset !== null || exploreError) && (
+            <div className="mt-4 flex justify-center">
+              <button
+                type="button"
+                disabled={exploreBusy}
+                onClick={() => requestExplore(exploreQuery, exploreError ? (exploreRequest?.offset ?? 0) : (nextExploreOffset ?? 0))}
+                className="rounded-full border border-line px-5 py-2 text-[13px] font-medium text-ink hover:bg-bg-sunk disabled:opacity-50"
+              >
+                {exploreError
+                  ? (locale === "en" ? "Retry" : "重试")
+                  : (locale === "en" ? "Load more sources" : "加载更多信源")}
+              </button>
             </div>
           )}
         </section>
@@ -1430,6 +1502,7 @@ export default function SourcesRoute() {
                           isExpanded ? "rotate-90 text-accent" : "text-ink-4 group-hover:text-accent"
                         }`}
                       />
+                      <SourceAvatar name={source.name} iconUrl={source.iconUrl} size={30} />
                       <h3 className="text-[14px] font-semibold text-ink group-hover:text-accent transition-colors">
                         {source.name}
                       </h3>
@@ -1451,6 +1524,30 @@ export default function SourcesRoute() {
                           {locale === "en" ? "Paused" : "已暂停"}
                         </span>
                       )}
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold transition-all shadow-xs ${
+                          source.filterMode === "all"
+                            ? "bg-accent/15 text-accent dark:bg-accent/25 dark:text-accent-contrast border border-accent/30"
+                            : "bg-surface-2 text-ink-3 dark:bg-surface-2 dark:text-ink-3 border border-line/70"
+                        }`}
+                        title={
+                          source.filterMode === "all"
+                            ? (locale === "en" ? "Full Tracking: all incoming articles enter model evaluation." : "全量跟踪：所有新文章均进入精选打分")
+                            : (locale === "en" ? "Tag Filter: only articles matching tags/interests enter model evaluation." : "标签过滤：仅匹配关注项或标签的文章进入打分")
+                        }
+                      >
+                        {source.filterMode === "all" ? (
+                          <>
+                            <IconGlobe className="h-2.5 w-2.5" />
+                            <span>{locale === "en" ? "Full Tracking" : "全量跟踪"}</span>
+                          </>
+                        ) : (
+                          <>
+                            <IconTag className="h-2.5 w-2.5 text-accent" />
+                            <span>{locale === "en" ? "Tag Filter" : "标签过滤"}</span>
+                          </>
+                        )}
+                      </span>
                     </div>
 
                     {source.tags && source.tags.length > 0 && (
@@ -1733,6 +1830,30 @@ export default function SourcesRoute() {
                                   {source.health === "ok" ? (locale === "en" ? "Healthy" : "正常运行") : source.health}
                                 </span>
                               </div>
+
+                              <div className="flex items-center justify-between rounded bg-surface/80 px-2.5 py-1.5 border border-line/40 sm:col-span-2">
+                                <span className="text-ink-4 flex items-center gap-1.5">
+                                  {source.filterMode === "all" ? (
+                                    <IconGlobe className="w-3.5 h-3.5 text-accent" />
+                                  ) : (
+                                    <IconTag className="w-3.5 h-3.5 text-ink-3" />
+                                  )}
+                                  <span>{locale === "en" ? "Filter Strategy" : "文章过滤策略"}</span>
+                                </span>
+                                <span className="font-medium text-ink">
+                                  {source.filterMode === "all" ? (
+                                    <span className="inline-flex items-center gap-1.5 text-accent font-semibold">
+                                      <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
+                                      {locale === "en" ? "Full Tracking (all new articles enter AI evaluation)" : "全量跟踪（所有新文章直接进入精选评估）"}
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1.5 text-ink-2 font-medium">
+                                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400" />
+                                      {locale === "en" ? "Tag Filter (only articles matching tags/interests)" : "按标签过滤（仅评估命中关注项或标签）"}
+                                    </span>
+                                  )}
+                                </span>
+                              </div>
                             </div>
                           )}
 
@@ -1780,29 +1901,69 @@ export default function SourcesRoute() {
                                 </button>
                               )}
 
-                              <button
-                                type="button"
-                                disabled={busy}
-                                onClick={() => void toggleFilterMode(source)}
-                                title={
-                                  source.filterMode === "all"
-                                    ? (locale === "en"
-                                        ? "Full Tracking: all articles are evaluated. Click to switch to Label Filter."
-                                        : "当前为全量跟踪：该信源所有新文章均进入精选打分。点击切换为按标签过滤。")
-                                    : (locale === "en"
-                                        ? "Matches automatically followed source tags or manual interests. When no stable source tags are available, articles continue to model selection."
-                                        : "匹配该信源自动关注的标签或手动关注项。标签尚未识别时，直接进入后续筛选。点击切换为全量跟踪。")
-                                }
-                                className={`h-8 rounded-full border px-3.5 text-[11px] font-medium transition-colors disabled:opacity-50 ${
-                                  source.filterMode === "all"
-                                    ? "border-accent/40 bg-accent-soft text-accent"
-                                    : "border-line bg-surface text-ink-3 hover:border-line-strong hover:text-ink"
-                                }`}
+                              <div
+                                className="inline-flex h-8 items-center rounded-full bg-surface-2 p-0.5 border border-line shadow-xs transition-colors"
+                                role="group"
+                                aria-label={locale === "en" ? "Filter Mode Switcher" : "过滤模式切换"}
                               >
-                                {source.filterMode === "all"
-                                  ? (locale === "en" ? "Full Tracking" : "全量跟踪")
-                                  : (locale === "en" ? "Label Filter" : "标签过滤")}
-                              </button>
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() => void toggleFilterMode(source, "label")}
+                                  title={
+                                    locale === "en"
+                                      ? "Tag Filter: matches followed tags or manual interests. Click to activate."
+                                      : "按标签过滤：仅匹配该信源自动关注的标签或手动关注项。点击切换。"
+                                  }
+                                  className={`relative inline-flex items-center gap-1.5 h-full rounded-full px-3 text-[11px] font-medium transition-all duration-200 cursor-pointer disabled:opacity-50 ${
+                                    source.filterMode !== "all"
+                                      ? "bg-surface text-ink font-semibold shadow-xs border border-line-strong/60"
+                                      : "text-ink-4 hover:text-ink-2 hover:bg-surface/60 border border-transparent"
+                                  }`}
+                                >
+                                  {switchingFilterId === source.id && source.filterMode === "all" ? (
+                                    <svg className="animate-spin h-3 w-3 text-accent" viewBox="0 0 24 24" fill="none">
+                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                                    </svg>
+                                  ) : (
+                                    <IconTag className={`h-3 w-3 transition-colors ${source.filterMode !== "all" ? "text-accent" : "text-ink-4"}`} />
+                                  )}
+                                  <span>{locale === "en" ? "Tag Filter" : "标签过滤"}</span>
+                                  {source.filterMode !== "all" && (
+                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                  )}
+                                </button>
+
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() => void toggleFilterMode(source, "all")}
+                                  title={
+                                    locale === "en"
+                                      ? "Full Tracking: all incoming articles enter model evaluation. Click to activate."
+                                      : "全量跟踪：该信源所有新文章均直接进入模型精选打分。点击切换。"
+                                  }
+                                  className={`relative inline-flex items-center gap-1.5 h-full rounded-full px-3 text-[11px] font-medium transition-all duration-200 cursor-pointer disabled:opacity-50 ${
+                                    source.filterMode === "all"
+                                      ? "bg-accent text-accent-contrast font-semibold shadow-xs border border-accent/40"
+                                      : "text-ink-4 hover:text-ink-2 hover:bg-surface/60 border border-transparent"
+                                  }`}
+                                >
+                                  {switchingFilterId === source.id && source.filterMode !== "all" ? (
+                                    <svg className="animate-spin h-3 w-3 text-accent-contrast" viewBox="0 0 24 24" fill="none">
+                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                                    </svg>
+                                  ) : (
+                                    <IconGlobe className={`h-3 w-3 transition-colors ${source.filterMode === "all" ? "text-accent-contrast" : "text-ink-4"}`} />
+                                  )}
+                                  <span>{locale === "en" ? "Full Tracking" : "全量跟踪"}</span>
+                                  {source.filterMode === "all" && (
+                                    <span className="h-1.5 w-1.5 rounded-full bg-accent-contrast animate-pulse" />
+                                  )}
+                                </button>
+                              </div>
 
                               <button
                                 type="button"
@@ -1865,6 +2026,7 @@ export default function SourcesRoute() {
             <div className="flex items-start justify-between gap-3 border-b border-line pb-4">
               <div className="min-w-0">
                 <h3 className="text-[17px] font-bold text-ink flex items-center gap-2">
+                  {previewData && <SourceAvatar name={previewData.source.name} iconUrl={previewData.source.iconUrl} size={34} />}
                   <span>{previewData?.source.name || "信源预览"}</span>
                   {previewData?.source.kind === "web_list" ? (
                     <span className="rounded-full bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300 px-2 py-0.5 text-[10px] font-semibold">

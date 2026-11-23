@@ -77,17 +77,46 @@ func ProxyURL(raw *string, mode string, now time.Time, lifetime time.Duration, s
 	if secret == "" {
 		return nil, errors.New("IMG_PROXY_SIGN_SECRET is not configured")
 	}
+	signed := signProxyURL(*raw, mode, now, lifetime, secret)
+	return &signed, nil
+}
+
+/** SourceIconProxyURL signs a stored source icon, including favicons excluded from article media. */
+func SourceIconProxyURL(raw *string, now time.Time, secret string) *string {
+	if raw == nil || secret == "" || !isHTTPURL(*raw) {
+		return nil
+	}
+	signed := signProxyURL(*raw, "avatar-96", now, defaultImageLife, secret)
+	return &signed
+}
+
+/** SourceIconDisplayURL serves a stored source icon through the proxy or directly over HTTPS. */
+func SourceIconDisplayURL(raw *string, now time.Time, secret string) *string {
+	if raw == nil {
+		return nil
+	}
+	if secret != "" {
+		return SourceIconProxyURL(raw, now, secret)
+	}
+	icon, err := url.Parse(*raw)
+	if err != nil || icon.Scheme != "https" || icon.Hostname() == "" || icon.User != nil {
+		return nil
+	}
+	return raw
+}
+
+/** signProxyURL builds the signed URL for a validated image. */
+func signProxyURL(raw, mode string, now time.Time, lifetime time.Duration, secret string) string {
 	if now.IsZero() {
 		now = time.Now()
 	}
 	windowSeconds := int64(imageWindow / time.Second)
 	expiry := int64(math.Ceil(float64(now.Add(lifetime).UnixNano())/float64(imageWindow.Nanoseconds())) * float64(windowSeconds))
-	message := fmt.Sprintf("%s|%s|%d", *raw, mode, expiry)
+	message := fmt.Sprintf("%s|%s|%d", raw, mode, expiry)
 	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write([]byte(message))
 	signature := hex.EncodeToString(mac.Sum(nil))[:16]
-	path := "/api/img-proxy?u=" + encodeURIComponent(*raw) + "&mode=" + encodeURIComponent(mode) + "&exp=" + fmt.Sprint(expiry) + "&sig=" + signature
-	return &path, nil
+	return "/api/img-proxy?u=" + encodeURIComponent(raw) + "&mode=" + encodeURIComponent(mode) + "&exp=" + fmt.Sprint(expiry) + "&sig=" + signature
 }
 
 func encodeURIComponent(value string) string {

@@ -44,19 +44,20 @@ type Interests struct {
 }
 
 type Card struct {
-	ArticleID    string          `gorm:"column:article_id"`
-	Score        float64         `gorm:"column:score"`
-	Title        string          `gorm:"column:title"`
-	Summary      string          `gorm:"column:summary"`
-	Reason       *string         `gorm:"column:reason"`
-	URL          string          `gorm:"column:url"`
-	Source       string          `gorm:"column:source"`
-	SourceID     string          `gorm:"column:source_id"`
-	IsSubscribed bool            `gorm:"column:is_subscribed"`
-	PublishedAt  *time.Time      `gorm:"column:published_at"`
-	CreatedAt    time.Time       `gorm:"column:created_at"`
-	MediaJSON    json.RawMessage `gorm:"column:media"`
-	Historical   bool            `gorm:"-"`
+	ArticleID     string          `gorm:"column:article_id"`
+	Score         float64         `gorm:"column:score"`
+	Title         string          `gorm:"column:title"`
+	Summary       string          `gorm:"column:summary"`
+	Reason        *string         `gorm:"column:reason"`
+	URL           string          `gorm:"column:url"`
+	Source        string          `gorm:"column:source"`
+	SourceID      string          `gorm:"column:source_id"`
+	SourceIconURL *string         `gorm:"column:source_icon_url"`
+	IsSubscribed  bool            `gorm:"column:is_subscribed"`
+	PublishedAt   *time.Time      `gorm:"column:published_at"`
+	CreatedAt     time.Time       `gorm:"column:created_at"`
+	MediaJSON     json.RawMessage `gorm:"column:media"`
+	Historical    bool            `gorm:"-"`
 }
 
 type RecommendedArticleItem struct {
@@ -69,6 +70,7 @@ type RecommendedArticleItem struct {
 	SourceID       string          `gorm:"column:source_id" json:"sourceId"`
 	SourceName     string          `gorm:"column:source_name" json:"sourceName"`
 	SourceKind     string          `gorm:"column:source_kind" json:"sourceKind"`
+	SourceIconURL  *string         `gorm:"column:source_icon_url" json:"-"`
 	IsSubscribed   bool            `gorm:"column:is_subscribed" json:"isSubscribed"`
 	PublishedAt    *time.Time      `gorm:"column:published_at" json:"publishedAt"`
 	CreatedAt      time.Time       `gorm:"column:created_at" json:"createdAt"`
@@ -310,6 +312,7 @@ func (r *Repository) RecommendedArticles(ctx context.Context, userID int64, page
 				a.media,
 				s.name AS source_name,
 				s.kind AS source_kind,
+				s.icon_url AS source_icon_url,
 				ail.label_id,
 				ut.name AS label_name
 			FROM articles a
@@ -332,6 +335,7 @@ func (r *Repository) RecommendedArticles(ctx context.Context, userID int64, page
 				ca.media,
 				ca.source_name,
 				ca.source_kind,
+				ca.source_icon_url,
 				jsonb_agg(DISTINCT ca.label_name) AS matched_tags_json,
 				COUNT(DISTINCT ca.label_id) AS matched_tag_count,
 				coalesce(uar.title, pub.title) AS title,
@@ -350,7 +354,7 @@ func (r *Repository) RecommendedArticles(ctx context.Context, userID int64, page
 			LEFT JOIN publications pub ON pub.article_id = ca.article_id AND pub.visibility != 'withdrawn'
 			WHERE (uar.summary IS NOT NULL OR pub.summary IS NOT NULL)
 			GROUP BY ca.article_id, ca.source_id, ca.url, ca.published_at, ca.discovered_at, ca.media, 
-			         ca.source_name, ca.source_kind, uar.title, uar.summary, uar.reason, uar.relevance_score, 
+			         ca.source_name, ca.source_kind, ca.source_icon_url, uar.title, uar.summary, uar.reason, uar.relevance_score,
 			         uar.created_at, pub.title, pub.summary, pub.reason, pub.score, pub.updated_at
 		)
 		SELECT 
@@ -363,6 +367,7 @@ func (r *Repository) RecommendedArticles(ctx context.Context, userID int64, page
 			pc.source_id,
 			pc.source_name,
 			pc.source_kind,
+			pc.source_icon_url,
 			false AS is_subscribed,
 			pc.published_at,
 			pc.created_at,
@@ -393,6 +398,7 @@ func (r *Repository) RecommendedArticles(ctx context.Context, userID int64, page
 				a.media,
 				s.name AS source_name,
 				s.kind AS source_kind,
+				s.icon_url AS source_icon_url,
 				coalesce(uar.title, pub.title) AS title,
 				coalesce(uar.summary, pub.summary) AS summary,
 				coalesce(uar.reason, pub.reason, '全站热门精选文章') AS reason,
@@ -425,6 +431,7 @@ func (r *Repository) RecommendedArticles(ctx context.Context, userID int64, page
 			ca.source_id,
 			ca.source_name,
 			ca.source_kind,
+			ca.source_icon_url,
 			false AS is_subscribed,
 			ca.published_at,
 			ca.created_at,
@@ -602,4 +609,4 @@ func (r *Repository) Funnel(ctx context.Context, userID int64) (FunnelView, erro
 	}, nil
 }
 
-const personalSelect = `SELECT r.article_id,s.id AS source_id,(coalesce(sub.id,0)>0) AS is_subscribed,r.relevance_score::float8 AS score,r.title,r.summary,r.reason,a.url,coalesce(sub.name,s.name) AS source,a.published_at,r.created_at,a.media FROM user_article_results r JOIN articles a ON a.id=r.article_id JOIN sources s ON s.id=a.source_id LEFT JOIN user_source_subscriptions sub ON sub.user_id=r.user_id AND sub.source_id=s.id`
+const personalSelect = `SELECT r.article_id,s.id AS source_id,s.icon_url AS source_icon_url,(coalesce(sub.id,0)>0) AS is_subscribed,r.relevance_score::float8 AS score,r.title,r.summary,r.reason,a.url,coalesce(sub.name,s.name) AS source,a.published_at,r.created_at,a.media FROM user_article_results r JOIN articles a ON a.id=r.article_id JOIN sources s ON s.id=a.source_id LEFT JOIN user_source_subscriptions sub ON sub.user_id=r.user_id AND sub.source_id=s.id`

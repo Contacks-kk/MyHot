@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"aihot/backend-go/internal/collector"
+	"aihot/backend-go/internal/model"
 	xhtml "golang.org/x/net/html"
 )
 
@@ -46,7 +47,7 @@ type Source struct {
 	ID     string
 	Kind   string
 	Config json.RawMessage
-	URLs   []string
+	URLs   model.TextArray `gorm:"type:text[]"`
 }
 
 type Result struct {
@@ -133,6 +134,9 @@ func (s *Service) findIcon(ctx context.Context, source Source) string {
 		}
 		return ""
 	}
+	if ownerIcon := githubReleaseOwnerIcon(config); ownerIcon != "" && s.usableImage(ctx, ownerIcon) {
+		return ownerIcon
+	}
 	home := homeOf(source.URLs, config)
 	if home == "" {
 		return ""
@@ -150,6 +154,23 @@ func (s *Service) findIcon(ctx context.Context, source Source) string {
 		}
 	}
 	return ""
+}
+
+/** githubReleaseOwnerIcon uses the project owner's avatar to distinguish GitHub release feeds. */
+func githubReleaseOwnerIcon(config map[string]any) string {
+	raw, _ := config["feedUrl"].(string)
+	if raw == "" {
+		raw, _ = config["url"].(string)
+	}
+	u, err := publicURL(raw)
+	if err != nil || !strings.EqualFold(u.Host, "github.com") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) != 3 || parts[2] != "releases.atom" || parts[0] == "" || strings.Trim(parts[0], "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-") != "" {
+		return ""
+	}
+	return "https://github.com/" + parts[0] + ".png"
 }
 
 func (s *Service) page(ctx context.Context, raw string, maxBytes int64) ([]byte, string, bool) {

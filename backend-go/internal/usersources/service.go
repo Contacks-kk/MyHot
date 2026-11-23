@@ -16,6 +16,7 @@ import (
 
 	"aihot/backend-go/internal/config"
 	"aihot/backend-go/internal/materials"
+	"aihot/backend-go/internal/mediaurl"
 	"aihot/backend-go/internal/model"
 	"aihot/backend-go/internal/sourcenaming"
 	"aihot/backend-go/internal/sourceschedule"
@@ -33,12 +34,13 @@ type MaterialWriter interface {
 }
 
 type Service struct {
-	db             *gorm.DB
-	materials      MaterialWriter
-	enqueue        func(context.Context, string, string, int64) (int64, error)
-	enqueueInitial func(context.Context, string) error
-	collectEnabled bool
-	schedule       config.SourceSchedule
+	db               *gorm.DB
+	materials        MaterialWriter
+	enqueue          func(context.Context, string, string, int64) (int64, error)
+	enqueueInitial   func(context.Context, string) error
+	collectEnabled   bool
+	schedule         config.SourceSchedule
+	imageProxySecret string
 }
 
 /** NewService creates a new usersources service. */
@@ -52,6 +54,11 @@ func NewService(db *gorm.DB, schedule config.SourceSchedule) *Service {
 /** SetMaterials configures the materials writer for direct article ingestion. */
 func (s *Service) SetMaterials(materials MaterialWriter) {
 	s.materials = materials
+}
+
+/** SetImageProxySecret configures same-origin delivery of stored source icons. */
+func (s *Service) SetImageProxySecret(secret string) {
+	s.imageProxySecret = secret
 }
 
 /** SetEnqueuer configures the background job enqueuer function. */
@@ -102,6 +109,7 @@ type Subscription struct {
 	NameInherited               bool            `json:"nameInherited"`
 	UpdatedExisting             bool            `gorm:"-" json:"updatedExisting,omitempty"`
 	URL                         string          `json:"url"`
+	IconURL                     *string         `gorm:"column:icon_url" json:"iconUrl,omitempty"`
 	ItemSelector                string          `json:"itemSelector,omitempty"`
 	TitleSelector               string          `json:"titleSelector,omitempty"`
 	Enabled                     bool            `json:"enabled"`
@@ -157,6 +165,7 @@ type ExploreItem struct {
 	Name            string     `gorm:"column:name" json:"name"`
 	Kind            string     `gorm:"column:kind" json:"kind"`
 	URL             string     `gorm:"column:url" json:"url"`
+	IconURL         *string    `gorm:"column:icon_url" json:"iconUrl,omitempty"`
 	Health          string     `gorm:"column:health" json:"health"`
 	SubscriberCount int64      `gorm:"column:subscriber_count" json:"subscriberCount"`
 	ArticleCount    int64      `gorm:"column:article_count" json:"articleCount"`
@@ -226,6 +235,7 @@ type SubscribeExistingInput struct {
 
 const subscriptionSelect = `SELECT sub.id,sub.source_id,src.kind,sub.name,sub.name_inherited,
 	coalesce(src.config->>'feedUrl',src.config->>'url','') AS url,
+	src.icon_url,
 	coalesce(src.config->>'itemSelector','') AS item_selector,
 	coalesce(src.config->>'titleSelector','') AS title_selector,
 	sub.enabled,sub.filter_mode,sub.interval_minutes,sub.reuse_window_minutes,
@@ -243,6 +253,10 @@ func (s *Service) List(ctx context.Context, userID int64) ([]Subscription, error
 	err := s.db.WithContext(ctx).Raw(subscriptionSelect+` WHERE sub.user_id=? ORDER BY sub.created_at DESC,sub.id`, s.schedule.AutoReuseWindow, userID).Scan(&rows).Error
 	if rows == nil {
 		rows = []Subscription{}
+	}
+	now := time.Now()
+	for i := range rows {
+		rows[i].IconURL = mediaurl.SourceIconDisplayURL(rows[i].IconURL, now, s.imageProxySecret)
 	}
 
 	return rows, err
@@ -505,11 +519,12 @@ func (s *Service) Get(ctx context.Context, userID, id int64) (Subscription, erro
 		return Subscription{}, ErrNotFound
 	}
 
+	row.IconURL = mediaurl.SourceIconDisplayURL(row.IconURL, time.Now(), s.imageProxySecret)
 	return row, nil
 }
 
 /** Explore searches or recommends public sources for users to discover and follow. */
-func (s *Service) Explore(ctx context.Context, userID int64, query string, limit, offset int) ([]ExploreItem, error) {
+func (s *Service) Explore(ctx context.Context, userID int64, query string, limit, offset int, sortByName bool) ([]ExploreItem, error) {
 	if limit <= 0 || limit > 50 {
 		limit = 20
 	}
@@ -520,6 +535,12 @@ func (s *Service) Explore(ctx context.Context, userID int64, query string, limit
 
 	query = strings.TrimSpace(query)
 
+	// A directory page keeps its place when subscription counts and fetch timestamps change.
+	orderBy := "is_subscribed ASC, subscriber_count DESC, s.last_ok_at DESC NULLS LAST, s.id ASC"
+	if sortByName {
+		orderBy = "lower(s.name) ASC, s.id ASC"
+	}
+
 	var sqlQuery string
 	var args []any
 	if query == "" {
@@ -529,6 +550,7 @@ func (s *Service) Explore(ctx context.Context, userID int64, query string, limit
 			s.name,
 			s.kind,
 			coalesce(s.config->>'feedUrl', s.config->>'url', '') AS url,
+			s.icon_url,
 			s.health,
 			s.last_ok_at AS last_checked_at,
 			coalesce(sub_count.count, 0) AS subscriber_count,
@@ -550,7 +572,7 @@ func (s *Service) Explore(ctx context.Context, userID int64, query string, limit
 		LEFT JOIN user_source_subscriptions my_sub ON my_sub.source_id = s.id AND my_sub.user_id = ?
 		WHERE s.kind IN ('rss', 'web_list')
 		  AND s.health != 'failing'
-		ORDER BY is_subscribed ASC, subscriber_count DESC, s.last_ok_at DESC NULLS LAST, s.id ASC
+		ORDER BY ` + orderBy + `
 		LIMIT ? OFFSET ?`
 		args = []any{
 			userID,
@@ -565,6 +587,7 @@ func (s *Service) Explore(ctx context.Context, userID int64, query string, limit
 			s.name,
 			s.kind,
 			coalesce(s.config->>'feedUrl', s.config->>'url', '') AS url,
+			s.icon_url,
 			s.health,
 			s.last_ok_at AS last_checked_at,
 			coalesce(sub_count.count, 0) AS subscriber_count,
@@ -587,7 +610,7 @@ func (s *Service) Explore(ctx context.Context, userID int64, query string, limit
 		WHERE s.kind IN ('rss', 'web_list')
 		  AND s.health != 'failing'
 		  AND (s.name ILIKE ? OR coalesce(s.config->>'feedUrl', s.config->>'url', '') ILIKE ?)
-		ORDER BY is_subscribed ASC, subscriber_count DESC, s.last_ok_at DESC NULLS LAST, s.id ASC
+		ORDER BY ` + orderBy + `
 		LIMIT ? OFFSET ?`
 		args = []any{
 			userID,
@@ -603,8 +626,10 @@ func (s *Service) Explore(ctx context.Context, userID int64, query string, limit
 	if rows == nil {
 		rows = []ExploreItem{}
 	}
+	now := time.Now()
 	for i := range rows {
 		rows[i].Name = sourcenaming.LegacyDisplayName(rows[i].Kind, rows[i].Name, rows[i].SourceID, rows[i].URL)
+		rows[i].IconURL = mediaurl.SourceIconDisplayURL(rows[i].IconURL, now, s.imageProxySecret)
 	}
 
 	return rows, err
@@ -624,6 +649,7 @@ func (s *Service) Preview(ctx context.Context, userID int64, sourceID string) (S
 		s.name,
 		s.kind,
 		coalesce(s.config->>'feedUrl', s.config->>'url', '') AS url,
+		s.icon_url,
 		s.health,
 		s.last_ok_at AS last_checked_at,
 		coalesce(sub_count.count, 0) AS subscriber_count,
@@ -652,6 +678,7 @@ func (s *Service) Preview(ctx context.Context, userID int64, sourceID string) (S
 		return SourcePreview{}, ErrNotFound
 	}
 	item.Name = sourcenaming.LegacyDisplayName(item.Kind, item.Name, item.SourceID, item.URL)
+	item.IconURL = mediaurl.SourceIconDisplayURL(item.IconURL, time.Now(), s.imageProxySecret)
 
 	// 读取该信源最近收录的 10 篇文章公开导读
 	var articles []PreviewArticleItem

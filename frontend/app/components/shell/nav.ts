@@ -25,11 +25,11 @@ function getSections(locale: Locale): Array<{ title: string; items: NavItem[] }>
       title: dict.nav.workspace,
       items: [
         { to: "/hot", label: dict.nav.hot, icon: IconFlame },
-        { to: "/interests", label: dict.nav.interests, icon: IconGrid },
-        { to: "/daily", label: dict.nav.daily, icon: IconDoc, end: true },
-        { to: "/model", label: dict.nav.model, icon: IconPlug },
-        { to: "/sources", label: dict.nav.sources, icon: IconRss },
         { to: "/recommendations", label: dict.nav.recommendations, icon: IconSparkles },
+        { to: "/daily", label: dict.nav.daily, icon: IconDoc, end: true },
+        { to: "/sources", label: dict.nav.sources, icon: IconRss },
+        { to: "/interests", label: dict.nav.interests, icon: IconGrid },
+        { to: "/model", label: dict.nav.model, icon: IconPlug },
       ],
     },
     {
@@ -67,12 +67,12 @@ export function sidebarIsActive(item: NavItem, pathname: string): boolean {
 }
 
 /**
- * The phone tab bar exposes personal hotspots, interests, daily reports, and account settings.
+ * The phone tab bar exposes personal hotspots, recommendations, daily reports, and account settings.
  * Each page declares its tab in components/shell/screens.ts.
  */
 export type TabKey =
   | "hot"
-  | "interests"
+  | "recommendations"
   | "daily"
   | "me"
   // A module's tab.
@@ -91,7 +91,7 @@ export function tabs(locale: Locale = "zh"): Tab[] {
   const dict = getDict(locale);
   const engineTabs: Tab[] = [
     { key: "hot", to: "/hot", label: dict.nav.hot, icon: IconFlame },
-    { key: "interests", to: "/interests", label: dict.nav.interests, icon: IconGrid },
+    { key: "recommendations", to: "/recommendations", label: dict.nav.recommendations, icon: IconSparkles },
     { key: "daily", to: "/daily", label: dict.nav.daily, icon: IconDoc },
     { key: "me", to: "/more", label: dict.nav.account, icon: IconUser, changelog: true },
   ];

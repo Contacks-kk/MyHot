@@ -12,6 +12,31 @@ import (
 	"time"
 )
 
+/** Verify that source favicons use a signed avatar without entering article media. */
+func TestSourceIconProxyURL(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	raw := "https://publisher.example.invalid/favicon.ico"
+	secret := "local-test-secret"
+	icon := SourceIconProxyURL(&raw, now, secret)
+	if icon == nil {
+		t.Fatal("expected a signed favicon URL")
+	}
+	parsed, err := url.Parse(*icon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified := VerifyProxyRequest(parsed.Query(), now, secret)
+	if parsed.Path != "/api/img-proxy" || !verified.OK || verified.URL != raw || verified.Mode != "avatar-96" {
+		t.Fatalf("unexpected proxy URL: %q", *icon)
+	}
+	if article, err := ProxyURL(&raw, "full", now, defaultImageLife, secret); article != nil || err != nil {
+		t.Fatalf("favicon should be excluded from article media: %v, %v", article, err)
+	}
+	if SourceIconProxyURL(&raw, now, "") != nil {
+		t.Fatal("expected no icon when the proxy is unconfigured")
+	}
+}
+
 func TestProxyURLMatchesSignedImageProxyContract(t *testing.T) {
 	now := time.Date(2026, 10, 7, 12, 0, 0, 123_000_000, time.UTC)
 	raw := "https://images.example.invalid/a b.jpg?x=hello&tag=!~'()*"

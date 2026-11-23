@@ -54,6 +54,7 @@ export default function MorePage() {
         {[
           ["/model", dict.nav.model],
           ["/sources", dict.nav.sources],
+          ["/interests", dict.nav.interests],
           ["/history", dict.nav.history],
           ["/about", dict.nav.about],
         ].map(([to, label]) => (
@@ -88,15 +89,15 @@ export default function MorePage() {
           <IconLogout size={16} />
           <span>{dict.action.logout}</span>
         </button>
+        <LogoutDialog
+          open={logoutConfirmOpen}
+          onClose={() => setLogoutConfirmOpen(false)}
+          onConfirm={handleLogout}
+          busy={logoutBusy}
+          locale={locale}
+        />
       </div>
 
-      <LogoutDialog
-        open={logoutConfirmOpen}
-        onClose={() => setLogoutConfirmOpen(false)}
-        onConfirm={handleLogout}
-        busy={logoutBusy}
-        locale={locale}
-      />
       <section className="mt-8 rounded-card border border-line bg-surface p-5">
         <h2 className="text-[15px] font-semibold text-ink">{dict.action.deleteAccount}</h2>
         <p className="mt-1.5 text-[12px] leading-relaxed text-ink-4">

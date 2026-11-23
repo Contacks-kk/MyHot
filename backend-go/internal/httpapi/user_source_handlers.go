@@ -248,7 +248,7 @@ func (s *Server) userSourcesExplore(w http.ResponseWriter, r *http.Request, user
 	}
 
 	// 检索公共信源列表
-	result, err := s.UserSources.Explore(r.Context(), user.ID, q, limit, offset)
+	result, err := s.UserSources.Explore(r.Context(), user.ID, q, limit, offset, r.URL.Query().Get("sort") == "name")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "检索信源失败")
 		return

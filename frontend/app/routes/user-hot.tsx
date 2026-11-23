@@ -9,6 +9,7 @@ import { useLocalePreference } from "../lib/local-state";
 import { getDict } from "../lib/i18n";
 import { PersonalFunnel, type FunnelView } from "../features/feed/PersonalFunnel";
 import { CalendarPopover } from "../components/ui/CalendarPopover";
+import { SourceAvatar } from "../components/ui/SourceAvatar";
 import {
   IconCalendar,
   IconChevronDown,
@@ -35,6 +36,7 @@ interface HotItem {
   summary: string;
   url: string;
   source: string;
+  sourceIconUrl?: string;
   createdAt: string;
   publishedAt?: string | null;
   media?: MediaView[];
@@ -179,30 +181,10 @@ export default function UserHot() {
           </p>
         </div>
 
-        {/* 标题与日期切换：同一行对齐（同一高度），左侧标题与内容模式切换，右侧日期切换药丸条 */}
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2.5">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="editorial-title text-[22px] font-semibold tracking-tight text-ink sm:text-[28px] lg:text-[32px]">
-              {dict.article.hotRankTitle}
-            </h1>
-            <nav
-              aria-label={isEn ? "Content mode switch" : "内容模式切换"}
-              className="flex items-center gap-1 rounded-full border border-line bg-bg-sunk p-1 text-[11px] shadow-xs"
-            >
-              <span className="rounded-full bg-surface px-2.5 py-0.5 font-semibold text-accent shadow-xs flex items-center gap-1">
-                <IconFlame size={12} className="text-accent" />
-                <span>{dict.nav.hot}</span>
-              </span>
-              <Link
-                to="/recommendations"
-                prefetch="intent"
-                className="rounded-full px-2.5 py-0.5 text-ink-3 hover:text-ink transition-colors flex items-center gap-1"
-              >
-                <IconSparkles size={12} className="text-ink-4" />
-                <span>{dict.nav.recommendations}</span>
-              </Link>
-            </nav>
-          </div>
+          <h1 className="editorial-title text-[22px] font-semibold tracking-tight text-ink sm:text-[28px] lg:text-[32px]">
+            {dict.article.hotRankTitle}
+          </h1>
 
           <div className="relative shrink-0">
             <nav
@@ -465,6 +447,7 @@ export default function UserHot() {
       <div className={`editorial-list divide-y divide-line border-y border-line bg-surface px-4 sm:px-6 transition-opacity duration-200 ${isNavigating ? "opacity-50 pointer-events-none" : "opacity-100"}`}>
         {items.map((item, index) => {
           const displayTitle = isEn && item.originalTitle ? item.originalTitle : item.title;
+          const sourceHost = hostOf(item.url);
           return (
             <article key={item.articleId} className="group relative flex gap-4 py-5">
               <span className="mono flex size-8 shrink-0 items-center justify-center rounded-control bg-accent-soft text-[12px] font-semibold text-accent">
@@ -488,8 +471,9 @@ export default function UserHot() {
                 {item.media && item.media.length > 0 && <MediaThumbs media={item.media} className="mt-3" />}
                 {/* 底部元信息行：左下角信源 URL 与右下角时间戳高度齐平 */}
                 <div className="mt-2.5 flex items-center justify-between gap-3 text-[11px] text-ink-4">
-                  <span className="min-w-0 truncate" title={item.url}>
-                    {isEn ? "Source: " : "来源："}{hostOf(item.url)}
+                  <span className="flex min-w-0 items-center gap-1.5" title={item.url}>
+                    <SourceAvatar name={sourceHost} iconUrl={item.sourceIconUrl} size={16} />
+                    <span className="truncate">{isEn ? "Source: " : "来源："}{sourceHost}</span>
                   </span>
                   <time className="shrink-0" dateTime={item.publishedAt ?? item.createdAt}>
                     {new Date(item.publishedAt ?? item.createdAt).toLocaleString(isEn ? "en-US" : "zh-CN", {
