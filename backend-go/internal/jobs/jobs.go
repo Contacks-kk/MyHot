@@ -838,7 +838,7 @@ func NewClient(ctx context.Context, pool *pgxpool.Pool, orm *gorm.DB, cfg config
 		river.AddWorker(workers, sourceWorker)
 	}
 
-	taggingService := tagging.NewService(tagging.NewRepository(orm), tagging.Builtins(entities, topicDefinitions), sharedModelClient)
+	taggingService := tagging.NewService(tagging.NewRepository(orm, cfg.SourceSchedule.RecommendationFeeds...), tagging.Builtins(entities, topicDefinitions), sharedModelClient)
 	service.Labels = taggingService
 	river.AddWorker(workers, &SourceTaggingWorker{Service: taggingService})
 	if xShardWorker != nil {

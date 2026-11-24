@@ -2,10 +2,23 @@ package sourceschedule
 
 import (
 	"context"
+	"log"
+	"slices"
 
 	"aihot/backend-go/internal/config"
+	"aihot/backend-go/internal/model"
 	"gorm.io/gorm"
 )
+
+/** RecommendationFeedSQL matches the configured public RSS feeds by their stored URLs. */
+func RecommendationFeedSQL(alias string) string {
+	return alias + ".kind='rss' AND btrim(coalesce(nullif(" + alias + ".config->>'feedUrl','')," + alias + ".config->>'url',''))=ANY(?::text[])"
+}
+
+// RecommendationArticleWindow includes recent first imports with a trusted publication time.
+const RecommendationArticleWindow = `a.discovered_at >= now()-interval '14 days' AND
+	(NOT a.backfill OR (a.backfill_reason='first-import' AND
+		a.published_at BETWEEN now()-interval '7 days' AND now()))`
 
 /** ReuseWindow caps the subscription window when a platform limit is configured. */
 func ReuseWindow(requested, limit int) int {
@@ -28,9 +41,12 @@ func Recompute(tx *gorm.DB, sourceID string, policy config.SourceSchedule) error
 		Enabled            bool
 		IntervalMinutes    int
 		ReuseWindowMinutes int
+		FeedURL            string
 	}
-	err := tx.Raw(`SELECT kind,enabled,interval_minutes,reuse_window_minutes FROM sources WHERE id=? FOR NO KEY UPDATE`, sourceID).
-		Row().Scan(&current.Kind, &current.Enabled, &current.IntervalMinutes, &current.ReuseWindowMinutes)
+	err := tx.Raw(`SELECT kind,enabled,interval_minutes,reuse_window_minutes,
+		btrim(coalesce(nullif(config->>'feedUrl',''),config->>'url','')) AS feed_url
+		FROM sources WHERE id=? FOR NO KEY UPDATE`, sourceID).
+		Row().Scan(&current.Kind, &current.Enabled, &current.IntervalMinutes, &current.ReuseWindowMinutes, &current.FeedURL)
 	if err != nil {
 		return err
 	}
@@ -44,6 +60,16 @@ func Recompute(tx *gorm.DB, sourceID string, policy config.SourceSchedule) error
 		return err
 	}
 	if count == 0 {
+		if current.Kind == "rss" && slices.Contains(policy.RecommendationFeeds, current.FeedURL) {
+			interval := max(config.RecommendationIntervalMinutes, policy.AutoMinInterval)
+			if current.Enabled && current.IntervalMinutes == interval && current.ReuseWindowMinutes == window {
+				return nil
+			}
+			return tx.Exec(`UPDATE sources SET enabled=true,interval_minutes=?,reuse_window_minutes=?,
+				health=CASE WHEN health='paused' THEN 'unknown' ELSE health END,
+				next_fetch_at=greatest(now(),last_ok_at + (? * interval '1 minute')),updated_at=now()
+				WHERE id=?`, interval, window, interval, sourceID).Error
+		}
 		return tx.Exec(`UPDATE sources SET enabled=false,health='paused',next_fetch_at=NULL,updated_at=now() WHERE id=?`, sourceID).Error
 	}
 
@@ -80,6 +106,29 @@ func Reconcile(ctx context.Context, db *gorm.DB, policy config.SourceSchedule) e
 		) ORDER BY s.id`, policy.AutoMinInterval, policy.AutoReuseWindow).Scan(&ids).Error
 	if err != nil {
 		return err
+	}
+
+	// Resolve the configured catalog rows and let Recompute apply the subscription or background interval.
+	var feeds []struct {
+		ID      string
+		FeedURL string
+	}
+	err = db.WithContext(ctx).Raw(`SELECT s.id,btrim(coalesce(nullif(s.config->>'feedUrl',''),s.config->>'url','')) AS feed_url
+		FROM sources s WHERE `+RecommendationFeedSQL("s")+` ORDER BY s.id`, model.TextArray(policy.RecommendationFeeds)).Scan(&feeds).Error
+	if err != nil {
+		return err
+	}
+	found := make(map[string]bool, len(feeds))
+	for _, feed := range feeds {
+		found[feed.FeedURL] = true
+		if !slices.Contains(ids, feed.ID) {
+			ids = append(ids, feed.ID)
+		}
+	}
+	for _, feed := range policy.RecommendationFeeds {
+		if !found[feed] {
+			log.Printf("recommendation RSS feed missing from source catalog: %s", feed)
+		}
 	}
 	for _, id := range ids {
 		err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

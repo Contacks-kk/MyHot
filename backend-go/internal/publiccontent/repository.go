@@ -12,6 +12,17 @@ type GormRepository struct{ db *gorm.DB }
 
 func NewRepository(db *gorm.DB) *GormRepository { return &GormRepository{db: db} }
 
+/** RecommendationPublications projects publication visibility and fields suitable for recommendation cards. */
+func RecommendationPublications(db *gorm.DB) *gorm.DB {
+	return db.Table("publications AS p").
+		Select(`p.article_id,p.title,p.summary,p.score,
+			(p.visibility='withdrawn' OR p.visible_after>now()
+			  OR (p.visibility='public' AND p.selected AND p.visible_after IS NULL)) AS blocked,
+			(p.visibility='public' AND (p.visible_after<=now() OR (p.visible_after IS NULL AND NOT p.selected))
+			  AND p.eligible AND ps.participation_mode='editorial') AS public_detail`).
+		Joins("JOIN sources ps ON ps.id=p.source_id")
+}
+
 func (r *GormRepository) Availability(ctx context.Context, ids []string) ([]Record, error) {
 	var rows []Record
 	err := r.db.WithContext(ctx).Table("publications AS p").

@@ -41,9 +41,14 @@ type sourceRun struct {
 	Force  bool
 }
 
-const sourceIsActive = `enabled AND EXISTS (
+var sourceIsActive = `enabled AND (EXISTS (
 	SELECT 1 FROM user_source_subscriptions u WHERE u.source_id=sources.id AND u.enabled
-)`
+) OR (` + sourceschedule.RecommendationFeedSQL("sources") + `))`
+
+/** recommendationFeeds supplies the same URL list to all source scheduler queries. */
+func (r *Repository) recommendationFeeds() model.TextArray {
+	return model.TextArray(r.schedule.RecommendationFeeds)
+}
 
 const automaticMinimumElapsed = `(last_ok_at IS NULL OR last_ok_at + (? * interval '1 minute') <= now())`
 
@@ -51,7 +56,7 @@ const automaticMinimumElapsed = `(last_ok_at IS NULL OR last_ok_at + (? * interv
 func (r *Repository) DueSourceIDs(ctx context.Context) ([]string, error) {
 	var ids []string
 	query := r.orm.WithContext(ctx).Model(&model.Source{}).
-		Where(sourceIsActive + " AND kind IN ('rss','web_list') AND (next_fetch_at IS NULL OR next_fetch_at <= now())")
+		Where(sourceIsActive+" AND kind IN ('rss','web_list') AND (next_fetch_at IS NULL OR next_fetch_at <= now())", r.recommendationFeeds())
 	if r.schedule.AutoMinInterval > 0 {
 		query = query.Where(automaticMinimumElapsed, r.schedule.AutoMinInterval)
 	}
@@ -174,7 +179,7 @@ func (r *Repository) beginLockedRun(tx *gorm.DB, id string, run *sourceRun) erro
 	if run.Force {
 		query = query.Where("kind IN ('rss','web_list','x_search') AND EXISTS (SELECT 1 FROM user_source_subscriptions u WHERE u.source_id=sources.id)")
 	} else {
-		query = query.Where(sourceIsActive + " AND kind IN ('rss','web_list') AND (next_fetch_at IS NULL OR next_fetch_at <= now())")
+		query = query.Where(sourceIsActive+" AND kind IN ('rss','web_list') AND (next_fetch_at IS NULL OR next_fetch_at <= now())", r.recommendationFeeds())
 		if r.schedule.AutoMinInterval > 0 {
 			query = query.Where(automaticMinimumElapsed, r.schedule.AutoMinInterval)
 		}
@@ -255,15 +260,15 @@ func (r *Repository) ReleaseSource(run *sourceRun) {
 func (r *Repository) FinishFailure(ctx context.Context, run *sourceRun, found, created int, message string) error {
 	updates := map[string]any{
 		"fail_count":    gorm.Expr("fail_count + 1"),
-		"health":        gorm.Expr("CASE WHEN NOT (" + sourceIsActive + ") THEN 'paused' WHEN fail_count >= 2 THEN 'failing' ELSE 'degraded' END"),
+		"health":        gorm.Expr("CASE WHEN NOT ("+sourceIsActive+") THEN 'paused' WHEN fail_count >= 2 THEN 'failing' ELSE 'degraded' END", r.recommendationFeeds()),
 		"last_fetch_at": gorm.Expr("now()"),
 		"last_error":    message,
 		"updated_at":    gorm.Expr("now()"),
-		"next_fetch_at": gorm.Expr("CASE WHEN " + sourceIsActive + " THEN next_fetch_at END"),
+		"next_fetch_at": gorm.Expr("CASE WHEN "+sourceIsActive+" THEN next_fetch_at END", r.recommendationFeeds()),
 	}
 	if !run.Force {
 		updates["next_fetch_at"] = gorm.Expr("CASE WHEN "+sourceIsActive+
-			" THEN now() + greatest(?,least(interval_minutes * (fail_count + 2),360)) * interval '1 minute' END", r.schedule.AutoMinInterval)
+			" THEN now() + greatest(?,least(interval_minutes * (fail_count + 2),360)) * interval '1 minute' END", r.recommendationFeeds(), r.schedule.AutoMinInterval)
 	}
 	return r.finishRun(ctx, run, updates, map[string]any{
 		"status":      "failed",
@@ -284,13 +289,13 @@ func (r *Repository) FinishSuccess(ctx context.Context, run *sourceRun, found, c
 	}
 	updates := map[string]any{
 		"fail_count":    0,
-		"health":        gorm.Expr("CASE WHEN " + sourceIsActive + " THEN 'ok' ELSE 'paused' END"),
+		"health":        gorm.Expr("CASE WHEN "+sourceIsActive+" THEN 'ok' ELSE 'paused' END", r.recommendationFeeds()),
 		"last_fetch_at": gorm.Expr("now()"),
 		"last_ok_at":    gorm.Expr("now()"),
 		"last_error":    nil,
 		"cursor":        cursor,
 		"updated_at":    gorm.Expr("now()"),
-		"next_fetch_at": gorm.Expr("CASE WHEN " + sourceIsActive + " THEN now() + interval_minutes * interval '1 minute' END"),
+		"next_fetch_at": gorm.Expr("CASE WHEN "+sourceIsActive+" THEN now() + interval_minutes * interval '1 minute' END", r.recommendationFeeds()),
 	}
 	runUpdates := map[string]any{
 		"status":      "ok",

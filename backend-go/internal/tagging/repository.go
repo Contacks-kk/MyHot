@@ -5,10 +5,14 @@ import (
 	"time"
 
 	"aihot/backend-go/internal/model"
+	"aihot/backend-go/internal/sourceschedule"
 	"gorm.io/gorm"
 )
 
-type Repository struct{ db *gorm.DB }
+type Repository struct {
+	db                  *gorm.DB
+	recommendationFeeds model.TextArray
+}
 
 // SourceLabelRanking selects the same active labels for display and personal filtering.
 // The outer query supplies the source as src.
@@ -50,8 +54,11 @@ type AdminEntry struct {
 }
 
 /** NewRepository provides the persistence boundary for the interest label catalog. */
-func NewRepository(db *gorm.DB) *Repository {
-	return &Repository{db: db}
+func NewRepository(db *gorm.DB, recommendationFeeds ...string) *Repository {
+	return &Repository{
+		db:                  db,
+		recommendationFeeds: model.TextArray(recommendationFeeds),
+	}
 }
 
 /** catalog returns labels in stable ID order for matching and prompt construction. */
@@ -88,9 +95,11 @@ func (r *Repository) pendingArticles(ctx context.Context, version string) ([]Art
 	var rows []Article
 	err := r.db.WithContext(ctx).Raw(`SELECT a.id,a.title,coalesce(a.excerpt,'') excerpt,a.revision
 		FROM articles a LEFT JOIN article_label_index_state i ON i.article_id=a.id
-		WHERE NOT a.backfill AND a.discovered_at>=now()-interval '90 days'
+		WHERE ((NOT a.backfill AND a.discovered_at>=now()-interval '90 days')
+		  OR (a.backfill AND `+sourceschedule.RecommendationArticleWindow+`
+		    AND EXISTS (SELECT 1 FROM sources s WHERE s.id=a.source_id AND `+sourceschedule.RecommendationFeedSQL("s")+`)))
 		  AND (i.article_id IS NULL OR i.revision<>a.revision OR i.catalog_version<>?)
-		ORDER BY (i.article_id IS NULL) DESC,a.discovered_at DESC,a.id LIMIT 200`, version).Scan(&rows).Error
+		ORDER BY (i.article_id IS NULL) DESC,a.discovered_at DESC,a.id LIMIT 200`, r.recommendationFeeds, version).Scan(&rows).Error
 	return rows, err
 }
 

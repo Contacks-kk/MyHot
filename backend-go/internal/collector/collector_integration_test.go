@@ -22,6 +22,8 @@ import (
 	publicationdomain "aihot/backend-go/internal/publication"
 	"aihot/backend-go/internal/receipts"
 	"aihot/backend-go/internal/sourceschedule"
+	"aihot/backend-go/internal/tagging"
+	"aihot/backend-go/internal/topics"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -918,9 +920,9 @@ func TestJinaListingKeepsReceivedPageAcrossStorageFailure(t *testing.T) {
 	sourceID := fmt.Sprintf("collector_jina_listing_%d", time.Now().UnixNano())
 	address := "https://r.jina.ai/https://example.org/news/"
 	configuration, err := json.Marshal(map[string]any{
-		"url":                  address,
-		"allowUrlPrefixes":     []string{"https://example.org/news/"},
-		"_aihot":               map[string]any{"initialBackfillLimit": 30},
+		"url":              address,
+		"allowUrlPrefixes": []string{"https://example.org/news/"},
+		"_aihot":           map[string]any{"initialBackfillLimit": 30},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1376,6 +1378,76 @@ func TestFetchCompletionUsesCurrentSubscriptions(t *testing.T) {
 	due, err = repo.DueSourceIDs(ctx)
 	if err != nil || !slices.Contains(due, sourceID) {
 		t.Fatalf("reactivated source was not picked up by the scanner: due=%v err=%v", due, err)
+	}
+}
+
+/** Verify that an approved feed uses the same worker without requiring a subscription. */
+func TestRecommendationFeedCollectionIntegration(t *testing.T) {
+	pool := collectorPool(t)
+	orm := collectorORM(t)
+	ctx := context.Background()
+	approved := fmt.Sprintf("rec_feed_%d", time.Now().UnixNano())
+	other := approved + "_other"
+	labelID := approved + "_label"
+	address := "https://fixture.example.invalid/" + approved
+	for _, id := range []string{approved, other} {
+		if _, err := pool.Exec(ctx, `INSERT INTO sources(id,name,kind,config,enabled,health,participation_mode)
+			VALUES($1,$1,'rss',jsonb_build_object('feedUrl',$2::text),false,'paused','isolated')`,
+			id, "https://fixture.example.invalid/"+id+"/feed"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM articles WHERE source_id=$1", approved)
+		_, _ = pool.Exec(ctx, "DELETE FROM sources WHERE id IN ($1,$2)", approved, other)
+		_, _ = pool.Exec(ctx, "DELETE FROM interest_labels WHERE id=$1", labelID)
+	})
+	policy := config.SourceSchedule{RecommendationFeeds: []string{address + "/feed"}}
+	if err := sourceschedule.Reconcile(ctx, orm, policy); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	client := fakeDoer(func(req *http.Request) (*http.Response, error) {
+		calls++
+		if req.URL.String() != address+"/feed" {
+			t.Fatalf("unexpected request: %s", req.URL)
+		}
+		body := fmt.Sprintf(`<rss version="2.0"><channel><title>Feed</title><link>%s</link><item><title>Vector Flux Engine</title><link>%s/article</link><description>Article excerpt.</description><pubDate>%s</pubDate></item></channel></rss>`,
+			address, address, time.Now().UTC().Add(-72*time.Hour).Format(time.RFC1123))
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	service := NewService(NewRepository(orm, pool, policy), client, materials.NewService(materials.NewRepository(orm)))
+	due, err := service.DueSourceIDs(ctx)
+	if err != nil || !slices.Contains(due, approved) || slices.Contains(due, other) {
+		t.Fatalf("wrong due set: %v, %v", due, err)
+	}
+	for _, id := range []string{other, approved, approved} {
+		if err := service.CollectSource(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var interval int
+	var scheduled, isolatedFromPersonal bool
+	var sourceMode string
+	err = pool.QueryRow(ctx, `SELECT interval_minutes,next_fetch_at=last_ok_at+interval '6 hours',participation_mode,
+		EXISTS (SELECT 1 FROM articles a WHERE a.source_id=s.id AND a.backfill AND a.backfill_reason='first-import')
+		FROM sources s WHERE id=$1`, approved).Scan(&interval, &scheduled, &sourceMode, &isolatedFromPersonal)
+	if err != nil || interval != 360 || !scheduled || sourceMode != "isolated" || !isolatedFromPersonal || calls != 1 {
+		t.Fatalf("unexpected schedule: interval=%d scheduled=%v firstImport=%v calls=%d error=%v", interval, scheduled, isolatedFromPersonal, calls, err)
+	}
+
+	// The background index makes recent first imports eligible without changing their backfill flag.
+	tagger := tagging.NewService(tagging.NewRepository(orm, policy.RecommendationFeeds...), tagging.Builtins(nil, []topics.Definition{
+		{Slug: labelID, Name: "Vector Flux Engine", Group: "field", Definition: "Test recommendation tagging"},
+	}), nil)
+	if _, err := tagger.Prepare(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var indexed bool
+	err = pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM article_interest_labels al
+		JOIN articles a ON a.id=al.article_id WHERE a.source_id=$1 AND a.backfill AND al.label_id=$2)`, approved, labelID).Scan(&indexed)
+	if err != nil || !indexed {
+		t.Fatalf("approved first import was not indexed: %v", err)
 	}
 }
 

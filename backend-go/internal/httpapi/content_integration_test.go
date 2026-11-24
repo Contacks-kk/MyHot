@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,134 @@ import (
 	"aihot/backend-go/internal/auth"
 	"aihot/backend-go/internal/config"
 )
+
+/** Verify recommendation eligibility, quotas, content visibility and private article access. */
+func TestTagRecommendationsIntegration(t *testing.T) {
+	pool, orm := authTestPools(t)
+	ctx := context.Background()
+	prefix := fmt.Sprintf("rec_%d", time.Now().UnixNano())
+	tag, alias := prefix+"_tag", prefix+"_alias"
+	sources := make([]string, 4)
+	var feeds []string
+	var users []int64
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM user_accounts WHERE id=ANY($1)", users)
+		_, _ = pool.Exec(ctx, "DELETE FROM articles WHERE source_id=ANY($1)", sources)
+		_, _ = pool.Exec(ctx, "DELETE FROM sources WHERE id=ANY($1)", sources)
+		_, _ = pool.Exec(ctx, "DELETE FROM interest_labels WHERE id=$1", alias)
+		_, _ = pool.Exec(ctx, "DELETE FROM interest_labels WHERE id=$1", tag)
+	})
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range sources {
+		sources[i] = fmt.Sprintf("%s_s%d", prefix, i)
+		feed := "https://fixture.example.invalid/" + sources[i] + ".xml"
+		exec(`INSERT INTO sources(id,name,kind,config) VALUES($1,$1,'rss',jsonb_build_object('feedUrl',$2::text))`, sources[i], feed)
+		if i < 3 {
+			feeds = append(feeds, feed)
+		}
+	}
+	exec(`INSERT INTO interest_labels(id,name,name_key,kind,definition,status) VALUES($1,$1,$1,'topic','fixture','active')`, tag)
+	exec(`INSERT INTO interest_labels(id,name,name_key,kind,definition,status,merged_into) VALUES($1,$1,$1,'topic','fixture','merged',$2)`, alias, tag)
+	server := New(config.Config{SourceSchedule: config.SourceSchedule{RecommendationFeeds: feeds}}, pool, orm, nil)
+	clients := make([]authClient, 2)
+	for i := range clients {
+		var id int64
+		if err := pool.QueryRow(ctx, `INSERT INTO user_accounts(email,password_hash,verified_at)
+			VALUES($1,'fixture',now()) RETURNING id`, fmt.Sprintf("%s_%d@example.invalid", prefix, i)).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		users = append(users, id)
+		token, hash, err := auth.NewToken()
+		if err != nil {
+			t.Fatal(err)
+		}
+		exec(`INSERT INTO user_sessions(user_id,token_hash,csrf_token,expires_at) VALUES($1,$2,'csrf',now()+interval '1 hour')`, id, hash)
+		exec(`INSERT INTO user_interests(user_id,label_ids) VALUES($1,$2)`, id, []string{tag, alias})
+		clients[i] = authClient{handler: server.Handler(), cookie: testCookie(token), csrf: "csrf"}
+	}
+	exec(`INSERT INTO user_source_subscriptions(user_id,source_id,name) VALUES($1,$2,$2)`, users[0], sources[0])
+
+	add := func(suffix string, source int, hours int, backfill, hash string) string {
+		id := prefix + "_" + suffix
+		exec(`INSERT INTO articles(id,source_id,identity_key,url,title,excerpt,content_hash,discovered_at,published_at,timeline_at,backfill,backfill_reason)
+			VALUES($1,$2,$1,'https://fixture.example.invalid/'||$1,$1,'source excerpt',nullif($4,''),now(),
+				now()-make_interval(hours=>$3),now(),$5<>'',nullif($5,''))`, id, sources[source], hours, hash, backfill)
+		exec("INSERT INTO article_interest_labels(article_id,label_id) VALUES($1,$2)", id, tag)
+		return id
+	}
+	publish := func(id string, visibility string, pending bool) {
+		exec(`INSERT INTO publications(article_id,source_id,title,summary,url,channel,discovered_at,timeline_at,sort_at,visibility,eligible,score,visible_after)
+			SELECT id,source_id,title,'publication summary',url,'news',discovered_at,timeline_at,timeline_at,$2,true,94,
+				CASE WHEN $3 THEN now()+interval '1 day' END FROM articles WHERE id=$1`, id, visibility, pending)
+	}
+	duplicateHash := strings.Repeat("a", 64)
+	published := add("public", 1, 10, "", "")
+	owned := add("owned", 0, 1, "", duplicateHash)
+	otherPrivate := add("other", 0, 2, "", "")
+	warm := add("warm", 2, 3, "first-import", "")
+	add("extra_a", 0, 3, "", "")
+	add("extra_a2", 0, 4, "", "")
+	add("extra_b", 1, 6, "", "")
+	add("extra_c", 2, 7, "", "")
+	embargo := add("embargo", 2, 0, "", "")
+	withdrawn := add("withdrawn", 2, 0, "", "")
+	for _, record := range []struct {
+		id   string
+		user int64
+	}{{owned, users[0]}, {otherPrivate, users[1]}} {
+		exec(`INSERT INTO user_article_results(user_id,article_id,input_revision,model,relevance_score,title,summary) VALUES($1,$2,1,'fixture',100,'private title','private summary')`, record.user, record.id)
+	}
+	publish(published, "public", false)
+	publish(embargo, "public", true)
+	publish(withdrawn, "withdrawn", false)
+	excluded := []string{owned, embargo, withdrawn, add("copy", 2, 0, "", duplicateHash),
+		add("old", 2, 192, "first-import", ""), add("backfill", 2, 0, "archive", ""), add("unapproved", 3, 0, "", "")}
+	var response struct {
+		Items   []recommendedArticleResponse
+		HasMore bool
+	}
+	body := clients[0].request(t, "GET", "/api/me/recommended-articles?limit=50", nil, 200).Body.Bytes()
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.HasMore || len(response.Items) != 6 || response.Items[0].ArticleID != published ||
+		response.Items[0].Score == nil || *response.Items[0].Score != 96 {
+		t.Fatalf("unexpected recommended list: %s", body)
+	}
+	counts := map[string]int{}
+	for _, item := range response.Items {
+		counts[item.SourceID]++
+		if counts[item.SourceID] > 2 || slices.Contains(excluded, item.ArticleID) || strings.Contains(item.Summary, "private") {
+			t.Fatalf("ineligible recommendation: %+v", item)
+		}
+		if item.ArticleID == otherPrivate && (item.Score != nil || item.Summary != "source excerpt" || !item.IsSubscribed) {
+			t.Fatalf("private data or subscription flag leaked: %+v", item)
+		}
+	}
+	if !strings.Contains(string(body), otherPrivate) || !strings.Contains(string(body), warm) {
+		t.Fatal("unseen article from a followed source or recent first import is missing")
+	}
+	clients[0].request(t, "GET", "/api/me/articles/"+otherPrivate, nil, 404)
+	clients[1].request(t, "GET", "/api/me/articles/"+otherPrivate, nil, 200)
+	tagsOnly := clients[1].request(t, "GET", "/api/me/recommended-articles", nil, 200)
+	if err := json.Unmarshal(tagsOnly.Body.Bytes(), &response); err != nil || len(response.Items) == 0 {
+		t.Fatalf("a user with tags and without source subscriptions got no recommendations: %s", tagsOnly.Body)
+	}
+	for _, item := range response.Items {
+		if item.IsSubscribed || item.ArticleID == otherPrivate || strings.Contains(item.Summary, "private") {
+			t.Fatalf("unexpected tag-only recommendation: %+v", item)
+		}
+	}
+	result := clients[0].request(t, "GET", "/api/me/recommended-articles?page=2", nil, 200)
+	if err := json.Unmarshal(result.Body.Bytes(), &response); err != nil || len(response.Items) != 0 || response.HasMore {
+		t.Fatalf("unexpected legacy page: %s", result.Body)
+	}
+}
 
 func TestPersonalHotWindowOrderingAndHistoryIntegration(t *testing.T) {
 	pool, orm := authTestPools(t)

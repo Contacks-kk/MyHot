@@ -353,9 +353,12 @@ func (s *Service) Hot(ctx context.Context, userID int64, query HotQuery, now tim
 	}, nil
 }
 
-/** RecommendedArticles retrieves personalized article recommendations from un-subscribed sources. */
-func (s *Service) RecommendedArticles(ctx context.Context, userID int64, page, limit int) ([]RecommendedArticleItem, bool, error) {
-	return s.repository.RecommendedArticles(ctx, userID, page, limit)
+/** RecommendedArticles returns the single list of unseen tagged articles. */
+func (s *Service) RecommendedArticles(ctx context.Context, userID int64, page int) ([]RecommendedArticleItem, error) {
+	if page > 1 {
+		return []RecommendedArticleItem{}, nil
+	}
+	return s.repository.RecommendedArticles(ctx, userID, s.config.SourceSchedule.RecommendationFeeds)
 }
 
 func (s *Service) Daily(ctx context.Context, userID int64) ([]DailyReport, error) {

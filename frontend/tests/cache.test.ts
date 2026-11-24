@@ -92,6 +92,18 @@ const account = createServer((req,res)=>{
         isSubscribed: false,
         createdAt: "2026-10-04T00:00:00Z",
         matchedTags: [],
+      }, {
+        articleId: "fixture-recommendation-raw",
+        score: null,
+        title: "Raw fixture recommendation",
+        summary: "Fixture source excerpt",
+        url: "https://papers.example.invalid/raw",
+        sourceId: "fixture-source",
+        sourceName: "Research feed",
+        sourceKind: "rss",
+        isSubscribed: true,
+        createdAt: "2026-10-04T00:00:00Z",
+        matchedTags: ["Agent"],
       }],
       page: 1,
       hasMore: false,
@@ -185,6 +197,10 @@ test("unified hotspots carry today's funnel, date controls, and the requested de
   assert.equal(recommendationPage('nav[aria-label="内容模式切换"]').length, 0);
   assert.equal(recommendationPage('nav[aria-label="底部导航"] [aria-current="page"]').attr("href"), "/recommendations");
   assert.equal(recommendationPage('article [title="Research feed"] img').attr("src"), "/api/img-proxy?fixture=recommendation-logo");
+  assert.equal(recommendationPage("article h2 a").first().attr("href"), "/items/fixture-recommendation");
+  assert.equal(recommendationPage("article h2 a").last().attr("href"), "https://papers.example.invalid/raw");
+  assert.match(recommendationPage("article").last().text(), /原文摘要.*Agent/s);
+  assert.equal(recommendationPage('nav[aria-label="推荐分页"]').length, 0);
 
   const account = await fetch(origin + "/more", { headers: alice });
   assert.equal(account.status, 200, logs);

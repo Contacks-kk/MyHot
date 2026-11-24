@@ -42,7 +42,7 @@ func TestSourceScheduleMinutes(t *testing.T) {
 	t.Setenv("SOURCE_MANUAL_REUSE_WINDOW_MINUTES", "")
 	t.Setenv("SOURCE_AUTO_REUSE_WINDOW_MINUTES", "")
 	cfg, err = Load()
-	if err != nil || cfg.SourceSchedule != (SourceSchedule{}) {
+	if err != nil || cfg.SourceSchedule.AutoMinInterval != 0 || cfg.SourceSchedule.AutoReuseWindow != 0 || cfg.SourceSchedule.ManualReuseWindow != 0 || len(cfg.SourceSchedule.RecommendationFeeds) != 8 {
 		t.Fatalf("unset source schedule = %#v, %v", cfg.SourceSchedule, err)
 	}
 }

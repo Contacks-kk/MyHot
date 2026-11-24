@@ -114,7 +114,7 @@ func (s *Server) hot(w http.ResponseWriter, r *http.Request, u userContext) {
 
 type recommendedArticleResponse struct {
 	ArticleID     string               `json:"articleId"`
-	Score         int                  `json:"score"`
+	Score         *float64             `json:"score"`
 	Title         string               `json:"title"`
 	Summary       string               `json:"summary"`
 	Reason        string               `json:"reason"`
@@ -130,7 +130,7 @@ type recommendedArticleResponse struct {
 	MatchedTags   []string             `json:"matchedTags"`
 }
 
-/** recommendedArticles returns personalized article recommendations from un-subscribed sources. */
+/** recommendedArticles returns one short list of unseen articles from approved feeds. */
 func (s *Server) recommendedArticles(w http.ResponseWriter, r *http.Request, u userContext) {
 	if s.Personal == nil {
 		writeError(w, http.StatusServiceUnavailable, "服务暂不可用")
@@ -144,15 +144,7 @@ func (s *Server) recommendedArticles(w http.ResponseWriter, r *http.Request, u u
 		}
 	}
 
-	limit := 20
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		if val, err := strconv.Atoi(raw); err == nil && val >= 1 && val <= 50 {
-			limit = val
-		}
-	}
-
-	// 检索与用户标签匹配且未订阅信源的推荐文章
-	items, hasMore, err := s.Personal.RecommendedArticles(r.Context(), u.ID, page, limit)
+	items, err := s.Personal.RecommendedArticles(r.Context(), u.ID, page)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "获取推荐文章失败")
 		return
@@ -161,13 +153,11 @@ func (s *Server) recommendedArticles(w http.ResponseWriter, r *http.Request, u u
 	now := time.Now()
 	responses := make([]recommendedArticleResponse, 0, len(items))
 	for _, item := range items {
-		mediaViews := mediaurl.BuildViews(item.MediaJSON, "image-336", now, s.Config.ImageProxySignSecret, 4)
 		responses = append(responses, recommendedArticleResponse{
 			ArticleID:     item.ArticleID,
 			Score:         item.Score,
 			Title:         item.Title,
 			Summary:       item.Summary,
-			Reason:        item.Reason,
 			URL:           item.URL,
 			SourceID:      item.SourceID,
 			SourceName:    item.SourceName,
@@ -176,7 +166,7 @@ func (s *Server) recommendedArticles(w http.ResponseWriter, r *http.Request, u u
 			IsSubscribed:  item.IsSubscribed,
 			PublishedAt:   item.PublishedAt,
 			CreatedAt:     item.CreatedAt,
-			Media:         mediaViews,
+			Media:         []mediaurl.MediaView{},
 			MatchedTags:   item.MatchedTags,
 		})
 	}
@@ -184,7 +174,7 @@ func (s *Server) recommendedArticles(w http.ResponseWriter, r *http.Request, u u
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items":   responses,
 		"page":    page,
-		"hasMore": hasMore,
+		"hasMore": false,
 	})
 }
 

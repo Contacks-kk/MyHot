@@ -15,9 +15,23 @@ import (
 
 // SourceSchedule holds optional platform limits in minutes.
 type SourceSchedule struct {
-	AutoMinInterval   int
-	ManualReuseWindow int
-	AutoReuseWindow   int
+	AutoMinInterval     int
+	ManualReuseWindow   int
+	AutoReuseWindow     int
+	RecommendationFeeds []string
+}
+
+const RecommendationIntervalMinutes = 360
+
+var recommendationFeeds = []string{
+	"https://rss.arxiv.org/rss/cs.AI",
+	"https://huggingface.co/blog/feed.xml",
+	"https://simonwillison.net/atom/everything/",
+	"https://latent.space/feed",
+	"https://github.com/pydantic/pydantic-ai/releases.atom",
+	"https://blog.cloudflare.com/rss/",
+	"https://kubernetes.io/feed.xml",
+	"https://developer.nvidia.com/blog/feed/",
 }
 
 type Config struct {
@@ -117,7 +131,7 @@ type Config struct {
 }
 
 func Load() (Config, error) {
-	var sourceSchedule SourceSchedule
+	sourceSchedule := SourceSchedule{RecommendationFeeds: append([]string(nil), recommendationFeeds...)}
 	for name, target := range map[string]*int{
 		"SOURCE_AUTO_MIN_INTERVAL_MINUTES":   &sourceSchedule.AutoMinInterval,
 		"SOURCE_MANUAL_REUSE_WINDOW_MINUTES": &sourceSchedule.ManualReuseWindow,

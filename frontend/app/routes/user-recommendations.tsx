@@ -1,9 +1,7 @@
-import type { MediaView } from "@aihot/contracts/site";
 import type { Screen } from "../components/shell/screens";
 import { useEffect, useState } from "react";
-import { data, Link, useLoaderData, useNavigate, useNavigation } from "react-router";
+import { Link, useLoaderData, useNavigate, useNavigation } from "react-router";
 import type { Route } from "./+types/user-recommendations";
-import { MediaThumbs } from "../features/feed/parts";
 import { userApiGet, userApiMe } from "../lib/user-api.server";
 import { useLocalePreference } from "../lib/local-state";
 import { getDict } from "../lib/i18n";
@@ -25,11 +23,9 @@ export const handle: Screen = { tab: "recommendations", name: "为你推荐" };
 
 interface RecommendedItem {
   articleId: string;
-  score: number;
+  score: number | null;
   title: string;
-  originalTitle?: string;
   summary: string;
-  reason?: string;
   url: string;
   sourceId: string;
   sourceName: string;
@@ -38,31 +34,19 @@ interface RecommendedItem {
   isSubscribed: boolean;
   createdAt: string;
   publishedAt?: string | null;
-  media?: MediaView[];
   matchedTags: string[];
 }
 
-/** Load personalized article recommendations from un-subscribed sources matching user tags. */
+/** Load the signed-in user's single selection of recommendations. */
 export async function loader({ request }: Route.LoaderArgs) {
-  const params = new URL(request.url).searchParams;
-  const page = Number(params.get("page") ?? "1");
-  if (!Number.isInteger(page) || page < 1 || page > 10000) {
-    throw data({ message: "页码无效" }, { status: 400 });
-  }
-
   const [user, recs] = await Promise.all([
     userApiMe(request),
-    userApiGet<{ items: RecommendedItem[]; page: number; hasMore: boolean }>(
-      request,
-      `/api/me/recommended-articles?page=${page}&limit=20`
-    ),
+    userApiGet<{ items: RecommendedItem[] }>(request, "/api/me/recommended-articles"),
   ]);
 
   return {
     csrfToken: user?.csrfToken ?? "",
     items: recs.items ?? [],
-    page: recs.page ?? page,
-    hasMore: recs.hasMore ?? false,
   };
 }
 
@@ -87,7 +71,7 @@ function hostOf(url: string): string {
 
 /** Render the recommended articles page with 1-click source follow action. */
 export default function UserRecommendations() {
-  const { csrfToken, items: initialItems, page, hasMore } = useLoaderData<typeof loader>();
+  const { csrfToken, items: initialItems } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const locale = useLocalePreference();
   const dict = getDict(locale);
@@ -224,7 +208,7 @@ export default function UserRecommendations() {
           </button>
 
           <p className="mono text-[10px] uppercase tracking-[.16em] text-ink-4 transition-colors">
-            {isEn ? "Discovery · Processed Articles" : "智能发现 · 未关注信源高分加工文章"}
+            {isEn ? "Tag-based picks" : "标签精选"}
           </p>
         </div>
 
@@ -382,8 +366,8 @@ export default function UserRecommendations() {
 
       <p className="mb-5 mt-1 text-[12px] text-ink-4 transition-colors">
         {isEn
-          ? "High-scoring processed articles from un-followed sources matching your tags. Read and follow feeds you like."
-          : "基于你关注的技术主题与公司标签，精选全站其他信源已加工的优质文章。查阅感兴趣的文章，可一键关注其信源。"}
+          ? "Up to six articles that match your tags and are new to your personal feed."
+          : "按你关注的标签，精选最多 6 篇尚未收录到个人热点的文章。"}
       </p>
 
       {/* Article list */}
@@ -393,7 +377,7 @@ export default function UserRecommendations() {
         }`}
       >
         {items.map((item, index) => {
-          const displayTitle = isEn && item.originalTitle ? item.originalTitle : item.title;
+          const isScored = item.score != null;
           const isWebList = item.sourceKind === "web_list";
 
           return (
@@ -401,22 +385,25 @@ export default function UserRecommendations() {
               <div className="flex gap-4">
                 {/* Ranking number */}
                 <span className="mono flex size-8 shrink-0 items-center justify-center rounded-control bg-accent-soft text-[12px] font-semibold text-accent">
-                  {String((page - 1) * 20 + index + 1).padStart(2, "0")}
+                  {String(index + 1).padStart(2, "0")}
                 </span>
 
                 <div className="min-w-0 flex-1">
                   {/* Title & Score */}
                   <div className="flex items-start justify-between gap-3">
                     <h2 className="editorial-title text-[17px] font-semibold text-ink">
-                      <Link
-                        to={`/my/articles/${encodeURIComponent(item.articleId)}`}
-                        className="transition-colors group-hover:text-accent"
-                      >
-                        {displayTitle}
-                      </Link>
+                      {isScored ? (
+                        <Link to={`/items/${encodeURIComponent(item.articleId)}`} className="transition-colors group-hover:text-accent">
+                          {item.title}
+                        </Link>
+                      ) : (
+                        <a href={item.url} target="_blank" rel="noreferrer" className="transition-colors group-hover:text-accent">
+                          {item.title}
+                        </a>
+                      )}
                     </h2>
                     <span className="mono rounded-full bg-accent-soft px-2 py-1 text-[10px] text-accent shrink-0">
-                      {item.score}
+                      {isScored ? item.score : (isEn ? "Source excerpt" : "原文摘要")}
                     </span>
                   </div>
 
@@ -424,9 +411,6 @@ export default function UserRecommendations() {
                   <p className="mt-2 text-[12.5px] leading-relaxed text-ink-3 line-clamp-3 sm:line-clamp-none">
                     {item.summary}
                   </p>
-
-                  {/* Media thumbs */}
-                  {item.media && item.media.length > 0 && <MediaThumbs media={item.media} className="mt-3" />}
 
                   {/* Matched Tags Chips */}
                   {item.matchedTags && item.matchedTags.length > 0 && (
@@ -508,12 +492,7 @@ export default function UserRecommendations() {
         {!items.length && (
           <div className="py-16 text-center text-ink-4">
             <p className="text-[14px] font-medium text-ink">
-              {isEn ? "No recommended articles found" : "暂无推荐文章"}
-            </p>
-            <p className="mt-2 text-[12px] text-ink-3">
-              {isEn
-                ? "Try following more tags in Interests or explore public sources."
-                : "前往「关注项」关注更多感兴趣的技术主题或公司实体标签，系统将为你实时推荐匹配的优质文章。"}
+              {isEn ? "No eligible recommendations yet" : "暂无符合条件的推荐文章"}
             </p>
             <div className="mt-4 flex justify-center gap-3 text-[12.5px] font-medium text-accent">
               <Link to="/interests">{dict.nav.interests} →</Link>
@@ -523,25 +502,6 @@ export default function UserRecommendations() {
         )}
       </div>
 
-      {/* Pagination */}
-      {(page > 1 || hasMore) && (
-        <nav
-          aria-label={isEn ? "Recommendation pages" : "推荐分页"}
-          className="mt-6 flex items-center justify-center gap-5 text-[13px] text-accent"
-        >
-          {page > 1 && (
-            <Link to={`/recommendations?page=${page - 1}`} preventScrollReset>
-              {isEn ? "Previous" : "上一页"}
-            </Link>
-          )}
-          <span className="text-ink-4">{isEn ? `Page ${page}` : `第 ${page} 页`}</span>
-          {hasMore && (
-            <Link to={`/recommendations?page=${page + 1}`} preventScrollReset>
-              {isEn ? "Next" : "下一页"}
-            </Link>
-          )}
-        </nav>
-      )}
     </section>
   );
 }
