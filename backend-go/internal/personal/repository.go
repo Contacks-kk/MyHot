@@ -246,6 +246,8 @@ func (r *Repository) RecommendedArticles(ctx context.Context, userID int64, feed
 
 	// Canonical article identities already combine discoveries from equivalent URLs.
 	db := r.db.WithContext(ctx)
+
+	// Materialize both sets so the anti-join compares precomputed fingerprints.
 	query := db.Raw(`WITH followed_tags AS (
 		SELECT DISTINCT target.id,target.name FROM user_interests u
 		CROSS JOIN LATERAL unnest(coalesce(u.entity_ids,'{}'::text[]) || coalesce(u.label_ids,'{}'::text[])) followed(id)
@@ -253,10 +255,10 @@ func (r *Repository) RecommendedArticles(ctx context.Context, userID int64, feed
 		JOIN interest_labels target ON target.id=coalesce(alias.merged_into,followed.id)
 			AND target.status IN ('active','dormant')
 		WHERE u.user_id=?
-	), owned AS (
+	), owned AS MATERIALIZED (
 		SELECT a.id,a.identity_key,a.url,`+recommendationFingerprint+` AS fingerprint
 		FROM user_article_results r JOIN articles a ON a.id=r.article_id WHERE r.user_id=?
-	), candidates AS (
+	), candidates AS MATERIALIZED (
 		SELECT a.id,a.identity_key,`+recommendationFingerprint+` AS fingerprint,
 			a.title,a.excerpt,a.url,a.published_at,a.discovered_at,
 			s.id AS source_id,s.name AS source_name,s.kind AS source_kind,s.icon_url AS source_icon_url,
