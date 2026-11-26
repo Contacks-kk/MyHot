@@ -128,6 +128,14 @@ function formatMarkerTime(epochSec: number, locale: "zh" | "en"): string {
   }).format(new Date(epochSec * 1000));
 }
 
+/** Merge a quote only if it is at least as recent as the displayed price. */
+function withMarketQuote(quotes: Record<string, QuoteSnapshot>, quote: QuoteSnapshot) {
+  if ((quotes[quote.symbol]?.updatedAt ?? 0) > quote.updatedAt) {
+    return quotes;
+  }
+  return { ...quotes, [quote.symbol]: quote };
+}
+
 /** Render the authenticated real-time economic K-line page with WebSocket streaming and news overlay. */
 export default function UserMarkets() {
   const { catalog, initialCandles } = useLoaderData<typeof loader>();
@@ -146,6 +154,8 @@ export default function UserMarkets() {
 
   const chartRef = useRef<KlineChartHandle | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const snapshotRequest = useRef(0);
+  const latestLiveCandle = useRef<MarketCandle | null>(null);
   const activeSubRef = useRef({ symbol: selectedSymbol, tf: selectedTF });
 
   activeSubRef.current = { symbol: selectedSymbol, tf: selectedTF };
@@ -169,8 +179,12 @@ export default function UserMarkets() {
   }, [drawerOpen]);
 
   /** Fetch historical + live snapshot window cleanly for a symbol/timeframe without tearing down WebSocket. */
-  async function fetchCandleSnapshot(symbol: string, tf: string) {
-    setLoadingWindow(true);
+  async function fetchCandleSnapshot(symbol: string, tf: string, showLoading = false) {
+    const request = ++snapshotRequest.current;
+    const liveAtRequest = latestLiveCandle.current;
+    if (showLoading) {
+      setLoadingWindow(true);
+    }
     try {
       const res = await fetch(
         `/api/me/markets/candles?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(tf)}&limit=300`
@@ -180,23 +194,50 @@ export default function UserMarkets() {
       }
 
       const payload = (await res.json()) as CandlesResponse;
-      if (activeSubRef.current.symbol !== symbol || activeSubRef.current.tf !== tf) {
+      if (request !== snapshotRequest.current || activeSubRef.current.symbol !== symbol || activeSubRef.current.tf !== tf) {
         return;
       }
 
-      setCandles(payload.candles ?? []);
+      const history = payload.candles ?? [];
+      const live = latestLiveCandle.current;
+      if (live && live !== liveAtRequest && live.time >= (history.at(-1)?.time ?? 0)) {
+        const beforeLive = history.at(-1)?.time === live.time ? history.slice(0, -1) : history;
+        setCandles([...beforeLive, live]);
+      } else {
+        setCandles(history);
+      }
       setMarkers(payload.markers ?? []);
       if (payload.quote) {
         const latestQuote = payload.quote;
-        setQuotes((prev) => ({
-          ...prev,
-          [latestQuote.symbol]: latestQuote,
-        }));
+        setQuotes((prev) => withMarketQuote(prev, latestQuote));
       }
+    } catch {
+      // The next snapshot or reconnect retries without clearing the last good window.
     } finally {
-      setLoadingWindow(false);
+      if (request === snapshotRequest.current) {
+        setLoadingWindow(false);
+      }
     }
   }
+
+  // Keep all three cards current even when the socket is subscribed to one chart.
+  useEffect(() => {
+    if (!catalog.enabled) {
+      return;
+    }
+    const timer = window.setInterval(async () => {
+      try {
+        const res = await fetch("/api/me/markets");
+        if (res.ok) {
+          const data = (await res.json()) as MarketsCatalogResponse;
+          setQuotes((prev) => Object.values(data.quotes).reduce(withMarketQuote, prev));
+        }
+      } catch {
+        // Keep the last quoted price and its timestamp during a network outage.
+      }
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [catalog.enabled]);
 
   // Maintain one persistent same-origin WebSocket with automatic exponential backoff recovery.
   useEffect(() => {
@@ -228,13 +269,10 @@ export default function UserMarkets() {
           return;
         }
 
-        const wasReconnect = reconnectAttempt > 0;
         reconnectAttempt = 0;
 
-        // Resync snapshot after reconnect so bars missed during downtime are backfilled cleanly.
-        if (wasReconnect) {
-          void fetchCandleSnapshot(activeSubRef.current.symbol, activeSubRef.current.tf);
-        }
+        // Sync after connecting to close the gap between the page response and the subscription.
+        void fetchCandleSnapshot(activeSubRef.current.symbol, activeSubRef.current.tf);
 
         heartbeatTimer = setInterval(() => {
           if (socket.readyState === WebSocket.OPEN) {
@@ -246,20 +284,22 @@ export default function UserMarkets() {
       socket.onmessage = (event) => {
         try {
           const msg = JSON.parse(String(event.data)) as WSServerTickMessage;
-          if (msg.type !== "candle" || !msg.candle || !msg.symbol) {
+          if (!msg.symbol || (msg.type !== "candle" && msg.type !== "snapshot")) {
             return;
           }
 
           if (msg.quote) {
             const incomingQuote = msg.quote;
-            setQuotes((prev) => ({
-              ...prev,
-              [incomingQuote.symbol]: incomingQuote,
-            }));
+            setQuotes((prev) => withMarketQuote(prev, incomingQuote));
           }
 
           if (msg.symbol === activeSubRef.current.symbol && msg.tf === activeSubRef.current.tf) {
-            chartRef.current?.applyLiveCandle(msg.candle);
+            if (msg.type === "snapshot") {
+              void fetchCandleSnapshot(msg.symbol, activeSubRef.current.tf);
+            } else if (msg.candle) {
+              latestLiveCandle.current = msg.candle;
+              chartRef.current?.applyLiveCandle(msg.candle);
+            }
           }
         } catch {
           // Ignore non-JSON or malformed keepalive frames safely.
@@ -311,6 +351,9 @@ export default function UserMarkets() {
     setSelectedSymbol(nextSymbol);
     setSelectedTF(nextTF);
     setFocusedMarkerTime(null);
+    setCandles([]);
+    setMarkers([]);
+    latestLiveCandle.current = null;
     activeSubRef.current = { symbol: nextSymbol, tf: nextTF };
 
     // Sync query params cleanly without full page reload.
@@ -330,7 +373,7 @@ export default function UserMarkets() {
       );
     }
 
-    void fetchCandleSnapshot(nextSymbol, nextTF);
+    void fetchCandleSnapshot(nextSymbol, nextTF, true);
   }
 
   const activeMeta = useMemo(() => {
@@ -338,27 +381,31 @@ export default function UserMarkets() {
   }, [catalog.symbols, selectedSymbol]);
 
   const activeQuote = quotes[selectedSymbol];
+  const sourceName = catalog.provider === "twelvedata" ? "Twelve Data" : catalog.provider;
+  const activeStatus = activeQuote?.mode === "mock"
+    ? (isEn ? "Simulated data" : "模拟行情")
+    : activeQuote?.mode === "live"
+      ? (isEn ? "Live quote stream" : "实时推送")
+      : activeQuote
+        ? (isEn ? "Scheduled updates" : "定时更新")
+        : (isEn ? "No data" : "暂无数据");
   const digits = activeMeta?.digits ?? 2;
 
   return (
     <div className="pb-16 pt-2 lg:pt-0">
       {/* Top Bar */}
       <div className="flex flex-col gap-y-3">
-        <div className="flex items-center justify-between lg:justify-start">
+        <div className="lg:hidden">
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}
             aria-expanded={drawerOpen}
             aria-label={isEn ? "Open navigation drawer" : "打开功能导航抽屉"}
-            className="inline-flex items-center gap-1.5 rounded-full border border-line-strong bg-surface px-3 py-1.5 text-[12.5px] font-medium text-ink shadow-xs transition-all hover:border-accent hover:text-accent active:scale-95 lg:hidden"
+            className="inline-flex items-center gap-1.5 rounded-full border border-line-strong bg-surface px-3 py-1.5 text-[12.5px] font-medium text-ink shadow-xs transition-all hover:border-accent hover:text-accent active:scale-95"
           >
             <IconGrid size={14} className="text-accent" />
             <span>{isEn ? "Menu" : "功能导航"}</span>
           </button>
-
-          <p className="mono text-[10px] uppercase tracking-[.16em] text-ink-4">
-            {isEn ? "REAL-TIME MARKETS" : "实时经济看板"}
-          </p>
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -494,7 +541,7 @@ export default function UserMarkets() {
                 <span className="mono text-[20px] font-semibold tracking-tight text-ink">
                   {q ? q.price.toFixed(meta.digits) : "—"}
                 </span>
-                {q ? (
+                {q && q.prevClose > 0 ? (
                   <span
                     className={`mono rounded-mark px-1.5 py-0.5 text-[11.5px] font-medium ${
                       isPositive ? "bg-ok-soft text-ok-ink" : "bg-hot-soft text-hot"
@@ -504,7 +551,7 @@ export default function UserMarkets() {
                     {q.change.toFixed(meta.digits)} ({isPositive ? "+" : ""}
                     {q.changePct.toFixed(2)}%)
                   </span>
-                ) : (
+                ) : !q && (
                   <span className="text-[11px] text-ink-4">{isEn ? "No quote" : "暂无报价"}</span>
                 )}
               </div>
@@ -526,6 +573,10 @@ export default function UserMarkets() {
               </span>
             )}
             <span className="text-[11.5px] text-ink-4">{activeMeta?.description}</span>
+            <span className="text-[11.5px] text-ink-4">
+              {sourceName} · {activeStatus}
+              {activeQuote && ` · ${formatMarkerTime(activeQuote.updatedAt, locale)} (UTC+8)`}
+            </span>
           </div>
 
           <div className="flex items-center gap-2">

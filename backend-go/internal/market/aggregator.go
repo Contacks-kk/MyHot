@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"math"
 	"sync"
@@ -17,24 +18,28 @@ type barKey struct {
 
 // Aggregator turns raw market ticks into aligned multi-timeframe OHLCV bars and quote snapshots.
 type Aggregator struct {
-	mu       sync.Mutex
-	mode     string
-	bars     map[barKey]*Candle
-	dirty    map[barKey]bool
-	quotes   map[string]QuoteSnapshot
-	dayOpens map[string]float64
-	closed   map[barKey][]Candle
+	mu              sync.Mutex
+	mode            string
+	bars            map[barKey]*Candle
+	dirty           map[barKey]bool
+	quotes          map[string]QuoteSnapshot
+	dayOpens        map[string]float64
+	closed          map[barKey][]Candle
+	officialThrough map[string]int64
+	dailyHistory    map[string][]Candle
 }
 
 /** NewAggregator creates a multi-timeframe candle builder. */
 func NewAggregator(mode string) *Aggregator {
 	return &Aggregator{
-		mode:     mode,
-		bars:     make(map[barKey]*Candle),
-		dirty:    make(map[barKey]bool),
-		quotes:   make(map[string]QuoteSnapshot),
-		dayOpens: make(map[string]float64),
-		closed:   make(map[barKey][]Candle),
+		mode:            mode,
+		bars:            make(map[barKey]*Candle),
+		dirty:           make(map[barKey]bool),
+		quotes:          make(map[string]QuoteSnapshot),
+		dayOpens:        make(map[string]float64),
+		closed:          make(map[barKey][]Candle),
+		officialThrough: make(map[string]int64),
+		dailyHistory:    make(map[string][]Candle),
 	}
 }
 
@@ -240,13 +245,17 @@ func NewCollector(repo *Repository, redis *RedisStore, provider Provider, logger
 		logger = slog.Default()
 	}
 
+	mode := "unavailable"
+	if provider != nil {
+		mode = provider.Mode()
+	}
 	return &Collector{
 		repo:       repo,
 		redis:      redis,
 		provider:   provider,
 		logger:     logger,
 		ownerID:    randomOwnerID(),
-		aggregator: NewAggregator(provider.Mode()),
+		aggregator: NewAggregator(mode),
 	}
 }
 
@@ -292,10 +301,7 @@ func (c *Collector) runAsLeader(ctx context.Context) {
 		symbols = append(symbols, meta.Symbol)
 	}
 
-	// Seed history from provider or PostgreSQL before starting real-time stream.
-	c.seedInitialCandles(leaderCtx, symbols)
-
-	// Maintain Redis lease renewal while active.
+	// Keep ownership while quota-limited startup history spans multiple minutes.
 	go func() {
 		renewTicker := time.NewTicker(5 * time.Second)
 		defer renewTicker.Stop()
@@ -315,6 +321,15 @@ func (c *Collector) runAsLeader(ctx context.Context) {
 		}
 	}()
 
+	var history <-chan twelveHistoryBatch
+	if c.provider.Name() == "twelvedata" {
+		batches := make(chan twelveHistoryBatch)
+		history = batches
+		go c.pollTwelveHistory(leaderCtx, symbols, batches)
+	} else {
+		c.seedInitialCandles(leaderCtx, symbols)
+	}
+
 	ticks := make(chan RawTick, 256)
 
 	// Run upstream stream loop with exponential backoff on disconnect.
@@ -329,6 +344,9 @@ func (c *Collector) runAsLeader(ctx context.Context) {
 
 			if err != nil {
 				c.logger.Warn("market upstream stream disconnected", "provider", c.provider.Name(), "error", err.Error())
+			}
+			if errors.Is(err, errTwelveSubscriptionsDenied) {
+				return
 			}
 
 			if time.Since(started) > 30*time.Second {
@@ -351,10 +369,18 @@ func (c *Collector) runAsLeader(ctx context.Context) {
 	for {
 		select {
 		case <-leaderCtx.Done():
-			c.flushAggregator(context.Background())
+			if history == nil {
+				c.flushAggregator(context.Background())
+			}
 			return
 		case tick := <-ticks:
-			c.aggregator.ApplyTick(tick)
+			if history != nil {
+				c.aggregator.applyTwelveTick(tick, time.Now())
+			} else {
+				c.aggregator.ApplyTick(tick)
+			}
+		case batch := <-history:
+			c.saveTwelveHistory(leaderCtx, batch)
 		case <-flushTicker.C:
 			c.flushAggregator(leaderCtx)
 		}

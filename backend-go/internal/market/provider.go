@@ -16,28 +16,32 @@ type ProviderConfig struct {
 	FinnhubKey    string
 }
 
-/** NewProvider builds the configured upstream quote provider, falling back cleanly to mock simulation when credentials are absent. */
+/** NewProvider builds the explicitly configured provider. */
 func NewProvider(cfg ProviderConfig, logger *slog.Logger) Provider {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
 	switch cfg.Name {
+	case "mock":
+		return NewMockProvider()
 	case "twelvedata":
 		if cfg.TwelveDataKey != "" {
 			return NewTwelveDataProvider(cfg.TwelveDataKey, logger)
 		}
 
-		logger.Warn("MARKET_PROVIDER=twelvedata selected without MARKET_TWELVEDATA_API_KEY; falling back to mock provider")
+		logger.Warn("MARKET_PROVIDER=twelvedata selected without MARKET_TWELVEDATA_API_KEY")
 	case "finnhub":
 		if cfg.FinnhubKey != "" {
 			return NewFinnhubProvider(cfg.FinnhubKey, logger)
 		}
 
-		logger.Warn("MARKET_PROVIDER=finnhub selected without MARKET_FINNHUB_API_KEY; falling back to mock provider")
+		logger.Warn("MARKET_PROVIDER=finnhub selected without MARKET_FINNHUB_API_KEY")
+	default:
+		logger.Warn("unsupported market provider")
 	}
 
-	return NewMockProvider()
+	return nil
 }
 
 // MockProvider generates coherent historical and 500ms simulated real-time ticks for development and offline testing.

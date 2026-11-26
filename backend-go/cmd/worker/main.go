@@ -85,8 +85,8 @@ func main() {
 			FinnhubKey:    cfg.MarketFinnhubAPIKey,
 		}, slog.Default())
 		marketCollector := market.NewCollector(
-			market.NewRepository(orm),
-			market.NewRedisStore(redisClient),
+			market.NewRepository(orm, cfg.MarketProvider),
+			market.NewRedisStore(redisClient, cfg.MarketProvider),
 			marketProvider,
 			slog.Default(),
 		)

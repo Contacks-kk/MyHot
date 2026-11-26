@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"aihot/backend-go/internal/market"
+
 	"github.com/coder/websocket"
 )
 
@@ -19,6 +20,7 @@ func (s *Server) marketsCatalog(w http.ResponseWriter, r *http.Request, _ userCo
 		return
 	}
 
+	// resp 得到支持的股票代码、时间周期、运行标志和最新报价
 	resp, err := s.Market.Catalog(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "读取行情目录失败")

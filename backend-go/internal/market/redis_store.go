@@ -3,6 +3,7 @@ package market
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"time"
 
@@ -10,9 +11,8 @@ import (
 )
 
 const (
-	collectorLockKey   = "market:collector:lock"
-	ticksPubSubChannel = "market:ticks"
-	maxWindowCandles   = 500
+	collectorLockKey = "market:collector:lock"
+	maxWindowCandles = 500
 )
 
 var renewLockScript = redis.NewScript(`
@@ -29,14 +29,33 @@ end
 return 0
 `)
 
+var reserveHistoryScript = redis.NewScript(`
+local now = tonumber(ARGV[1])
+if tonumber(redis.call("GET", KEYS[2]) or "0") >= 750 then return -1 end
+redis.call("ZREMRANGEBYSCORE", KEYS[1], "-inf", now - 60000)
+if redis.call("ZCARD", KEYS[1]) >= 8 then
+	local earliest = redis.call("ZRANGE", KEYS[1], 0, 0, "WITHSCORES")
+	return tonumber(earliest[2]) + 60000 - now
+end
+local used = redis.call("INCR", KEYS[2])
+if used == 1 then redis.call("EXPIRE", KEYS[2], 172800) end
+redis.call("ZADD", KEYS[1], now, KEYS[2] .. ":" .. used)
+redis.call("EXPIRE", KEYS[1], 120)
+return 0
+`)
+
 // RedisStore manages distributed collector coordination, hot quotes, candle windows, and tick Pub/Sub.
 type RedisStore struct {
 	client *redis.Client
+	prefix string
 }
 
 /** NewRedisStore creates a RedisStore wrapper; client may be nil when Redis is unconfigured. */
-func NewRedisStore(client *redis.Client) *RedisStore {
-	return &RedisStore{client: client}
+func NewRedisStore(client *redis.Client, source string) *RedisStore {
+	return &RedisStore{
+		client: client,
+		prefix: "market:" + source + ":",
+	}
 }
 
 /** Available reports whether the underlying Redis client is initialized. */
@@ -79,6 +98,34 @@ func (s *RedisStore) ReleaseCollectorLock(ctx context.Context, ownerID string) {
 	_ = releaseLockScript.Run(releaseCtx, s.client, []string{collectorLockKey}, ownerID).Err()
 }
 
+/** ReserveHistoryCredit shares Twelve Data request budgets across restarts. */
+func (s *RedisStore) ReserveHistoryCredit(ctx context.Context) (bool, error) {
+	if !s.Available() {
+		return false, errors.New("redis is required for the market history budget")
+	}
+
+	for {
+		now := time.Now().UTC()
+		window := s.prefix + "credits:window"
+		day := s.prefix + "credits:day:" + now.Format(time.DateOnly)
+		waitMillis, err := reserveHistoryScript.Run(ctx, s.client, []string{window, day}, now.UnixMilli()).Int()
+		if err != nil {
+			return false, err
+		}
+		if waitMillis <= 0 {
+			return waitMillis == 0, nil
+		}
+
+		timer := time.NewTimer(time.Duration(waitMillis) * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 /** SaveQuote caches the latest quote snapshot for one symbol in Redis. */
 func (s *RedisStore) SaveQuote(ctx context.Context, q QuoteSnapshot) error {
 	if !s.Available() {
@@ -90,7 +137,7 @@ func (s *RedisStore) SaveQuote(ctx context.Context, q QuoteSnapshot) error {
 		return err
 	}
 
-	return s.client.HSet(ctx, "market:quotes", q.Symbol, raw).Err()
+	return s.client.HSet(ctx, s.prefix+"quotes", q.Symbol, raw).Err()
 }
 
 /** GetAllQuotes reads cached quote snapshots across all tracked assets. */
@@ -100,13 +147,15 @@ func (s *RedisStore) GetAllQuotes(ctx context.Context) (map[string]QuoteSnapshot
 		return out, nil
 	}
 
-	entries, err := s.client.HGetAll(ctx, "market:quotes").Result()
+	// entries有3个 QQQ、XAU/USD、SPY
+	entries, err := s.client.HGetAll(ctx, s.prefix+"quotes").Result()
 	if err != nil {
 		return nil, err
 	}
 
 	for symbol, payload := range entries {
 		var q QuoteSnapshot
+		//json.Unmarshal 将payload反序列化/解码
 		if err := json.Unmarshal([]byte(payload), &q); err == nil {
 			out[symbol] = q
 		}
@@ -126,7 +175,7 @@ func (s *RedisStore) SetLiveCandle(ctx context.Context, symbol, tf string, bar C
 		return err
 	}
 
-	key := "market:candle:live:" + symbol + ":" + tf
+	key := s.prefix + "candle:live:" + symbol + ":" + tf
 	return s.client.Set(ctx, key, raw, 24*time.Hour).Err()
 }
 
@@ -136,7 +185,7 @@ func (s *RedisStore) GetLiveCandle(ctx context.Context, symbol, tf string) (*Can
 		return nil, nil
 	}
 
-	key := "market:candle:live:" + symbol + ":" + tf
+	key := s.prefix + "candle:live:" + symbol + ":" + tf
 	payload, err := s.client.Get(ctx, key).Result()
 	if err == redis.Nil {
 		return nil, nil
@@ -160,8 +209,8 @@ func (s *RedisStore) SaveWindowCandles(ctx context.Context, symbol, tf string, c
 		return nil
 	}
 
-	key := "market:candles:" + symbol + ":" + tf
-	pipe := s.client.Pipeline()
+	key := s.prefix + "candles:" + symbol + ":" + tf
+	pipe := s.client.TxPipeline()
 
 	// Remove existing entries sharing identical timestamps so bar rewrites do not create duplicate members.
 	for _, bar := range candles {
@@ -197,7 +246,7 @@ func (s *RedisStore) GetWindowCandles(ctx context.Context, symbol, tf string, li
 		limit = DefaultCandleLimit
 	}
 
-	key := "market:candles:" + symbol + ":" + tf
+	key := s.prefix + "candles:" + symbol + ":" + tf
 	rawList, err := s.client.ZRange(ctx, key, int64(-limit), -1).Result()
 	if err != nil {
 		return nil, err
@@ -229,7 +278,7 @@ func (s *RedisStore) PublishTick(ctx context.Context, update TickUpdate) error {
 		return err
 	}
 
-	return s.client.Publish(ctx, ticksPubSubChannel, raw).Err()
+	return s.client.Publish(ctx, s.prefix+"ticks", raw).Err()
 }
 
 /** SubscribeTicks returns a dedicated Redis Pub/Sub subscription listening to live market ticks. */
@@ -238,5 +287,5 @@ func (s *RedisStore) SubscribeTicks(ctx context.Context) *redis.PubSub {
 		return nil
 	}
 
-	return s.client.Subscribe(ctx, ticksPubSubChannel)
+	return s.client.Subscribe(ctx, s.prefix+"ticks")
 }

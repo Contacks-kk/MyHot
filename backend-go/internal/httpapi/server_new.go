@@ -269,7 +269,7 @@ func New(cfg config.Config, db *pgxpool.Pool, orm *gorm.DB, entities map[string]
 		return jobs.InsertConnectionTest(ctx, db, jobs.ConnectionTestArgs{UserID: request.UserID, ReceiptID: request.ReceiptID, BaseURL: request.BaseURL, Model: request.Model, APIKeyCiphertext: request.APIKeyCiphertext})
 	}
 	server.MarketHub = market.NewHub(nil, server.Logger)
-	server.Market = market.NewService(market.NewRepository(orm), nil, server.PublicContent, marketServiceConfig(cfg))
+	server.Market = market.NewService(market.NewRepository(orm, cfg.MarketProvider), nil, server.PublicContent, marketServiceConfig(cfg))
 	return server
 }
 
@@ -278,18 +278,20 @@ func marketServiceConfig(cfg config.Config) market.ServiceConfig {
 	switch cfg.MarketProvider {
 	case "twelvedata":
 		if cfg.MarketTwelveDataAPIKey == "" {
-			providerMode = "mock"
+			providerMode = "unavailable"
 		}
 	case "finnhub":
 		if cfg.MarketFinnhubAPIKey == "" {
-			providerMode = "mock"
+			providerMode = "unavailable"
 		}
-	default:
+	case "mock":
 		providerMode = "mock"
+	default:
+		providerMode = "unavailable"
 	}
 
 	return market.ServiceConfig{
-		Enabled:         cfg.MarketDataEnabled,
+		Enabled:         cfg.MarketDataEnabled && providerMode != "unavailable",
 		ProviderName:    cfg.MarketProvider,
 		ProviderMode:    providerMode,
 		ImgProxySecret:  cfg.ImageProxySignSecret,
@@ -303,7 +305,7 @@ func (s *Server) AttachMarketRedis(ctx context.Context, client *redis.Client) {
 		return
 	}
 
-	store := market.NewRedisStore(client)
+	store := market.NewRedisStore(client, s.Config.MarketProvider)
 	if s.Market != nil {
 		s.Market.SetRedis(store)
 	}

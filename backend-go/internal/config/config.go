@@ -143,10 +143,14 @@ func Load() (Config, error) {
 		"SOURCE_MANUAL_REUSE_WINDOW_MINUTES": &sourceSchedule.ManualReuseWindow,
 		"SOURCE_AUTO_REUSE_WINDOW_MINUTES":   &sourceSchedule.AutoReuseWindow,
 	} {
+		// os.getEnv 从环境变量中取 AutoMinInterval / ManualReuseWindow / AutoReuseWindow
+		// TrimSpace 用来去除字符串头尾的空格，raw为环境变量名称对应的value
 		raw := strings.TrimSpace(os.Getenv(name))
 		if raw == "" {
 			continue
 		}
+
+		// strconv.Atio 将十进制字符串解析成int类型整数
 		minutes, err := strconv.Atoi(raw)
 		if err != nil || minutes < 1 || minutes > 1440 {
 			return Config{}, fmt.Errorf("%s must be an integer between 1 and 1440 minutes", name)

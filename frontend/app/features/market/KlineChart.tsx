@@ -7,6 +7,7 @@ import type {
   ISeriesMarkersPluginApi,
   SeriesMarker,
   Time,
+  TickMarkType,
   UTCTimestamp,
 } from "lightweight-charts";
 
@@ -128,6 +129,8 @@ export const KlineChart = forwardRef<KlineChartHandle, KlineChartProps>(function
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram", Time> | null>(null);
   const markerPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const candlesRef = useRef<MarketCandle[]>(candles);
+  const lastBarTime = useRef(0);
+  const fittedMarket = useRef("");
   const timeframeRef = useRef<string>(timeframe);
   const tokensRef = useRef(readThemeTokens());
 
@@ -143,10 +146,11 @@ export const KlineChart = forwardRef<KlineChartHandle, KlineChartProps>(function
       applyLiveCandle(bar: MarketCandle) {
         const candleSeries = candleSeriesRef.current;
         const volumeSeries = volumeSeriesRef.current;
-        if (!candleSeries || !volumeSeries) {
+        if (!candleSeries || !volumeSeries || bar.time < lastBarTime.current) {
           return;
         }
 
+        lastBarTime.current = bar.time;
         const t = bar.time as UTCTimestamp;
         const tokens = tokensRef.current;
         const isUp = bar.close >= bar.open;
@@ -246,6 +250,22 @@ export const KlineChart = forwardRef<KlineChartHandle, KlineChartProps>(function
           secondsVisible: false,
           rightOffset: 6,
           barSpacing: 8,
+          tickMarkFormatter: (time: Time, mark: TickMarkType) => {
+            if (typeof time !== "number") {
+              return null;
+            }
+            const format: Intl.DateTimeFormatOptions = mark === lc.TickMarkType.Year
+              ? { year: "numeric" }
+              : mark === lc.TickMarkType.Month
+                ? { month: "numeric", day: "numeric" }
+                : mark === lc.TickMarkType.DayOfMonth
+                  ? { day: "numeric" }
+                  : { hour: "2-digit", minute: "2-digit", hourCycle: "h23" };
+            return new Intl.DateTimeFormat("zh-CN", {
+              ...format,
+              timeZone: "Asia/Shanghai",
+            }).format(time * 1000);
+          },
         },
         crosshair: {
           mode: 0,
@@ -413,9 +433,14 @@ export const KlineChart = forwardRef<KlineChartHandle, KlineChartProps>(function
 
     candleSeries.setData(candleData);
     volumeSeries.setData(volumeData);
-    chart.timeScale().fitContent();
 
     const latest = candles.at(-1);
+    const market = `${symbol}/${timeframe}`;
+    if (latest && market !== fittedMarket.current) {
+      chart.timeScale().fitContent();
+      fittedMarket.current = market;
+    }
+    lastBarTime.current = latest?.time ?? 0;
     setHoverBar(latest ? { ...latest } : null);
   }, [ready, symbol, timeframe, digits, candles]);
 

@@ -11,12 +11,16 @@ import (
 
 // Repository encapsulates PostgreSQL persistence for archived market candles and personal news markers.
 type Repository struct {
-	db *gorm.DB
+	db     *gorm.DB
+	source string
 }
 
 /** NewRepository constructs a PostgreSQL-backed market repository. */
-func NewRepository(db *gorm.DB) *Repository {
-	return &Repository{db: db}
+func NewRepository(db *gorm.DB, source string) *Repository {
+	return &Repository{
+		db:     db,
+		source: source,
+	}
 }
 
 /** UpsertCandles persists finalized or historical OHLCV bars in bounded batches. */
@@ -25,6 +29,7 @@ func (r *Repository) UpsertCandles(ctx context.Context, symbol, tf string, candl
 		return nil
 	}
 
+	symbol = r.source + ":" + symbol
 	const batchSize = 200
 
 	for start := 0; start < len(candles); start += batchSize {
@@ -77,6 +82,7 @@ func (r *Repository) ListCandles(ctx context.Context, symbol, tf string, limit i
 		limit = DefaultCandleLimit
 	}
 
+	symbol = r.source + ":" + symbol
 	var rows []struct {
 		OpenTime int64   `gorm:"column:open_time_sec"`
 		Open     float64 `gorm:"column:open"`
@@ -147,8 +153,8 @@ func (r *Repository) PruneMinuteCandles(ctx context.Context, retentionDays int) 
 
 	cutoff := time.Now().UTC().Add(-time.Duration(retentionDays) * 24 * time.Hour)
 	return r.db.WithContext(ctx).Exec(
-		`DELETE FROM market_candles WHERE timeframe = '1m' AND open_time < ?`,
-		cutoff,
+		`DELETE FROM market_candles WHERE symbol LIKE ? AND timeframe = '1m' AND open_time < ?`,
+		r.source+":%", cutoff,
 	).Error
 }
 

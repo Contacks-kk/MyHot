@@ -366,6 +366,8 @@ func (s *Server) userFromRequest(r *http.Request) (userContext, error) {
 		return userContext{}, errNoSession
 	}
 	var user userContext
+
+	// cookie兑换session，验证用户身份
 	value, err := s.Accounts.ResolveSession(r.Context(), cookie.Value)
 	user.ID, user.Email, user.CSRF = value.ID, value.Email, value.CSRF
 	return user, err

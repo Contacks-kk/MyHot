@@ -24,8 +24,16 @@ type TwelveDataProvider struct {
 	logger *slog.Logger
 }
 
+var (
+	errTwelveSubscriptionsDenied = errors.New("twelvedata denied all price subscriptions")
+	errTwelveRateLimited         = errors.New("twelvedata rate limit (429)")
+)
+
 /** NewTwelveDataProvider constructs a Twelve Data market provider. */
 func NewTwelveDataProvider(apiKey string, logger *slog.Logger) *TwelveDataProvider {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &TwelveDataProvider{
 		apiKey: apiKey,
 		http:   &http.Client{Timeout: 15 * time.Second},
@@ -74,6 +82,9 @@ func (p *TwelveDataProvider) FetchHistory(ctx context.Context, symbol, tf string
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, errTwelveRateLimited
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("twelvedata history status %d", resp.StatusCode)
 	}
@@ -84,9 +95,9 @@ func (p *TwelveDataProvider) FetchHistory(ctx context.Context, symbol, tf string
 	}
 
 	var parsed struct {
-		Status  string `json:"status"`
-		Message string `json:"message"`
-		Values  []struct {
+		Status string `json:"status"`
+		Code   int    `json:"code"`
+		Values []struct {
 			Datetime string `json:"datetime"`
 			Open     string `json:"open"`
 			High     string `json:"high"`
@@ -101,14 +112,18 @@ func (p *TwelveDataProvider) FetchHistory(ctx context.Context, symbol, tf string
 	}
 
 	if parsed.Status == "error" {
-		return nil, fmt.Errorf("twelvedata API error: %s", parsed.Message)
+		if parsed.Code == http.StatusTooManyRequests {
+			return nil, errTwelveRateLimited
+		}
+		return nil, fmt.Errorf("twelvedata API error code %d", parsed.Code)
 	}
 
 	out := make([]Candle, 0, len(parsed.Values))
+	seen := make(map[int64]bool, len(parsed.Values))
 	for i := len(parsed.Values) - 1; i >= 0; i-- {
 		row := parsed.Values[i]
 		ts, parseErr := parseTwelveDataTime(row.Datetime, tf)
-		if parseErr != nil {
+		if parseErr != nil || seen[ts] {
 			continue
 		}
 
@@ -120,6 +135,7 @@ func (p *TwelveDataProvider) FetchHistory(ctx context.Context, symbol, tf string
 			continue
 		}
 
+		seen[ts] = true
 		vol, _ := strconv.ParseFloat(row.Volume, 64)
 		out = append(out, Candle{
 			Time:   ts,
@@ -137,8 +153,13 @@ func (p *TwelveDataProvider) FetchHistory(ctx context.Context, symbol, tf string
 /** Stream maintains a WebSocket subscription to Twelve Data real-time price updates. */
 func (p *TwelveDataProvider) Stream(ctx context.Context, symbols []string, out chan<- RawTick) error {
 	endpoint := "wss://ws.twelvedata.com/v1/quotes/price?apikey=" + url.QueryEscape(p.apiKey)
-	conn, _, err := websocket.Dial(ctx, endpoint, nil)
+	dialCtx, cancelDial := context.WithTimeout(ctx, 15*time.Second)
+	conn, resp, err := websocket.Dial(dialCtx, endpoint, nil)
+	cancelDial()
 	if err != nil {
+		if resp != nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+			return errTwelveSubscriptionsDenied
+		}
 		return fmt.Errorf("twelvedata dial failed (%T)", err)
 	}
 	defer conn.CloseNow()
@@ -153,7 +174,7 @@ func (p *TwelveDataProvider) Stream(ctx context.Context, symbols []string, out c
 	writeCtx, cancelWrite := context.WithTimeout(ctx, 10*time.Second)
 	defer cancelWrite()
 	if err := wsjson.Write(writeCtx, conn, subMsg); err != nil {
-		return err
+		return fmt.Errorf("twelvedata subscription write failed (%T)", err)
 	}
 
 	// Send periodic heartbeat frames to keep WebSocket connections healthy through intermediaries.
@@ -178,36 +199,43 @@ func (p *TwelveDataProvider) Stream(ctx context.Context, symbols []string, out c
 		}
 	}()
 
+	approved := make(map[string]bool, len(symbols))
 	for {
 		var event struct {
-			Event     string  `json:"event"`
-			Symbol    string  `json:"symbol"`
-			Price     float64 `json:"price"`
-			DayVolume float64 `json:"day_volume"`
-			Timestamp int64   `json:"timestamp"`
+			Event     string               `json:"event"`
+			Status    string               `json:"status"`
+			Symbol    string               `json:"symbol"`
+			Price     float64              `json:"price"`
+			Timestamp int64                `json:"timestamp"`
+			Success   []twelveSubscription `json:"success"`
 		}
 
 		if err := wsjson.Read(ctx, conn, &event); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
-			return err
+			return fmt.Errorf("twelvedata price stream read failed (%T)", err)
 		}
 
-		if event.Event != "price" || event.Symbol == "" || event.Price <= 0 {
+		if event.Event == "subscribe-status" {
+			approved = p.approvedTwelveSymbols(symbols, event.Success)
+			if len(approved) == 0 {
+				return errTwelveSubscriptionsDenied
+			}
+		}
+
+		if event.Event == "status" && event.Status == "error" {
+			return errTwelveSubscriptionsDenied
+		}
+		if event.Event != "price" || !approved[event.Symbol] || event.Price <= 0 || event.Timestamp <= 0 {
 			continue
-		}
-
-		ts := time.Now().UTC()
-		if event.Timestamp > 0 {
-			ts = time.Unix(event.Timestamp, 0).UTC()
 		}
 
 		tick := RawTick{
 			Symbol:    event.Symbol,
 			Price:     event.Price,
 			Volume:    0,
-			Timestamp: ts,
+			Timestamp: time.Unix(event.Timestamp, 0).UTC(),
 		}
 
 		select {
@@ -216,6 +244,25 @@ func (p *TwelveDataProvider) Stream(ctx context.Context, symbols []string, out c
 			return nil
 		}
 	}
+}
+
+type twelveSubscription struct {
+	Symbol string `json:"symbol"`
+}
+
+/** approvedTwelveSymbols records each requested symbol's subscription outcome. */
+func (p *TwelveDataProvider) approvedTwelveSymbols(symbols []string, success []twelveSubscription) map[string]bool {
+	approved := make(map[string]bool, len(success))
+	for _, symbol := range symbols {
+		for _, result := range success {
+			if result.Symbol == symbol {
+				approved[symbol] = true
+				break
+			}
+		}
+		p.logger.Info("twelvedata price subscription", "symbol", symbol, "approved", approved[symbol])
+	}
+	return approved
 }
 
 func twelveDataInterval(tf string) (string, bool) {

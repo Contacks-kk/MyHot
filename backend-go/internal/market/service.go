@@ -33,7 +33,7 @@ type ServiceConfig struct {
 /** NewService creates a market application service. */
 func NewService(repo *Repository, redis *RedisStore, pub *publiccontent.Service, cfg ServiceConfig) *Service {
 	mode := cfg.ProviderMode
-	if !cfg.Enabled {
+	if !cfg.Enabled && mode != "unavailable" {
 		mode = "disabled"
 	}
 
@@ -60,6 +60,21 @@ func (s *Service) SetRedis(redis *RedisStore) {
 
 /** Catalog returns supported symbols, timeframes, runtime flags, and latest quotes. */
 func (s *Service) Catalog(ctx context.Context) (MarketsCatalogResponse, error) {
+	return MarketsCatalogResponse{
+		Enabled:    s.enabled,
+		Provider:   s.providerName,
+		Mode:       s.providerMode,
+		Timeframes: SupportedTimeframes(),
+		Symbols:    Catalog(),
+		Quotes:     s.quotes(ctx),
+	}, nil
+}
+
+/** quotes loads only the selected provider's snapshots, using stored closes if Redis is cold. */
+func (s *Service) quotes(ctx context.Context) map[string]QuoteSnapshot {
+	if !s.enabled {
+		return map[string]QuoteSnapshot{}
+	}
 	quotes, err := s.redis.GetAllQuotes(ctx)
 	if err != nil {
 		quotes = make(map[string]QuoteSnapshot)
@@ -67,7 +82,25 @@ func (s *Service) Catalog(ctx context.Context) (MarketsCatalogResponse, error) {
 
 	// Fill missing quotes from latest PostgreSQL daily/minute closes when Redis cache is cold.
 	for _, meta := range supportedSymbols {
-		if _, exists := quotes[meta.Symbol]; exists {
+		if quote, exists := quotes[meta.Symbol]; exists {
+			if s.providerName == "twelvedata" && quote.Mode == "live" && time.Since(time.Unix(quote.UpdatedAt, 0)) > 2*time.Minute {
+				quote.Mode = "rest"
+				quotes[meta.Symbol] = quote
+			}
+			continue
+		}
+
+		if s.providerName == "twelvedata" {
+			bars, err := s.repo.ListCandles(ctx, meta.Symbol, "1m", 1)
+			if err == nil && len(bars) > 0 {
+				bar := bars[0]
+				quotes[meta.Symbol] = QuoteSnapshot{
+					Symbol:    meta.Symbol,
+					Price:     bar.Close,
+					UpdatedAt: bar.Time + 60,
+					Mode:      "rest",
+				}
+			}
 			continue
 		}
 
@@ -97,14 +130,7 @@ func (s *Service) Catalog(ctx context.Context) (MarketsCatalogResponse, error) {
 		}
 	}
 
-	return MarketsCatalogResponse{
-		Enabled:    s.enabled,
-		Provider:   s.providerName,
-		Mode:       s.providerMode,
-		Timeframes: SupportedTimeframes(),
-		Symbols:    Catalog(),
-		Quotes:     quotes,
-	}, nil
+	return quotes
 }
 
 /** Candles loads the merged historical + active candle window alongside relevant personal and public news markers. */
@@ -122,18 +148,35 @@ func (s *Service) Candles(ctx context.Context, userID int64, symbol, tf string, 
 	if limit <= 0 || limit > MaxCandleLimit {
 		limit = DefaultCandleLimit
 	}
+	if !s.enabled {
+		return CandlesResponse{
+			Symbol:    symbol,
+			Timeframe: tf,
+			Mode:      s.providerMode,
+			Candles:   []Candle{},
+			Markers:   []NewsMarker{},
+		}, nil
+	}
 
 	// Prefer hot Redis ZSET window; fall back transparently to PostgreSQL archive.
 	candles, err := s.redis.GetWindowCandles(ctx, symbol, tf, limit)
-	if err != nil || len(candles) == 0 {
-		candles, err = s.repo.ListCandles(ctx, symbol, tf, limit)
-		if err != nil {
+	if err != nil || len(candles) == 0 || (s.providerName == "twelvedata" && len(candles) < limit) {
+		stored, err := s.repo.ListCandles(ctx, symbol, tf, limit)
+		if err != nil && len(candles) == 0 {
 			return CandlesResponse{}, err
+		}
+		if len(candles) == 0 || len(stored) > len(candles) {
+			candles = stored
 		}
 	}
 
 	// Merge active unclosed bar so the latest candle continues seamlessly before the WebSocket stream takes over.
 	live, liveErr := s.redis.GetLiveCandle(ctx, symbol, tf)
+	if s.providerName == "twelvedata" && live != nil &&
+		(tf != "1m" || live.Time != time.Now().UTC().Truncate(time.Minute).Unix() ||
+			(len(candles) > 0 && live.Time <= candles[len(candles)-1].Time)) {
+		live = nil
+	}
 	if liveErr == nil && live != nil {
 		if len(candles) == 0 {
 			candles = append(candles, *live)
@@ -148,12 +191,8 @@ func (s *Service) Candles(ctx context.Context, userID int64, symbol, tf string, 
 	}
 
 	var quotePtr *QuoteSnapshot
-	quotes, qErr := s.redis.GetAllQuotes(ctx)
-	if qErr == nil {
-		if q, exists := quotes[symbol]; exists {
-			qCopy := q
-			quotePtr = &qCopy
-		}
+	if quote, exists := s.quotes(ctx)[symbol]; exists {
+		quotePtr = &quote
 	}
 
 	markers := s.collectMarkers(ctx, userID, meta, candles, tf)
