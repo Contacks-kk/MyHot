@@ -150,13 +150,6 @@ func (r *GormRepository) Overview(ctx context.Context) (OverviewResult, error) {
 		statsMap[strings.ToLower(row.Tag)] = row
 	}
 
-	// 读取 labels 表中持久化的标准与候选标签
-	hasLabelsTable := r.db.Migrator().HasTable("labels")
-	var dbLabels []model.Label
-	if hasLabelsTable {
-		_ = r.db.WithContext(ctx).Table("labels").Find(&dbLabels).Error
-	}
-
 	stableMap := make(map[string]StableLabel)
 	candidateMap := make(map[string]CandidateLabel)
 
@@ -222,56 +215,7 @@ func (r *GormRepository) Overview(ctx context.Context) (OverviewResult, error) {
 		}
 	}
 
-	// 3. 融合 labels 数据库表记录（若存在）
-	for _, dl := range dbLabels {
-		key := strings.ToLower(dl.Name)
-		stat := statsMap[dl.Name]
-		if stat.ArticleCount == 0 {
-			stat = statsMap[key]
-		}
-
-		if dl.IsCanonical {
-			lblType := LabelTypeCustom
-			if dl.Category == "topic" || dl.Category == "Topic" {
-				lblType = LabelTypeTopic
-			} else if dl.Category == "category" || dl.Category == "Category" {
-				lblType = LabelTypeCategory
-			} else if dl.Category == "entity" || dl.Category == "Entity" {
-				lblType = LabelTypeEntity
-			}
-
-			stableMap[key] = StableLabel{
-				ID:            dl.ID,
-				Name:          dl.Name,
-				Type:          lblType,
-				UseCount:      dl.UseCount,
-				ArticleCount:  stat.ArticleCount,
-				SelectedCount: stat.SelectedCount,
-				AvgScore:      stat.AvgScore,
-				MaxScore:      stat.MaxScore,
-				LatestAt:      stat.LatestAt,
-			}
-			delete(candidateMap, key)
-		} else {
-			statusText := "evaluating"
-			if dl.UseCount >= 2 {
-				statusText = "near_promotion"
-			}
-			candidateMap[key] = CandidateLabel{
-				ID:           dl.ID,
-				Name:         dl.Name,
-				MappedTo:     r.vocabulary.TagSynonyms[dl.Name],
-				Status:       statusText,
-				UseCount:     dl.UseCount,
-				ArticleCount: stat.ArticleCount,
-				MaxScore:     stat.MaxScore,
-				AvgScore:     stat.AvgScore,
-				LatestAt:     stat.LatestAt,
-			}
-		}
-	}
-
-	// 4. 将 publications 中出现但未入库的标签列入候选挖掘
+	// 将 publications 中出现但未入库的标签列入候选挖掘
 	for tag, stat := range statsMap {
 		key := strings.ToLower(tag)
 		if _, isStable := stableMap[key]; isStable {
@@ -376,17 +320,11 @@ func (r *GormRepository) Hotspots(ctx context.Context, filter HotspotsFilter) (H
 
 	whereClauses = append(whereClauses, "p.visibility = 'public'")
 
-	// 标签过滤条件：支持匹配文章自身标签、分类、信源标签或模糊包含
+	// 标签过滤条件：匹配文章自身标签、分类或模糊包含
 	filter.Label = strings.TrimSpace(filter.Label)
 	if filter.Label != "" {
-		hasSourceLabels := r.db.Migrator().HasTable("source_labels")
-		if hasSourceLabels {
-			whereClauses = append(whereClauses, "(? = ANY(p.tags) OR p.category = ? OR array_to_string(p.tags, ',') ILIKE ? OR p.source_id IN (SELECT sl.source_id FROM source_labels sl JOIN labels l ON l.id = sl.label_id WHERE l.name = ? OR l.id = ?))")
-			args = append(args, filter.Label, filter.Label, "%"+filter.Label+"%", filter.Label, strings.ToLower(filter.Label))
-		} else {
-			whereClauses = append(whereClauses, "(? = ANY(p.tags) OR p.category = ? OR array_to_string(p.tags, ',') ILIKE ?)")
-			args = append(args, filter.Label, filter.Label, "%"+filter.Label+"%")
-		}
+		whereClauses = append(whereClauses, "(? = ANY(p.tags) OR p.category = ? OR array_to_string(p.tags, ',') ILIKE ?)")
+		args = append(args, filter.Label, filter.Label, "%"+filter.Label+"%")
 	}
 
 	// 模糊检索词条件：匹配标题、摘要导读、信源名称或标签

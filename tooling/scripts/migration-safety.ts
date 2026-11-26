@@ -89,6 +89,8 @@ export function migrationPlan(text: string): MigrationPlan {
   if (new RegExp(`^alter table ${RELATION} validate constraint ${IDENT}$`, "i").test(sql)) return { kind: "validation" };
   // 0098 and 0099 install and validate the widened replacement before retiring this check.
   if (sql.toLowerCase() === "alter table user_model_call_receipts drop constraint if exists user_model_call_receipts_purpose_check") return { kind: "transaction" };
+  // Retire only the two explicitly unused legacy label tables, without CASCADE.
+  if (/^drop table if exists public \. (?:source_labels|labels)$/i.test(sql)) return { kind: "transaction" };
   // These take SHARE UPDATE EXCLUSIVE, which permits ordinary reads and writes. Keep ANALYZE
   // scoped to named columns of one table; SKIP_LOCKED could silently leave its statistics unbuilt.
   if (new RegExp(`^create statistics ${RELATION} \\( mcv \\) on ${IDENT}(?: , ${IDENT}){1,7} from ${RELATION}$`, "i").test(sql)
