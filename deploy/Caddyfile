@@ -2,5 +2,11 @@
 # responses. Point the domain's DNS at this server first.
 {$SITE_DOMAIN} {
 	encode zstd gzip
+
+	# Route same-origin WebSocket upgrades directly to the Go API service.
+	handle /api/ws/* {
+		reverse_proxy go-api:3002
+	}
+
 	reverse_proxy web:3000
 }

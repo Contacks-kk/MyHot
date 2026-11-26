@@ -24,7 +24,7 @@ export function PersonalFunnel({ funnel, isEn }: { funnel: FunnelView; isEn: boo
     <section className="mb-6 rounded-card border border-line bg-surface p-4 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent">
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-rule-soft text-rule">
             <IconBolt size={14} />
           </span>
           <div>

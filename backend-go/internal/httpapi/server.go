@@ -37,6 +37,7 @@ import (
 	"aihot/backend-go/internal/ingest"
 	"aihot/backend-go/internal/interests"
 	"aihot/backend-go/internal/mailer"
+	"aihot/backend-go/internal/market"
 	"aihot/backend-go/internal/mcpapi"
 	"aihot/backend-go/internal/personal"
 	"aihot/backend-go/internal/publiccontent"
@@ -88,6 +89,8 @@ type Server struct {
 	Feeds                 *feeds.Service
 	Discovery             *discovery.Service
 	Personal              *personal.Service
+	Market                *market.Service
+	MarketHub             *market.Hub
 	InterestLabels        *tagging.Service
 	PublicContent         *publiccontent.Service
 	MCPService            *mcpapi.Service
@@ -115,6 +118,13 @@ type Server struct {
 func (s *Server) ShutdownMCP() {
 	if s.MCPService != nil {
 		s.MCPService.Close()
+	}
+}
+
+/** ShutdownMarketWS closes active market WebSocket streams cleanly on shutdown. */
+func (s *Server) ShutdownMarketWS() {
+	if s.MarketHub != nil {
+		s.MarketHub.Shutdown()
 	}
 }
 
@@ -286,6 +296,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/me/feed/funnel", s.withUser(s.funnel))
 	mux.HandleFunc("GET /api/me/hot", s.withUser(s.hot))
 	mux.HandleFunc("GET /api/me/recommended-articles", s.withUser(s.recommendedArticles))
+	mux.HandleFunc("GET /api/me/markets", s.withUser(s.marketsCatalog))
+	mux.HandleFunc("GET /api/me/markets/candles", s.withUser(s.marketCandles))
+	mux.HandleFunc("GET /api/ws/markets", s.withUser(s.marketWS))
 	mux.HandleFunc("GET /api/me/articles/{id}", s.withUser(s.personalArticle))
 	mux.HandleFunc("GET /api/me/daily", s.withUser(s.daily))
 	mux.HandleFunc("POST /api/me/daily/generate", s.withUser(s.generateDaily))

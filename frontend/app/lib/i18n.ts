@@ -5,6 +5,7 @@ export interface TranslationDict {
   nav: {
     hot: string;
     recommendations: string;
+    markets: string;
     daily: string;
     model: string;
     interests: string;
@@ -83,6 +84,7 @@ export const TRANSLATIONS: Record<Locale, TranslationDict> = {
     nav: {
       hot: "个人热点榜单",
       recommendations: "为你推荐",
+      markets: "经济行情",
       daily: "我的日报",
       model: "模型配置",
       interests: "标签",
@@ -159,6 +161,7 @@ export const TRANSLATIONS: Record<Locale, TranslationDict> = {
     nav: {
       hot: "Hotspots",
       recommendations: "Recommended",
+      markets: "Markets",
       daily: "Daily Brief",
       model: "Model Settings",
       interests: "Tags",

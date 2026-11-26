@@ -20,6 +20,7 @@ import {
 } from "../../components/icons";
 import { ThemeSwitch } from "../../components/shell/ThemeSwitch";
 import { LocaleSwitch } from "../../components/shell/LocaleSwitch";
+import { SignalPipelineDiagram } from "./SignalPipelineDiagram";
 import { SpiderWebCanvas } from "./SpiderWebCanvas.tsx";
 
 interface PreviewItem {
@@ -316,7 +317,7 @@ function PreviewConsole() {
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-[11px] text-ink-4">
-            <span className="inline-flex size-1.5 rounded-full bg-accent" />
+            <span className="inline-flex size-1.5 rounded-full bg-ok" />
             个人工作区预览
           </div>
           <div className="mt-1 truncate text-[17px] font-semibold text-ink">
@@ -436,6 +437,30 @@ function PreviewConsole() {
             <div className="col-start-1 row-start-1 divide-y divide-line">
               {visibleItems.map((item) => {
                 const isOpen = expandedId === item.id;
+                const toneClasses =
+                  item.category === "model"
+                    ? {
+                        bar: "bg-clay",
+                        badgeOpen: "scale-105 bg-clay text-white shadow-sm",
+                        badgeIdle: "bg-clay-soft text-clay",
+                        arrow: "text-clay",
+                        hint: "bg-clay-softer text-clay",
+                      }
+                    : item.category === "opensource"
+                      ? {
+                          bar: "bg-accent",
+                          badgeOpen: "scale-105 bg-accent text-accent-contrast shadow-sm",
+                          badgeIdle: "bg-accent-soft text-accent",
+                          arrow: "text-accent",
+                          hint: "bg-accent-softer text-accent",
+                        }
+                      : {
+                          bar: "bg-rule",
+                          badgeOpen: "scale-105 bg-rule text-white dark:text-[#071a12] shadow-sm",
+                          badgeIdle: "bg-rule-soft text-rule",
+                          arrow: "text-rule",
+                          hint: "bg-rule-softer text-rule",
+                        };
                 return (
                   <button
                     key={item.id}
@@ -449,15 +474,13 @@ function PreviewConsole() {
                   >
                     <span
                       aria-hidden="true"
-                      className={`absolute left-0 top-3.5 bottom-3.5 w-[2.5px] rounded-full bg-accent transition-opacity duration-200 ${
+                      className={`absolute left-0 top-3.5 bottom-3.5 w-[2.5px] rounded-full ${toneClasses.bar} transition-opacity duration-200 ${
                         isOpen ? "opacity-100" : "opacity-0 group-hover:opacity-45"
                       }`}
                     />
                     <div
                       className={`mono mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-control text-[11px] font-semibold transition-transform duration-200 ${
-                        isOpen
-                          ? "scale-105 bg-accent text-accent-contrast shadow-sm"
-                          : "bg-accent-soft text-accent"
+                        isOpen ? toneClasses.badgeOpen : toneClasses.badgeIdle
                       }`}
                     >
                       {item.score}
@@ -470,7 +493,7 @@ function PreviewConsole() {
                         <IconArrowUpRight
                           className={`mt-0.5 shrink-0 transition-transform duration-200 ${
                             isOpen
-                              ? "translate-x-0.5 -translate-y-0.5 text-accent"
+                              ? `translate-x-0.5 -translate-y-0.5 ${toneClasses.arrow}`
                               : "text-ink-4 opacity-50 group-hover:opacity-100"
                           }`}
                           size={14}
@@ -482,7 +505,7 @@ function PreviewConsole() {
                         <span>·</span>
                         <span className="mono">{item.time}</span>
                         <span
-                          className={`rounded-full bg-accent-softer px-2 py-0.5 text-[10.5px] text-accent transition-opacity duration-200 ${
+                          className={`rounded-full px-2 py-0.5 text-[10.5px] transition-opacity duration-200 ${toneClasses.hint} ${
                             isOpen ? "opacity-100" : "opacity-0 group-hover:opacity-70"
                           }`}
                         >
@@ -528,30 +551,34 @@ function PreviewConsole() {
                 count: "38 篇",
                 pct: 100,
                 tone: "bg-line-strong",
+                countTone: "text-ink-3",
               },
               {
                 label: "02 本地关键词 & 实体命中（0 Token）",
                 count: "18 篇",
                 pct: 47,
-                tone: "bg-ink-4",
+                tone: "bg-rule",
+                countTone: "text-rule",
               },
               {
                 label: "03 Batch Triage 1 次批量初筛",
                 count: "Top 5",
                 pct: 16,
-                tone: "bg-accent/70",
+                tone: "bg-clay",
+                countTone: "text-clay",
               },
               {
                 label: "04 个人模型逐篇精读评分入榜",
                 count: "5 条",
                 pct: 16,
                 tone: "bg-accent",
+                countTone: "text-accent",
               },
             ].map((row) => (
               <div key={row.label} className="rounded-tile border border-line-soft bg-bg-sunk/55 p-3.5">
                 <div className="flex items-center justify-between gap-2 text-[12px]">
                   <span className="font-medium text-ink-2">{row.label}</span>
-                  <span className="mono font-semibold text-accent">{row.count}</span>
+                  <span className={`mono font-semibold ${row.countTone}`}>{row.count}</span>
                 </div>
                 <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-bg-muted">
                   <div
@@ -563,7 +590,7 @@ function PreviewConsole() {
             ))}
           </div>
 
-          <div className="flex items-center justify-between rounded-tile bg-accent-softer px-3.5 py-3 text-[11.5px] text-accent">
+          <div className="flex items-center justify-between rounded-tile bg-clay-softer px-3.5 py-3 text-[11.5px] text-clay">
             <span className="flex items-center gap-1.5 font-medium">
               <IconSparkles size={14} />
               仅消耗 6 次模型请求完成 38 篇筛查
@@ -583,10 +610,10 @@ function PreviewConsole() {
           <div className="rounded-tile border border-line-soft bg-bg-sunk/60 p-4">
             <div className="flex items-center justify-between text-[11px] text-ink-4">
               <span className="flex items-center gap-1.5">
-                <IconClock size={13} className="text-accent" />
+                <IconClock size={13} className="text-clay" />
                 每日 08:00 准时成刊
               </span>
-              <span className="mono">此前 24 小时汇总</span>
+              <span className="mono text-amber-ink">此前 24 小时汇总</span>
             </div>
             <h3 className="editorial-title mt-2.5 text-[16px] font-semibold text-ink">
               早安，昨晚共有 5 条高相关技术与开源更新
@@ -597,7 +624,7 @@ function PreviewConsole() {
             <div className="mt-3 flex flex-wrap gap-1.5">
               {["个人结果独享", "无额外并发回填", "历史 30 天归档"].map((tag) => (
                 <span key={tag} className="chip text-[10.5px]">
-                  <IconCheck size={11} className="text-accent" />
+                  <IconCheck size={11} className="text-ok" />
                   {tag}
                 </span>
               ))}
@@ -614,7 +641,7 @@ function PreviewConsole() {
                 <span className="leading-snug text-ink-2">
                   主线 01 · 推理与长上下文能力成为本期核心焦点，建议优先关注模型路由评估。
                 </span>
-                <span className="mono shrink-0 text-[11px] font-semibold text-accent">94</span>
+                <span className="mono shrink-0 text-[11px] font-semibold text-clay">94</span>
               </div>
               <div className="flex items-start justify-between gap-3 rounded-control bg-surface/80 px-3 py-2">
                 <span className="leading-snug text-ink-2">
@@ -721,9 +748,9 @@ export function SpiderLanding({ registrationEnabled }: { registrationEnabled: bo
         {/* Hero stage */}
         <section className="mx-auto grid max-w-[1120px] gap-12 px-5 pb-20 pt-12 md:grid-cols-[1.08fr_.92fr] md:items-center md:pb-28 md:pt-20">
           <div className="animate-fade-up">
-            <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-line bg-surface/85 px-3 py-1.5 shadow-[var(--shadow-card)] backdrop-blur-xs sm:gap-2.5 sm:px-3.5">
-              <span className="landing-live-dot relative inline-flex size-2 shrink-0 rounded-full bg-accent" />
-              <span className="mono truncate text-[10px] uppercase tracking-[.12em] text-accent sm:text-[11px] sm:tracking-[.16em]">
+            <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-rule/25 bg-surface/90 px-3 py-1.5 shadow-[var(--shadow-card)] backdrop-blur-xs sm:gap-2.5 sm:px-3.5">
+              <span className="landing-live-dot relative inline-flex size-2 shrink-0 rounded-full bg-rule text-rule" />
+              <span className="mono truncate text-[10px] uppercase tracking-[.12em] text-rule sm:text-[11px] sm:tracking-[.16em]">
                 Signal Desk · 每分钟增量扫描
               </span>
             </div>
@@ -787,15 +814,15 @@ export function SpiderLanding({ registrationEnabled }: { registrationEnabled: bo
 
             <div className="mt-8 flex flex-wrap gap-2">
               {[
-                { icon: <IconRss size={13} />, label: "共享信源一次抓取" },
-                { icon: <IconFilter size={13} />, label: "Batch Triage 省 ~80% 调用" },
-                { icon: <IconPlug size={13} />, label: "BYOK 密钥加密隔离" },
+                { icon: <IconRss size={13} />, label: "共享信源一次抓取", tone: "text-rule", border: "hover:border-rule/45" },
+                { icon: <IconFilter size={13} />, label: "Batch Triage 省 ~80% 调用", tone: "text-clay", border: "hover:border-clay/45" },
+                { icon: <IconPlug size={13} />, label: "BYOK 密钥加密隔离", tone: "text-accent", border: "hover:border-accent/45" },
               ].map((spec) => (
                 <span
                   key={spec.label}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-line-soft bg-surface/75 px-3 py-1 text-[11.5px] text-ink-3 backdrop-blur-xs transition-colors hover:border-accent/35"
+                  className={`inline-flex items-center gap-1.5 rounded-full border border-line-soft bg-surface/85 px-3 py-1 text-[11.5px] text-ink-3 backdrop-blur-xs transition-colors ${spec.border}`}
                 >
-                  <span className="text-accent">{spec.icon}</span>
+                  <span className={spec.tone}>{spec.icon}</span>
                   {spec.label}
                 </span>
               ))}
@@ -817,13 +844,21 @@ export function SpiderLanding({ registrationEnabled }: { registrationEnabled: bo
               </h2>
             </div>
             <p className="max-w-[360px] text-[13px] leading-relaxed text-ink-4">
-              点击或悬停下方任意环节，查看从 RSS 抓取到个人热点出炉的流转细节。
+              点击或悬停流程图与下方任意环节，查看从信源抓取到个人热点出炉的流转细节。
             </p>
           </div>
 
-          <div className="mt-8 grid gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
+          <SignalPipelineDiagram activeStage={activeFunnel} onSelectStage={setActiveFunnel} />
+
+          <div className="mt-5 grid gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
             {FUNNEL_STAGES.map((stage, index) => {
               const isActive = activeFunnel === index;
+              const stageStyles = [
+                { border: "border-rule/55", label: "text-rule", badge: "bg-rule-soft text-rule" },
+                { border: "border-ok/50", label: "text-ok-ink", badge: "bg-ok-soft text-ok-ink" },
+                { border: "border-clay/55", label: "text-clay", badge: "bg-clay-soft text-clay" },
+                { border: "border-accent/55", label: "text-accent", badge: "bg-accent-soft text-accent" },
+              ][index]!;
               return (
                 <button
                   key={stage.step}
@@ -832,20 +867,20 @@ export function SpiderLanding({ registrationEnabled }: { registrationEnabled: bo
                   onMouseEnter={() => setActiveFunnel(index)}
                   className={`landing-spotlight rounded-card border p-5 text-left transition-all duration-200 ${
                     isActive
-                      ? "border-accent/55 bg-surface shadow-[0_18px_46px_-30px_rgba(20,32,37,.35)]"
-                      : "border-line bg-surface/65 hover:bg-surface"
+                      ? `${stageStyles.border} bg-surface shadow-[0_18px_46px_-30px_rgba(20,32,37,.35)]`
+                      : "border-line bg-surface/70 hover:bg-surface"
                   }`}
                 >
                   <div className="relative z-10">
                     <div className="flex items-center justify-between gap-2">
                       <span
                         className={`mono text-[12px] font-semibold ${
-                          isActive ? "text-accent" : "text-ink-4"
+                          isActive ? stageStyles.label : "text-ink-4"
                         }`}
                       >
                         STEP {stage.step}
                       </span>
-                      <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[10.5px] font-medium text-accent">
+                      <span className={`rounded-full px-2 py-0.5 text-[10.5px] font-medium ${stageStyles.badge}`}>
                         {stage.badge}
                       </span>
                     </div>
@@ -862,7 +897,11 @@ export function SpiderLanding({ registrationEnabled }: { registrationEnabled: bo
           <SpotlightCard className="mt-4 rounded-card border border-line bg-surface/90 p-5 sm:p-6">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="max-w-[680px]">
-                <div className="mono text-[11px] uppercase tracking-[.14em] text-accent">
+                <div
+                  className={`mono text-[11px] uppercase tracking-[.14em] ${
+                    ["text-rule", "text-ok-ink", "text-clay", "text-accent"][activeFunnel] ?? "text-accent"
+                  }`}
+                >
                   STAGE {currentFunnel.step} DETAIL · {currentFunnel.title}
                 </div>
                 <p className="mt-2 text-[13.5px] leading-relaxed text-ink-2">
@@ -871,7 +910,11 @@ export function SpiderLanding({ registrationEnabled }: { registrationEnabled: bo
               </div>
               <div className="rounded-tile border border-line-soft bg-bg-sunk/70 px-4 py-3">
                 <div className="text-[11px] text-ink-4">{currentFunnel.metricLabel}</div>
-                <div className="mono mt-1 text-[13px] font-semibold text-accent">
+                <div
+                  className={`mono mt-1 text-[13px] font-semibold ${
+                    ["text-rule", "text-ok-ink", "text-clay", "text-accent"][activeFunnel] ?? "text-accent"
+                  }`}
+                >
                   {currentFunnel.metricValue}
                 </div>
               </div>
@@ -904,8 +947,8 @@ export function SpiderLanding({ registrationEnabled }: { registrationEnabled: bo
 
             <SpotlightCard className="rounded-[20px] border border-line bg-surface/90 p-6">
               <div className="flex items-center justify-between">
-                <span className="mono text-[11px] font-semibold text-accent">02 · 只看关注项</span>
-                <IconFilter size={16} className="text-ink-4" />
+                <span className="mono text-[11px] font-semibold text-rule">02 · 只看关注项</span>
+                <IconFilter size={16} className="text-rule" />
               </div>
               <h3 className="mt-3 text-[17px] font-semibold text-ink">关键词与公司实体先过一遍</h3>
               <p className="mt-2.5 text-[13px] leading-relaxed text-ink-3">
@@ -915,7 +958,7 @@ export function SpiderLanding({ registrationEnabled }: { registrationEnabled: bo
                 {["OpenAI", "DeepSeek", "Agent Harness", "开源量化", "推理架构"].map((tag) => (
                   <span
                     key={tag}
-                    className="rounded-full border border-line bg-bg-sunk/70 px-2.5 py-1 text-[11px] text-ink-2 transition-colors hover:border-accent/40 hover:text-accent"
+                    className="rounded-full border border-rule/20 bg-rule-softer px-2.5 py-1 text-[11px] text-rule transition-colors hover:border-rule/45"
                   >
                     # {tag}
                   </span>
@@ -925,21 +968,21 @@ export function SpiderLanding({ registrationEnabled }: { registrationEnabled: bo
 
             <SpotlightCard className="rounded-[20px] border border-line bg-surface/90 p-6">
               <div className="flex items-center justify-between">
-                <span className="mono text-[11px] font-semibold text-accent">03 · 私人结果</span>
-                <IconDoc size={16} className="text-ink-4" />
+                <span className="mono text-[11px] font-semibold text-clay">03 · 私人结果</span>
+                <IconDoc size={16} className="text-clay" />
               </div>
               <h3 className="mt-3 text-[17px] font-semibold text-ink">个人热点与 08:00 简报严格隔离</h3>
               <p className="mt-2.5 text-[13px] leading-relaxed text-ink-3">
                 你的中文摘要、48 小时热点榜 Top 10 和每日北京时间 08:00 个人简报与其他账号完全隔离，页面禁止共享缓存，离开时支持一键清空账号数据。
               </p>
               <div className="mt-5 grid grid-cols-2 gap-2 text-[11px]">
-                <div className="rounded-tile border border-line-soft bg-bg-sunk/65 px-3 py-2">
-                  <div className="text-ink-4">个人热点</div>
-                  <div className="mono mt-0.5 font-semibold text-ink">48h · Top 10</div>
+                <div className="rounded-tile border border-clay/20 bg-clay-softer px-3 py-2">
+                  <div className="text-ink-3">个人热点</div>
+                  <div className="mono mt-0.5 font-semibold text-clay">48h · Top 10</div>
                 </div>
-                <div className="rounded-tile border border-line-soft bg-bg-sunk/65 px-3 py-2">
-                  <div className="text-ink-4">每日简报</div>
-                  <div className="mono mt-0.5 font-semibold text-ink">08:00 · 24h</div>
+                <div className="rounded-tile border border-amber/20 bg-amber-soft px-3 py-2">
+                  <div className="text-ink-3">每日简报</div>
+                  <div className="mono mt-0.5 font-semibold text-amber-ink">08:00 · 24h</div>
                 </div>
               </div>
             </SpotlightCard>

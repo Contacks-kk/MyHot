@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -13,9 +15,11 @@ import (
 	"aihot/backend-go/internal/db"
 	"aihot/backend-go/internal/interests"
 	"aihot/backend-go/internal/jobs"
+	"aihot/backend-go/internal/market"
 	"aihot/backend-go/internal/provider"
 	"aihot/backend-go/internal/receipts"
 	"aihot/backend-go/internal/topics"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -35,6 +39,18 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.CloseGORM(orm)
+
+	// Connect Redis optionally for market collector leader locking, hot window cache, and Pub/Sub.
+	var redisClient *redis.Client
+	if cfg.RedisURL != "" {
+		redisClient, err = db.OpenRedis(ctx, cfg.RedisURL, cfg.RedisCAFile)
+		if err != nil {
+			log.Printf("warning: Redis unavailable (%v); market collector running without Redis cache", err)
+		} else {
+			defer redisClient.Close()
+		}
+	}
+
 	adminruns.StartHeartbeat(ctx, orm, "worker")
 	entities, err := interests.LoadEntities()
 	if err != nil {
@@ -59,8 +75,31 @@ func main() {
 	if err = client.Start(context.WithoutCancel(ctx)); err != nil {
 		log.Fatal(err)
 	}
+
+	// Start the real-time market collector only when the MARKET_DATA_ENABLED safety valve is true.
+	var marketWG sync.WaitGroup
+	if cfg.MarketDataEnabled {
+		marketProvider := market.NewProvider(market.ProviderConfig{
+			Name:          cfg.MarketProvider,
+			TwelveDataKey: cfg.MarketTwelveDataAPIKey,
+			FinnhubKey:    cfg.MarketFinnhubAPIKey,
+		}, slog.Default())
+		marketCollector := market.NewCollector(
+			market.NewRepository(orm),
+			market.NewRedisStore(redisClient),
+			marketProvider,
+			slog.Default(),
+		)
+		marketWG.Add(1)
+		go func() {
+			defer marketWG.Done()
+			marketCollector.Run(ctx)
+		}()
+	}
+
 	select {
 	case <-client.Stopped():
+		marketWG.Wait()
 		return
 	case <-ctx.Done():
 	}
@@ -77,4 +116,5 @@ func main() {
 			log.Print("worker shutdown did not finish before timeout")
 		}
 	}
+	marketWG.Wait()
 }

@@ -23,6 +23,7 @@ import {
   IconHistory,
   IconPlug,
   IconRss,
+  IconTrendUp,
 } from "../components/icons";
 import { ThemeSwitch } from "../components/shell/ThemeSwitch";
 
@@ -377,6 +378,16 @@ export default function UserHot() {
                 </span>
                 <span>{dict.nav.recommendations}</span>
               </Link>
+              <Link
+                to="/markets"
+                onClick={() => setDrawerOpen(false)}
+                className="flex h-10 items-center gap-2.5 rounded-control px-2.5 text-[13.5px] font-medium text-ink-3 transition-colors hover:bg-bg-sunk hover:text-ink"
+              >
+                <span className="flex w-5 justify-center text-accent">
+                  <IconTrendUp size={17} />
+                </span>
+                <span>{dict.nav.markets}</span>
+              </Link>
             </div>
             <div className="mt-4 border-t border-line/60 px-2 pb-1.5 pt-3 text-[11px] font-semibold uppercase tracking-wider text-ink-4">
               {dict.nav.historyAndAbout}
@@ -448,10 +459,25 @@ export default function UserHot() {
         {items.map((item, index) => {
           const displayTitle = isEn && item.originalTitle ? item.originalTitle : item.title;
           const sourceHost = hostOf(item.url);
+          const rankNumber = (page - 1) * 50 + index + 1;
+          const rankTone =
+            rankNumber === 1
+              ? "bg-hot-soft text-hot"
+              : rankNumber === 2
+                ? "bg-amber-soft text-amber-ink"
+                : rankNumber === 3
+                  ? "bg-rule-soft text-rule"
+                  : "bg-accent-soft text-accent";
+          const scoreTone =
+            item.score >= 90
+              ? "bg-clay-soft text-clay"
+              : item.score >= 80
+                ? "bg-accent-soft text-accent"
+                : "bg-rule-soft text-rule";
           return (
             <article key={item.articleId} className="group relative flex gap-4 py-5">
-              <span className="mono flex size-8 shrink-0 items-center justify-center rounded-control bg-accent-soft text-[12px] font-semibold text-accent">
-                {String((page - 1) * 50 + index + 1).padStart(2, "0")}
+              <span className={`mono flex size-8 shrink-0 items-center justify-center rounded-control text-[12px] font-semibold ${rankTone}`}>
+                {String(rankNumber).padStart(2, "0")}
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-start justify-between gap-3">
@@ -463,7 +489,7 @@ export default function UserHot() {
                       {displayTitle}
                     </Link>
                   </h2>
-                  <span className="mono rounded-full bg-accent-soft px-2 py-1 text-[10px] text-accent">
+                  <span className={`mono rounded-full px-2 py-1 text-[10px] font-semibold ${scoreTone}`}>
                     {item.score}
                   </span>
                 </div>

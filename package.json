@@ -18,6 +18,7 @@
     "sources:retire-unsubscribed": "node tooling/scripts/retire-unsubscribed-sources.ts",
     "dev:web": "npm run dev -w @aihot/web",
     "dev:local": "node --env-file=.env.development tooling/scripts/dev-local.mjs",
+    "redis:check": "node --env-file=.env.development tooling/scripts/dev-local.mjs --check-redis",
     "typecheck": "tsc -p frontend/packages/contracts && tsc -p frontend/packages/og-renderer && tsc -p frontend/packages/site && tsc -p tooling/tests && npm run typecheck -w @aihot/web",
     "test": "node --test-global-setup=tooling/tests/databases.ts --import ./tooling/tests/databases.ts --test --test-concurrency=6 --test-timeout=120000 \"tooling/tests/*.test.ts\""
   },

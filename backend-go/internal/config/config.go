@@ -37,6 +37,8 @@ var recommendationFeeds = []string{
 type Config struct {
 	Addr                        string
 	DatabaseURL                 string
+	RedisURL                    string
+	RedisCAFile                 string
 	DataDir                     string
 	PublicURL                   string
 	OpenRegistration            bool
@@ -128,6 +130,10 @@ type Config struct {
 	BackupStoreDomain           string
 	DevAdmin                    bool
 	DevAdminDisplayName         string
+	MarketDataEnabled           bool
+	MarketProvider              string
+	MarketTwelveDataAPIKey      string
+	MarketFinnhubAPIKey         string
 }
 
 func Load() (Config, error) {
@@ -199,6 +205,8 @@ func Load() (Config, error) {
 	return Config{
 		Addr:                        env("GO_API_ADDR", "127.0.0.1:3002"),
 		DatabaseURL:                 env("DATABASE_URL", "postgres://127.0.0.1:5432/aihot"),
+		RedisURL:                    strings.TrimSpace(os.Getenv("REDIS_URL")),
+		RedisCAFile:                 strings.TrimSpace(os.Getenv("REDIS_CA_FILE")),
 		DataDir:                     env("AIHOT_DATA_DIR", filepath.Join(repositoryRoot(), ".data")),
 		PublicURL:                   publicURL,
 		OpenRegistration:            envBool("OPEN_REGISTRATION_ENABLED", false),
@@ -290,6 +298,10 @@ func Load() (Config, error) {
 		BackupStoreDomain:           credential("integrations", "DB_BACKUP_STORE_DOMAIN"),
 		DevAdmin:                    os.Getenv("DEV_AUTH_ROLE") == "admin",
 		DevAdminDisplayName:         env("DEV_AUTH_DISPLAY_NAME", "Dev Admin"),
+		MarketDataEnabled:           envBool("MARKET_DATA_ENABLED", false),
+		MarketProvider:              strings.ToLower(env("MARKET_PROVIDER", "mock")),
+		MarketTwelveDataAPIKey:      credential("collectors", "MARKET_TWELVEDATA_API_KEY"),
+		MarketFinnhubAPIKey:         credential("collectors", "MARKET_FINNHUB_API_KEY"),
 	}, nil
 }
 

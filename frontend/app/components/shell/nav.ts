@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { webModules } from "../../site-modules";
 import { getDict, type Locale } from "../../lib/i18n";
 import {
-  IconDoc, IconFlame, IconGrid, IconHeart, IconHistory, IconPlug, IconRss, IconSparkles, IconUser,
+  IconDoc, IconFlame, IconGrid, IconHeart, IconHistory, IconPlug, IconRss, IconSparkles, IconTrendUp, IconUser,
 } from "../icons";
 
 export interface NavItem {
@@ -30,6 +30,7 @@ function getSections(locale: Locale): Array<{ title: string; items: NavItem[] }>
         { to: "/sources", label: dict.nav.sources, icon: IconRss },
         { to: "/interests", label: dict.nav.interests, icon: IconGrid },
         { to: "/model", label: dict.nav.model, icon: IconPlug },
+        { to: "/markets", label: dict.nav.markets, icon: IconTrendUp },
       ],
     },
     {

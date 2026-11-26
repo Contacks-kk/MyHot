@@ -15,6 +15,7 @@ import {
   IconPlug,
   IconRss,
   IconSparkles,
+  IconTrendUp,
 } from "../components/icons";
 import { ThemeSwitch } from "../components/shell/ThemeSwitch";
 import { SourceAvatar } from "../components/ui/SourceAvatar";
@@ -318,6 +319,16 @@ export default function UserRecommendations() {
                   <IconRss size={17} />
                 </span>
                 <span>{dict.nav.sources}</span>
+              </Link>
+              <Link
+                to="/markets"
+                onClick={() => setDrawerOpen(false)}
+                className="flex h-10 items-center gap-2.5 rounded-control px-2.5 text-[13.5px] font-medium text-ink-3 transition-colors hover:bg-bg-sunk hover:text-ink"
+              >
+                <span className="flex w-5 justify-center text-accent">
+                  <IconTrendUp size={17} />
+                </span>
+                <span>{dict.nav.markets}</span>
               </Link>
             </div>
 

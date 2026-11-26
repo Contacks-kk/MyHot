@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,6 +46,18 @@ function start(label, command, args) {
 
 if (!existsSync(path.join(root, ".env.development"))) {
   throw new Error("Missing .env.development. Copy .env.development.example and set the test database credentials.");
+}
+
+// Check Redis independently of the development API, worker, and database.
+if (process.argv.includes("--check-redis")) {
+  const result = spawnSync("go", ["-C", "backend-go", "run", "./cmd/redis-check"], {
+    cwd: root,
+    stdio: "inherit",
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  process.exit(result.status ?? 1);
 }
 
 // Keep the local API listener and frontend proxy on the same development port.

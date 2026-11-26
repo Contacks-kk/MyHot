@@ -11,6 +11,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/mmcdole/gofeed v1.3.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
+	github.com/redis/go-redis/v9 v9.22.0
 	github.com/riverqueue/river v0.44.1
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.44.1
 	github.com/riverqueue/river/rivertype v0.44.1
@@ -27,6 +28,8 @@ require (
 
 require (
 	github.com/andybalholm/cascadia v1.3.3 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/coder/websocket v1.8.15 // indirect
 	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/go-shiori/dom v0.0.0-20230515143342-73569d674e1c // indirect
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
@@ -51,6 +54,7 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect

@@ -28,6 +28,7 @@ import (
 	"aihot/backend-go/internal/ingest"
 	"aihot/backend-go/internal/interests"
 	"aihot/backend-go/internal/jobs"
+	"aihot/backend-go/internal/market"
 	"aihot/backend-go/internal/materials"
 	"aihot/backend-go/internal/mcpapi"
 	"aihot/backend-go/internal/media"
@@ -41,6 +42,7 @@ import (
 	"aihot/backend-go/internal/usersources"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
@@ -62,7 +64,14 @@ func New(cfg config.Config, db *pgxpool.Pool, orm *gorm.DB, entities map[string]
 	if changelogPath == "" {
 		changelogPath = "backend-go/config/changelog.json"
 	}
-	server := &Server{Config: cfg, ContactDir: cfg.SiteContactDir, Entities: entities, limiter: newRateLimiter(), Health: health.NewService(health.NewRepository(orm)), ConnectionTestKind: jobs.ConnectionTestArgs{}.Kind()}
+	server := &Server{
+		Config:             cfg,
+		ContactDir:         cfg.SiteContactDir,
+		Entities:           entities,
+		limiter:            newRateLimiter(),
+		Health:             health.NewService(health.NewRepository(orm)),
+		ConnectionTestKind: jobs.ConnectionTestArgs{}.Kind(),
+	}
 	imageService := media.NewService(media.Config{
 		DataDir: cfg.DataDir, SignSecret: cfg.ImageProxySignSecret,
 		MinuteBudgetBytes: cfg.ImageProxyMinuteBudgetBytes, DailyBudgetBytes: cfg.ImageProxyDailyBudgetBytes,
@@ -259,7 +268,47 @@ func New(cfg config.Config, db *pgxpool.Pool, orm *gorm.DB, entities map[string]
 	server.EnqueueConnectionTest = func(ctx context.Context, request personal.ConnectionTest) error {
 		return jobs.InsertConnectionTest(ctx, db, jobs.ConnectionTestArgs{UserID: request.UserID, ReceiptID: request.ReceiptID, BaseURL: request.BaseURL, Model: request.Model, APIKeyCiphertext: request.APIKeyCiphertext})
 	}
+	server.MarketHub = market.NewHub(nil, server.Logger)
+	server.Market = market.NewService(market.NewRepository(orm), nil, server.PublicContent, marketServiceConfig(cfg))
 	return server
+}
+
+func marketServiceConfig(cfg config.Config) market.ServiceConfig {
+	providerMode := "live"
+	switch cfg.MarketProvider {
+	case "twelvedata":
+		if cfg.MarketTwelveDataAPIKey == "" {
+			providerMode = "mock"
+		}
+	case "finnhub":
+		if cfg.MarketFinnhubAPIKey == "" {
+			providerMode = "mock"
+		}
+	default:
+		providerMode = "mock"
+	}
+
+	return market.ServiceConfig{
+		Enabled:         cfg.MarketDataEnabled,
+		ProviderName:    cfg.MarketProvider,
+		ProviderMode:    providerMode,
+		ImgProxySecret:  cfg.ImageProxySignSecret,
+		XPostIsFullText: cfg.XPostIsFullText,
+	}
+}
+
+/** AttachMarketRedis binds Redis caching and Pub/Sub fan-out to market services and starts the hub consumer. */
+func (s *Server) AttachMarketRedis(ctx context.Context, client *redis.Client) {
+	if s == nil || client == nil {
+		return
+	}
+
+	store := market.NewRedisStore(client)
+	if s.Market != nil {
+		s.Market.SetRedis(store)
+	}
+	s.MarketHub = market.NewHub(store, s.Logger)
+	go s.MarketHub.Run(ctx)
 }
 
 var bundledContactImage = regexp.MustCompile(`^[\w.-]+\.(?:png|jpe?g|webp)$`)

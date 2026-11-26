@@ -168,8 +168,8 @@ export function SpiderWebCanvas() {
     let width = window.innerWidth;
     let height = window.innerHeight;
     let size = 13;
-    let ink = "#35372b";
-    let silk = "#687142";
+    let ink = "#1d2621";
+    let silk = "#24634e";
     let frame = 0;
     let previous = 0;
     let clock = 0;

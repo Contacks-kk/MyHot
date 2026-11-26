@@ -9,7 +9,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequestListener } from "@react-router/node";
 import { isApiOwned, resolveRedirect } from "@aihot/contracts/http-policy";
-import { proxyToApi } from "./app/lib/api-proxy.server.ts";
+import { proxyToApi, proxyWsUpgrade } from "./app/lib/api-proxy.server.ts";
 import { logError } from "./app/lib/errors.server.ts";
 import { isSiteBrandPath, isSitePublicPath, serveSiteBrand, serveSitePublic } from "./app/lib/site-brand.server.ts";
 import { parseOgPrewarmRequest } from "./app/lib/og-prewarm.server.ts";
@@ -84,6 +84,23 @@ const server = createServer((req, res) => {
     if (res.headersSent) return res.destroy();
     res.writeHead(bad ? 400 : 500, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
     res.end(bad ? "Bad request" : "Internal error");
+  });
+});
+
+// Proxy same-origin WebSocket upgrades for /api/ws/* directly to Go API.
+server.on("upgrade", (req, socket, head) => {
+  const pathname = (req.url ?? "/").split("?")[0] ?? "/";
+  if (!pathname.startsWith("/api/ws/") || !isApiOwned(pathname)) {
+    socket.destroy();
+    return;
+  }
+
+  const forwarded = String(req.headers["x-forwarded-for"] ?? "").split(",").map((v) => v.trim()).filter(Boolean);
+  const client = TRUST_PROXY && forwarded.length ? forwarded[forwarded.length - 1]! : (req.socket.remoteAddress ?? "");
+  proxyWsUpgrade(req, socket, head, {
+    "x-forwarded-for": client,
+    "x-real-ip": client,
+    "x-forwarded-host": req.headers.host ?? "",
   });
 });
 

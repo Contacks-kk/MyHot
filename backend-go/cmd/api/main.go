@@ -21,6 +21,7 @@ import (
 	"aihot/backend-go/internal/operationsalerts"
 	"aihot/backend-go/internal/reports"
 	"aihot/backend-go/internal/topics"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -47,6 +48,18 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.CloseGORM(orm)
+
+	// Attach Redis optionally so market caching/PubSub work when configured while preserving degraded startup.
+	var redisClient *redis.Client
+	if cfg.RedisURL != "" {
+		redisClient, err = db.OpenRedis(ctx, cfg.RedisURL, cfg.RedisCAFile)
+		if err != nil {
+			log.Printf("warning: Redis unavailable (%v); real-time market streaming disabled", err)
+		} else {
+			defer redisClient.Close()
+		}
+	}
+
 	adminruns.StartHeartbeat(ctx, orm, "api")
 	workerWatchdog := operationsalerts.NewWorkerWatchdog(operationsalerts.NewRepository(orm), feedback.NewFeishuForwarder(cfg.FeishuAppID, cfg.FeishuAppSecret), operationsalerts.Config{
 		FeishuInternalEnabled: cfg.FeishuInternalEnabled,
@@ -112,6 +125,9 @@ func main() {
 		TopicGroups:        topicGroups,
 		Topics:             topicDefinitions})
 	go api.Accounts.RunVerificationCleanup(ctx)
+	if redisClient != nil {
+		api.AttachMarketRedis(ctx, redisClient)
+	}
 	server := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           api.Handler(),
@@ -123,6 +139,7 @@ func main() {
 	go func() {
 		<-ctx.Done()
 		api.ShutdownMCP()
+		api.ShutdownMarketWS()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := server.Shutdown(shutdown); err != nil {

@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"bufio"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"runtime/debug"
 )
@@ -86,6 +88,15 @@ func (w *failureLoggingWriter) Flush() {
 /** Unwrap exposes the underlying writer to HTTP response controllers. */
 func (w *failureLoggingWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
+}
+
+/** Hijack forwards connection hijacking for WebSocket upgrades. */
+func (w *failureLoggingWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hijacker.Hijack()
 }
 
 /** logFailure emits one request record with no query, header, body, or raw error values. */

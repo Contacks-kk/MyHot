@@ -48,9 +48,17 @@ x-go-backend: &go-backend
     GO_TRUST_PROXY: "true"
     GO_MEDIA_PREPARE_ENABLED: ${GO_MEDIA_PREPARE_ENABLED:-false}
     GO_SHARED_PIPELINE_ENABLED: ${GO_SHARED_PIPELINE_ENABLED:-false}
+    REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    REDIS_CA_FILE: ${REDIS_CA_FILE:-}
+    MARKET_DATA_ENABLED: ${MARKET_DATA_ENABLED:-false}
+    MARKET_PROVIDER: ${MARKET_PROVIDER:-mock}
+    MARKET_TWELVEDATA_API_KEY: ${MARKET_TWELVEDATA_API_KEY:-}
+    MARKET_FINNHUB_API_KEY: ${MARKET_FINNHUB_API_KEY:-}
   depends_on:
     setup:
       condition: service_completed_successfully
+    redis:
+      condition: service_healthy
 
 services:
   db:
@@ -68,6 +76,18 @@ services:
       interval: 5s
       timeout: 5s
       retries: 30
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   # Applies the database migrations, then exits.
   setup:
@@ -132,6 +152,7 @@ services:
 
 volumes:
   db: {}
+  redis: {}
   data: {}
   og-cache: {}
   caddy: {}

@@ -4,7 +4,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, type Plugin } from "vite";
 import { isApiOwned, resolveRedirect } from "@aihot/contracts/http-policy";
 import { DEPLOYMENT } from "@aihot/site";
-import { proxyToApi } from "./app/lib/api-proxy.server.ts";
+import { proxyToApi, proxyWsUpgrade } from "./app/lib/api-proxy.server.ts";
 import { isAnonymousPage, pagePath } from "./app/lib/access.ts";
 import { USER_API_BASE_URL } from "./app/lib/user-api.server.ts";
 import { isSiteBrandPath, isSitePublicPath, serveSiteBrand, serveSitePublic } from "./app/lib/site-brand.server.ts";
@@ -14,12 +14,38 @@ function devEdge(): Plugin {
   return {
     name: "aihot-dev-edge",
     configureServer(server) {
+      server.httpServer?.on("upgrade", (req, socket, head) => {
+        const pathname = (req.url ?? "/").split("?")[0] ?? "/";
+        if (!pathname.startsWith("/api/ws/") || !isApiOwned(pathname)) {
+          return;
+        }
+
+        const browserHost = req.headers.host ?? "";
+        const client = req.socket.remoteAddress ?? "";
+        proxyWsUpgrade(req, socket, head, {
+          "x-forwarded-host": browserHost,
+          "x-forwarded-for": client,
+          "x-real-ip": client,
+        });
+      });
+
       server.middlewares.use(async (req, res, next) => {
         const raw = req.url ?? "/";
         const qi = raw.indexOf("?");
         const pathname = qi >= 0 ? raw.slice(0, qi) : raw;
         const search = qi >= 0 ? raw.slice(qi) : "";
-        if (pathname.startsWith("/@") || pathname.startsWith("/node_modules/") || pathname.startsWith("/app/") || pathname.startsWith("/__")) return next();
+        // Pass Vite dev/internal requests and frontend workspace source directories through before auth gating.
+        if (
+          pathname.startsWith("/@") ||
+          pathname.startsWith("/node_modules/") ||
+          pathname.startsWith("/app/") ||
+          pathname.startsWith("/packages/") ||
+          pathname.startsWith("/brand/") ||
+          pathname.startsWith("/modules/") ||
+          pathname.startsWith("/__")
+        ) {
+          return next();
+        }
         const decision = resolveRedirect(pathname, search);
         if (decision) {
           for (const [k, v] of Object.entries(decision.headers)) res.setHeader(k, v);

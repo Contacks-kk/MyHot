@@ -1,6 +1,7 @@
 // The React Router Web process is the same-origin boundary for the Go business API.
 // It forwards end-to-end headers and streams the response without reading account data.
 import { type IncomingHttpHeaders, type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse, request as httpRequest } from "node:http";
+import type { Duplex } from "node:stream";
 import { CONTACT_ALIASES } from "@aihot/contracts/http-policy";
 import { USER_API_BASE_URL } from "./user-api.server.ts";
 import { logError } from "./errors.server.ts";
@@ -48,4 +49,80 @@ function forward(req: IncomingMessage, res: ServerResponse, set: OutgoingHttpHea
     res.end("api unavailable");
   });
   req.pipe(upstream);
+}
+
+/** Tunnel an authenticated same-origin WebSocket upgrade to Go API while preserving forwarding headers. */
+export function proxyWsUpgrade(req: IncomingMessage, clientSocket: Duplex, head: Buffer, set: OutgoingHttpHeaders = {}): void {
+  const headers: OutgoingHttpHeaders = { ...req.headers, ...set };
+  const upstream = httpRequest({
+    hostname: API.hostname,
+    port: API.port,
+    path: req.url,
+    method: req.method ?? "GET",
+    headers,
+  });
+
+  upstream.on("upgrade", (proxyRes, proxySocket, proxyHead) => {
+    const status = proxyRes.statusCode ?? 101;
+    const statusText = proxyRes.statusMessage ?? "Switching Protocols";
+    const lines = [`HTTP/1.1 ${status} ${statusText}`];
+
+    for (const [name, value] of Object.entries(proxyRes.headers)) {
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          lines.push(`${name}: ${item}`);
+        }
+      } else if (value !== undefined) {
+        lines.push(`${name}: ${value}`);
+      }
+    }
+
+    clientSocket.write(`${lines.join("\r\n")}\r\n\r\n`);
+    if (proxyHead.length > 0) {
+      clientSocket.write(proxyHead);
+    }
+    if (head.length > 0) {
+      proxySocket.write(head);
+    }
+
+    proxySocket.on("error", () => clientSocket.destroy());
+    clientSocket.on("error", () => proxySocket.destroy());
+    proxySocket.pipe(clientSocket);
+    clientSocket.pipe(proxySocket);
+  });
+
+  // Forward upstream HTTP rejections cleanly when upgrade is refused (e.g., 401/403).
+  upstream.on("response", (proxyRes) => {
+    const status = proxyRes.statusCode ?? 502;
+    const statusText = proxyRes.statusMessage ?? "Bad Gateway";
+    const lines = [`HTTP/1.1 ${status} ${statusText}`];
+
+    for (const [name, value] of Object.entries(proxyRes.headers)) {
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          lines.push(`${name}: ${item}`);
+        }
+      } else if (value !== undefined) {
+        lines.push(`${name}: ${value}`);
+      }
+    }
+
+    clientSocket.write(`${lines.join("\r\n")}\r\n\r\n`);
+    proxyRes.on("error", () => clientSocket.destroy());
+    proxyRes.pipe(clientSocket);
+  });
+
+  upstream.on("error", (error) => {
+    logError(error, { msg: "Go API WebSocket proxy failed", path: req.url });
+    if (!clientSocket.destroyed) {
+      clientSocket.write("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
+      clientSocket.destroy();
+    }
+  });
+
+  clientSocket.on("error", () => {
+    upstream.destroy();
+  });
+
+  upstream.end();
 }

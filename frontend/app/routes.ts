@@ -25,6 +25,7 @@ export default [
   route("items/:id/original", "routes/item-original.tsx", { id: "item-original" }),
   route("hot", "routes/user-hot.tsx"),
   route("recommendations", "routes/user-recommendations.tsx"),
+  route("markets", "routes/user-markets.tsx"),
   route("my/articles/:id", "routes/user-article.tsx"),
   route("daily", "routes/user-daily.tsx"),
   route("history", "routes/user-history.tsx"),

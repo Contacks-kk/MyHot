@@ -477,6 +477,7 @@ compose stop web go-api
 compose run --rm --no-deps setup
 
 stage startup
+compose up -d --no-deps redis
 compose up -d --no-deps go-api
 
 stage health
