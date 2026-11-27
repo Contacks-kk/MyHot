@@ -358,10 +358,6 @@ func (s *Service) RecommendedArticles(ctx context.Context, userID int64, page in
 	return s.repository.RecommendedArticles(ctx, userID, s.config.SourceSchedule.RecommendationFeeds, max(page, 1))
 }
 
-func (s *Service) Daily(ctx context.Context, userID int64) ([]DailyReport, error) {
-	return s.repository.Daily(ctx, userID)
-}
-
 /** DailyView returns the owner's archive and the requested issue. */
 func (s *Service) DailyView(ctx context.Context, userID int64, id, date string) (DailyReportView, error) {
 	if id == "" && date != "" {

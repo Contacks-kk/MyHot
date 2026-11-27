@@ -38,7 +38,6 @@ const api = createServer(async (req, res) => {
   if (path === "/api/me") return send(200, { id: 1, email: "browser@example.invalid", csrfToken: "fixture-csrf" });
   if (path === "/api/me/model") return send(200, { configured: false, baseUrl: "", model: "" });
   if (path === "/api/me/interests") return send(200, { keywords: [], entityIds: [] });
-  if (path === "/api/me/daily") return send(200, { reports: [] });
   if (path === "/api/me/daily/view") return send(200, { reports: [], report: null });
   if (["/api/me/feed", "/api/me/hot"].includes(path)) return send(200, { items: [] });
   return send(404, {});

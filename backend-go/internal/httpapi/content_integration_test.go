@@ -349,12 +349,6 @@ func TestPersonalHotWindowOrderingAndHistoryIntegration(t *testing.T) {
 	for _, path := range []string{"/api/me/hot?range=bad", "/api/me/hot?range=date&date=2000-02-30", "/api/me/hot?range=date&date=2999-01-01", "/api/me/hot?page=-1"} {
 		clients[0].request(t, "GET", path, nil, 400)
 	}
-	if _, err := pool.Exec(ctx, "INSERT INTO user_daily_reports(user_id,report_date,model,title,summary) VALUES($1,current_date,'fixture','user-one-only','private-daily')", users[0]); err != nil {
-		t.Fatal(err)
-	}
-	if r := clients[1].request(t, "GET", "/api/me/daily", nil, 200); strings.Contains(r.Body.String(), "private-daily") {
-		t.Fatal("daily crossed user boundary")
-	}
 	// Old article and analysis are retained, visible only in the read-only shared history.
 	historyID := prefix + "_history"
 	if _, err := pool.Exec(ctx, "INSERT INTO articles(id,source_id,identity_key,url,title,discovered_at,timeline_at,created_at) VALUES($1,$2,$1,'https://fixture.example.invalid/history','Historical title','2000-01-01','2000-01-01','2000-01-01')", historyID, source); err != nil {

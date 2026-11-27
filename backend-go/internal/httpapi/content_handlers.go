@@ -202,19 +202,6 @@ func (s *Server) personalArticle(w http.ResponseWriter, r *http.Request, u userC
 	})
 }
 
-func (s *Server) daily(w http.ResponseWriter, r *http.Request, u userContext) {
-	items, err := s.Personal.Daily(r.Context(), u.ID)
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "日报暂不可用")
-		return
-	}
-	reports := make([]map[string]any, 0, len(items))
-	for _, item := range items {
-		reports = append(reports, map[string]any{"id": item.ID, "date": item.Date, "model": item.Model, "title": item.Title, "summary": item.Summary, "entries": item.Entries, "createdAt": item.CreatedAt})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"reports": reports})
-}
-
 /** dailyView serves the owner's report directory and one selected issue. */
 func (s *Server) dailyView(w http.ResponseWriter, r *http.Request, u userContext) {
 	query := r.URL.Query()

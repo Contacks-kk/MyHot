@@ -76,7 +76,6 @@ const account = createServer((req,res)=>{
   if(pathname==="/api/me/labels")return res.end(JSON.stringify({labels:[{
     id:"agent", name:"Agent 智能体", kind:"topic", status:"active", aliases:["Agent","智能体"], definition:"自主规划与执行任务。", count:2, userCount:1,
   }]}));
-  if(pathname==="/api/me/daily")return res.end(JSON.stringify({reports:[]}));
   if (pathname === "/api/me/daily/view") {
     const reports = [
       { id: "manual-321", date: "2026-10-05", title: "Latest edition", createdAt: "2026-10-05T00:00:00Z" },

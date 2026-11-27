@@ -56,7 +56,7 @@ test('legacy machine access information requires login and offers no anonymous e
   const visible = $('section').text();
   assert.match(visible, /个人结果不会进入原站 RSS/);
   assert.match(visible, /有效登录会话/);
-  for (const path of ['/api/me/feed','/api/me/hot','/api/me/daily']) assert.ok(visible.includes(path));
+  for (const path of ['/api/me/feed','/api/me/hot','/api/me/daily/view']) assert.ok(visible.includes(path));
   assert.doesNotMatch(visible, /匿名只读|不用 token|匿名 GET/);
 });
 

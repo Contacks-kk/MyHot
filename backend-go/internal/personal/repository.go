@@ -399,19 +399,6 @@ func recommendationPageIDs(tx *gorm.DB, userID int64, feeds []string, page int) 
 	}
 }
 
-func (r *Repository) Daily(ctx context.Context, userID int64) ([]DailyReport, error) {
-	var items []DailyReport
-	err := r.db.WithContext(ctx).Raw(`SELECT * FROM (
-		SELECT 'scheduled-' || to_char(report_date,'YYYY-MM-DD') AS id,to_char(report_date,'YYYY-MM-DD') AS report_date,model,title,summary,entries,created_at FROM user_daily_reports WHERE user_id=? AND is_scheduled
-		UNION ALL
-		SELECT issue->>'id',issue->>'date',issue->>'model',issue->>'title',issue->>'summary',issue->'entries',(issue->>'createdAt')::timestamptz FROM user_daily_reports CROSS JOIN LATERAL jsonb_array_elements(manual_reports) issue WHERE user_id=?
-	) issues ORDER BY created_at DESC,id DESC LIMIT 30`, userID, userID).Scan(&items).Error
-	if items == nil {
-		items = []DailyReport{}
-	}
-	return items, err
-}
-
 /** DailyView loads a compact archive and at most one complete issue. */
 func (r *Repository) DailyView(ctx context.Context, userID int64, id, date string) (DailyReportView, error) {
 	view := DailyReportView{Reports: make([]DailyReportHeading, 0, 30)}
