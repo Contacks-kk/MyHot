@@ -22,6 +22,49 @@ import (
 	"gorm.io/gorm"
 )
 
+/** attachTestRedis wires localhost integration Redis to server and returns its session store. */
+func attachTestRedis(t *testing.T, server *Server) *account.RedisSessionStore {
+	t.Helper()
+	raw := os.Getenv("MYHOT_TEST_REDIS_URL")
+	if raw == "" {
+		t.Skip("MYHOT_TEST_REDIS_URL is not configured")
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "localhost" && parsed.Hostname() != "::1") {
+		t.Fatalf("integration Redis must run on localhost, got %q (%v)", raw, err)
+	}
+
+	client, err := db.OpenRedis(context.Background(), raw, os.Getenv("REDIS_CA_FILE"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	server.AttachAccountRedis(client)
+	return account.NewRedisSessionStore(client)
+}
+
+/** seedTestUserSession creates a verified Redis session for integration tests and cleans it up on teardown. */
+func seedTestUserSession(t *testing.T, store *account.RedisSessionStore, userID int64, csrf string, ttl time.Duration) string {
+	t.Helper()
+	token, tokenHash, err := auth.NewToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	if err := store.Create(ctx, account.SessionRecord{
+		UserID:    userID,
+		Email:     fmt.Sprintf("fixture-%d@example.invalid", userID),
+		CSRF:      csrf,
+		TokenHash: tokenHash,
+	}, ttl); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.RevokeUser(context.Background(), userID) })
+	return token
+}
+
 type captureMail struct{ messages []string }
 
 func (m *captureMail) Send(to, subject, text string) error {
@@ -116,6 +159,7 @@ func TestAuthLifecycleAndPrivateSettingsIntegration(t *testing.T) {
 	sender := &captureMail{}
 	cfg := config.Config{PublicURL: "http://localhost", SiteURL: "https://myhot.example", UserAPIKeyEncryptionKey: []byte(strings.Repeat("e", 32)), SMTPHost: "mail.example.invalid", SMTPFrom: "noreply@example.invalid", SMTPPort: 587}
 	server := New(cfg, pool, orm, map[string]interests.Entity{"openai": {Name: "OpenAI", Aliases: []string{"ChatGPT"}}})
+	redisStore := attachTestRedis(t, server)
 	server.Catalog = interests.NewCatalogService(
 		[]string{"research"},
 		map[string]string{"research": "Research"},
@@ -148,7 +192,7 @@ func TestAuthLifecycleAndPrivateSettingsIntegration(t *testing.T) {
 	}
 	server.Config.OpenRegistration = true
 	cfg.OpenRegistration = true
-	server.Accounts = account.NewService(account.NewRepository(orm), cfg, accountMailer{server: server})
+	server.Accounts = account.NewService(account.NewRepository(orm), redisStore, cfg, accountMailer{server: server})
 	status = clients[0].request(t, "GET", "/api/auth/registration-status", nil, 200)
 	if err := json.Unmarshal(status.Body.Bytes(), &statusBody); err != nil || statusBody["enabled"] != true {
 		t.Fatalf("explicit registration enablement with SMTP should open registration: %v err=%v", statusBody, err)
@@ -377,10 +421,13 @@ func TestAuthLifecycleAndPrivateSettingsIntegration(t *testing.T) {
 	clients[0].request(t, "GET", "/api/me", nil, 200)
 	clients[0].request(t, "DELETE", "/api/me", map[string]string{"password": newPassword}, 204)
 	clients[0].request(t, "GET", "/api/me", nil, 401)
-	for _, table := range []string{"user_model_configs", "user_interests", "user_sessions", "user_article_results", "user_daily_reports", "user_model_call_receipts"} {
+	for _, table := range []string{"user_model_configs", "user_interests", "user_article_results", "user_daily_reports", "user_model_call_receipts"} {
 		if err := pool.QueryRow(ctx, "SELECT count(*) FROM "+table+" WHERE user_id=$1", userID).Scan(&count); err != nil || count != 0 {
 			t.Fatalf("account deletion did not clear %s: count=%d err=%v", table, count, err)
 		}
+	}
+	if activeRedisSessions, err := redisStore.CountActiveUserSessions(ctx, userID); err != nil || activeRedisSessions != 0 {
+		t.Fatalf("account deletion did not revoke Redis sessions: active=%d err=%v", activeRedisSessions, err)
 	}
 	if queueExists {
 		pool.QueryRow(ctx, "SELECT count(*) FROM river_job WHERE args->>'userId'=$1", fmt.Sprint(userID)).Scan(&count)

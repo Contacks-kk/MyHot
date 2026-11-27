@@ -17,7 +17,11 @@ async function fetchUserApi<T>(request: Request, path: string): Promise<T | null
   let response: Response;
   try {
     response = await fetch(`${USER_API_BASE_URL}${path}`, {
-      headers: { accept: "application/json", cookie: request.headers.get("cookie") ?? "" },
+      headers: {
+        accept: "application/json",
+        cookie: request.headers.get("cookie") ?? "",
+        "x-session-touch": "skip",
+      },
       signal: request.signal.aborted ? request.signal : AbortSignal.any([request.signal, AbortSignal.timeout(10_000)]),
       cache: "no-store",
     });

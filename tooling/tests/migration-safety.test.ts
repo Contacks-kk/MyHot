@@ -110,3 +110,9 @@ test("index definition checks preserve compound operators, adjacent comments and
     assert.equal(migrationPlan(source).kind, "index");
   }
 });
+
+test("retired tables allow DROP TABLE IF EXISTS without CASCADE", () => {
+  assert.equal(migrationPlan("DROP TABLE IF EXISTS public.user_sessions;").kind, "transaction");
+  assert.throws(() => migrationPlan("DROP TABLE IF EXISTS public.user_sessions CASCADE;"));
+  assert.throws(() => migrationPlan("DROP TABLE IF EXISTS public.user_accounts;"));
+});

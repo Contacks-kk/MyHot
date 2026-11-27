@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -330,6 +331,14 @@ func (c Config) ValidateRuntime() error {
 	secret := strings.TrimSpace(c.SessionSecret)
 	if len(secret) < 8 || placeholderSecret.MatchString(secret) {
 		return errors.New("Refusing to start in production: SESSION_SECRET is missing or invalid")
+	}
+	redisURL := strings.TrimSpace(c.RedisURL)
+	if redisURL == "" {
+		return errors.New("Refusing to start in production: REDIS_URL is missing")
+	}
+	parsedRedis, err := url.Parse(redisURL)
+	if err != nil || (parsedRedis.Scheme != "redis" && parsedRedis.Scheme != "rediss") || parsedRedis.Host == "" {
+		return errors.New("Refusing to start in production: REDIS_URL is invalid")
 	}
 	for _, value := range os.Environ() {
 		key, _, ok := strings.Cut(value, "=")

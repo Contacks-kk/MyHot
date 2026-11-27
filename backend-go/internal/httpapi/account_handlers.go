@@ -177,20 +177,29 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) writeUserSession(w http.ResponseWriter, status int, result account.LoginResult) {
+/** setUserSessionCookie writes or refreshes the HttpOnly browser session cookie. */
+func (s *Server) setUserSessionCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
-		Value:    result.Token,
+		Value:    token,
 		Path:     "/",
 		Expires:  time.Now().Add(sessionLifetime),
 		MaxAge:   int(sessionLifetime.Seconds()),
 		HttpOnly: true,
 		Secure:   s.Config.CookieSecure,
-		SameSite: http.SameSiteLaxMode})
-	writeJSON(w, status, map[string]any{"user": map[string]any{
-		"id":    result.UserID,
-		"email": result.Email},
-		"csrfToken": result.CSRF})
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func (s *Server) writeUserSession(w http.ResponseWriter, status int, result account.LoginResult) {
+	s.setUserSessionCookie(w, result.Token)
+	writeJSON(w, status, map[string]any{
+		"user": map[string]any{
+			"id":    result.UserID,
+			"email": result.Email,
+		},
+		"csrfToken": result.CSRF,
+	})
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
@@ -198,7 +207,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "请求来源无效")
 		return
 	}
-	user, err := s.userFromRequest(r)
+	user, _, rawToken, err := s.resolveUserSession(r, false)
 	if err != nil {
 		if errors.Is(err, errNoSession) || errors.Is(err, account.ErrNoSession) {
 			writeError(w, http.StatusUnauthorized, "请先登录")
@@ -211,8 +220,9 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "页面已过期，请刷新后重试")
 		return
 	}
-	if c, err := r.Cookie(sessionCookie); err == nil {
-		s.Accounts.Logout(r.Context(), user.ID, c.Value)
+	if err := s.Accounts.Logout(r.Context(), user.ID, rawToken); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "会话服务暂不可用")
+		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, Expires: time.Unix(1, 0), HttpOnly: true, Secure: s.Config.CookieSecure, SameSite: http.SameSiteLaxMode})
 	w.WriteHeader(http.StatusNoContent)

@@ -18,17 +18,6 @@ type UserAccount struct {
 
 func (UserAccount) TableName() string { return "user_accounts" }
 
-type UserSession struct {
-	ID        int64     `gorm:"column:id;primaryKey"`
-	UserID    int64     `gorm:"column:user_id"`
-	TokenHash string    `gorm:"column:token_hash"`
-	CSRFToken string    `gorm:"column:csrf_token"`
-	ExpiresAt time.Time `gorm:"column:expires_at"`
-	CreatedAt time.Time `gorm:"column:created_at"`
-}
-
-func (UserSession) TableName() string { return "user_sessions" }
-
 type UserEmailToken struct {
 	ID        int64      `gorm:"column:id;primaryKey"`
 	UserID    int64      `gorm:"column:user_id"`

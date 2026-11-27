@@ -160,7 +160,7 @@ func New(cfg config.Config, db *pgxpool.Pool, orm *gorm.DB, entities map[string]
 		Description: cfg.SiteDescription, Tagline: cfg.SiteTagline, Locale: cfg.SiteLocale, Version: cfg.SiteInterfaceVersion,
 		DailyTime: cfg.SiteEditionDaily, WeeklyTime: cfg.SiteEditionWeekly, MonthlyTime: cfg.SiteEditionMonthly, Categories: server.PublicCategoryOrder,
 	})
-	server.Accounts = account.NewService(account.NewRepository(orm), cfg, accountMailer{server: server})
+	server.Accounts = account.NewService(account.NewRepository(orm), account.NewRedisSessionStore(nil), cfg, accountMailer{server: server})
 	server.AdminAuth = adminauth.NewService(adminauth.NewRepository(orm), cfg, nil)
 	transactionClient, transactionErr := jobs.NewTransactionClient(db)
 	publicationRepository := publicationdomain.NewRepository(db, entities, publicationSettings, cfg.SiteName, cfg.SiteURL)
@@ -296,6 +296,20 @@ func marketServiceConfig(cfg config.Config) market.ServiceConfig {
 		ProviderMode:    providerMode,
 		ImgProxySecret:  cfg.ImageProxySignSecret,
 		XPostIsFullText: cfg.XPostIsFullText,
+	}
+}
+
+/** AttachAccountRedis binds the Redis session store to account auth and API health probing. */
+func (s *Server) AttachAccountRedis(client *redis.Client) {
+	if s == nil || client == nil {
+		return
+	}
+
+	if s.Accounts != nil {
+		s.Accounts.SetSessionStore(account.NewRedisSessionStore(client))
+	}
+	if target, ok := s.Health.(interface{ SetRedis(*redis.Client) }); ok {
+		target.SetRedis(client)
 	}
 }
 

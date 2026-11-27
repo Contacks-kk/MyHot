@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"aihot/backend-go/internal/auth"
 	"aihot/backend-go/internal/config"
 	"aihot/backend-go/internal/interests"
 )
@@ -23,15 +22,11 @@ func TestMCPAuthenticatedOversizeRequestKeepsJSONRPCOriginAndPrivateContract(t *
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM user_accounts WHERE id=$1`, userID) })
-	token, tokenHash, err := auth.NewToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `INSERT INTO user_sessions(user_id,token_hash,csrf_token,expires_at) VALUES($1,$2,'fixture-csrf',now()+interval '1 hour')`, userID, tokenHash); err != nil {
-		t.Fatal(err)
-	}
 
-	handler := New(config.Config{SiteURL: "https://myhot.example"}, pool, orm, map[string]interests.Entity{}).Handler()
+	server := New(config.Config{SiteURL: "https://myhot.example"}, pool, orm, map[string]interests.Entity{})
+	redisStore := attachTestRedis(t, server)
+	token := seedTestUserSession(t, redisStore, userID, "fixture-csrf", time.Hour)
+	handler := server.Handler()
 	request := httptest.NewRequest(http.MethodPost, "https://myhot.example/api/mcp", strings.NewReader(strings.Repeat(" ", mcpMaxBody+1)))
 	request.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
 	request.Header.Set("Origin", "https://myhot.example")

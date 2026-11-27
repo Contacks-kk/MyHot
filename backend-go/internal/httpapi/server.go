@@ -50,7 +50,7 @@ import (
 var errNoSession = errors.New("no session")
 
 const sessionCookie = "myhot_session"
-const sessionLifetime = 30 * 24 * time.Hour
+const sessionLifetime = account.DefaultSessionTTL
 
 type Server struct {
 	Config                config.Config
@@ -333,10 +333,12 @@ type userContext struct {
 }
 type userHandler func(http.ResponseWriter, *http.Request, userContext)
 
+/** withUser authenticates the request cookie, refreshes sliding cookies when needed, and enforces CSRF. */
 func (s *Server) withUser(next userHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		setPrivateSiteHeaders(w)
-		user, err := s.userFromRequest(r)
+		touch := shouldTouchSession(r)
+		user, renewed, rawToken, err := s.resolveUserSession(r, touch)
 		if err != nil {
 			if errors.Is(err, errNoSession) || errors.Is(err, account.ErrNoSession) {
 				writeError(w, http.StatusUnauthorized, "请先登录")
@@ -356,21 +358,48 @@ func (s *Server) withUser(next userHandler) http.HandlerFunc {
 				return
 			}
 		}
+
+		// Sync browser cookie Max-Age before handler execution or WebSocket upgrade
+		if renewed && touch {
+			s.setUserSessionCookie(w, rawToken)
+		}
 		next(w, r, user)
 	}
 }
 
 func (s *Server) userFromRequest(r *http.Request) (userContext, error) {
+	user, _, _, err := s.resolveUserSession(r, false)
+	return user, err
+}
+
+func (s *Server) resolveUserSession(r *http.Request, touch bool) (userContext, bool, string, error) {
 	cookie, err := r.Cookie(sessionCookie)
 	if err != nil || cookie.Value == "" {
-		return userContext{}, errNoSession
+		return userContext{}, false, "", errNoSession
 	}
+	if s.Accounts == nil {
+		return userContext{}, false, "", account.ErrSessionStoreUnavailable
+	}
+
 	var user userContext
 
-	// cookie兑换session，验证用户身份
-	value, err := s.Accounts.ResolveSession(r.Context(), cookie.Value)
-	user.ID, user.Email, user.CSRF = value.ID, value.Email, value.CSRF
-	return user, err
+	// Validate cookie token via Redis and perform throttled sliding TTL extension when allowed
+	value, renewed, err := s.Accounts.ResolveSessionWithTouch(r.Context(), cookie.Value, touch)
+	user.ID = value.ID
+	user.Email = value.Email
+	user.CSRF = value.CSRF
+	return user, renewed, cookie.Value, err
+}
+
+/** shouldTouchSession prevents internal SSR/OG reads and WebSocket upgrades from consuming sliding TTL without Set-Cookie delivery. */
+func shouldTouchSession(r *http.Request) bool {
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Session-Touch")), "skip") {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket") {
+		return false
+	}
+	return true
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {

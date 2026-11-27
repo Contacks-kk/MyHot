@@ -2,13 +2,14 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"aihot/backend-go/internal/auth"
+	"aihot/backend-go/internal/account"
 	"aihot/backend-go/internal/config"
 	"aihot/backend-go/internal/interests"
 )
@@ -22,14 +23,11 @@ func TestRSSRequiresVerifiedSessionAndKeepsResponsesPrivate(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM user_accounts WHERE id=$1`, userID) })
-	token, tokenHash, err := auth.NewToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `INSERT INTO user_sessions(user_id,token_hash,csrf_token,expires_at) VALUES($1,$2,'fixture-csrf',now()+interval '1 hour')`, userID, tokenHash); err != nil {
-		t.Fatal(err)
-	}
+
 	server := New(config.Config{SiteURL: "http://localhost", SiteName: "Example"}, pool, orm, map[string]interests.Entity{})
+	redisStore := attachTestRedis(t, server)
+	token := seedTestUserSession(t, redisStore, userID, "fixture-csrf", time.Hour)
+	expiredToken := seedTestUserSession(t, redisStore, userID, "expired-csrf", time.Second)
 	handler := server.Handler()
 	private := func(t *testing.T, response *httptest.ResponseRecorder, status int) {
 		t.Helper()
@@ -58,33 +56,24 @@ func TestRSSRequiresVerifiedSessionAndKeepsResponsesPrivate(t *testing.T) {
 	handler.ServeHTTP(conditional, request)
 	private(t, conditional, http.StatusNotModified)
 
-	expiredToken, expiredHash, err := auth.NewToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `INSERT INTO user_sessions(user_id,token_hash,csrf_token,expires_at) VALUES($1,$2,'expired-csrf',now()-interval '1 hour')`, userID, expiredHash); err != nil {
-		t.Fatal(err)
-	}
 	unverifiedEmail := "rss-unverified-" + strings.ReplaceAll(time.Now().UTC().Format("20060102150405.000000000"), ".", "") + "@example.invalid"
 	var unverifiedUserID int64
-	if err := pool.QueryRow(ctx, `INSERT INTO user_accounts(email,password_hash) VALUES($1,'fixture') RETURNING id`, unverifiedEmail).Scan(&unverifiedUserID); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO user_accounts(email,password_hash) VALUES($1,'$argon2id$v=19$m=65536,t=3,p=2$dGVzdHNhbHR0ZXN0c2FsdA$dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXRlc3Q') RETURNING id`, unverifiedEmail).Scan(&unverifiedUserID); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM user_accounts WHERE id=$1`, unverifiedUserID) })
-	unverifiedToken, unverifiedHash, err := auth.NewToken()
-	if err != nil {
-		t.Fatal(err)
+	if _, err := server.Accounts.Login(ctx, unverifiedEmail, "unused-password"); err == nil || (!errors.Is(err, account.ErrUnverifiedAccount) && !errors.Is(err, account.ErrInvalidCredentials)) {
+		t.Fatalf("unverified account must not obtain a session: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO user_sessions(user_id,token_hash,csrf_token,expires_at) VALUES($1,$2,'unverified-csrf',now()+interval '1 hour')`, unverifiedUserID, unverifiedHash); err != nil {
-		t.Fatal(err)
-	}
+
+	// Wait past the 1s Redis TTL so expiredToken triggers real Redis key expiration
+	time.Sleep(1100 * time.Millisecond)
 	for _, value := range []struct {
 		name  string
 		token string
 	}{
 		{name: "forged", token: "forged-session-token"},
 		{name: "expired", token: expiredToken},
-		{name: "unverified", token: unverifiedToken},
 	} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
 			request := httptest.NewRequest(method, "http://localhost/feed.xml", nil)
@@ -98,7 +87,7 @@ func TestRSSRequiresVerifiedSessionAndKeepsResponsesPrivate(t *testing.T) {
 		}
 	}
 
-	if _, err := pool.Exec(ctx, `DELETE FROM user_sessions WHERE user_id=$1`, userID); err != nil {
+	if err := redisStore.RevokeUser(ctx, userID); err != nil {
 		t.Fatal(err)
 	}
 	request = httptest.NewRequest(http.MethodGet, "http://localhost/feed.xml", nil)

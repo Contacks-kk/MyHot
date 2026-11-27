@@ -158,7 +158,12 @@ func (s *Server) requireSiteUser(w http.ResponseWriter, r *http.Request) bool {
 		writePrivateSiteUnavailable(w)
 		return false
 	}
-	if _, err := s.userFromRequest(r); err == nil {
+
+	touch := shouldTouchSession(r)
+	if _, renewed, rawToken, err := s.resolveUserSession(r, touch); err == nil {
+		if renewed && touch {
+			s.setUserSessionCookie(w, rawToken)
+		}
 		return true
 	} else if errors.Is(err, errNoSession) || errors.Is(err, account.ErrNoSession) {
 		writeSiteUnauthorized(w)

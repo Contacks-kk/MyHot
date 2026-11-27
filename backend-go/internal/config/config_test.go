@@ -520,10 +520,23 @@ func TestProductionRuntimeRejectsMissingSecretsAndDevLogin(t *testing.T) {
 			}
 		}
 	})
-	cfg := Config{EnvironmentName: "production", SessionSecret: "safe-random-production-secret"}
+	cfg := Config{
+		EnvironmentName: "production",
+		SessionSecret:   "safe-random-production-secret",
+		RedisURL:        "redis://redis:6379/0",
+	}
 	if err := cfg.ValidateRuntime(); err != nil {
 		t.Fatalf("valid production auth config rejected: %v", err)
 	}
+	cfg.RedisURL = ""
+	if err := cfg.ValidateRuntime(); err == nil {
+		t.Fatal("production accepted empty REDIS_URL")
+	}
+	cfg.RedisURL = "http://invalid-scheme:6379"
+	if err := cfg.ValidateRuntime(); err == nil {
+		t.Fatal("production accepted invalid REDIS_URL scheme")
+	}
+	cfg.RedisURL = "redis://redis:6379/0"
 	cfg.SessionSecret = "placeholder"
 	if err := cfg.ValidateRuntime(); err == nil {
 		t.Fatal("production accepted a placeholder session secret")

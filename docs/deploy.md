@@ -12,7 +12,7 @@ docker compose --project-directory . --env-file .env -f deploy/compose.yaml up -
 docker compose --project-directory . --env-file .env -f deploy/compose.yaml ps
 ~~~
 
-首次运行前填写 SITE_URL、ADMIN_PASSWORD、SESSION_SECRET、IMG_PROXY_SIGN_SECRET 和 POSTGRES_PASSWORD。用户开始保存自己的模型 API Key 前，需配置 `USER_API_KEY_ENCRYPTION_KEY`。Web 使用 GO_API_BASE_URL 连接 Go；Go 的 River 使用独立 pgx 连接池，应用 Repository 使用独立 GORM/database/sql 连接池。SQL 迁移仍由 tooling/scripts/migrate.ts 执行，Go 不调用 AutoMigrate。
+首次运行前填写 SITE_URL、ADMIN_PASSWORD、SESSION_SECRET、IMG_PROXY_SIGN_SECRET 和 POSTGRES_PASSWORD，并确保 `REDIS_URL`（Compose 默认指向内置 `redis` 服务）可用。用户开始保存自己的模型 API Key 前，需配置 `USER_API_KEY_ENCRYPTION_KEY`。Web 使用 GO_API_BASE_URL 连接 Go；Go 的 River 使用独立 pgx 连接池，应用 Repository 使用独立 GORM/database/sql 连接池，Redis 承担用户会话与实时行情缓存。SQL 迁移仍由 tooling/scripts/migrate.ts 执行，Go 不调用 AutoMigrate。
 
 Compose 只向宿主机发布 Web 端口。Go API、Worker 与数据库留在内部网络；Web 代理是 Go API 的受信代理，生产 Compose 已启用 GO_TRUST_PROXY=true。Go Worker 与 Web 共享 og-cache 用于分享图缓存和预热；上传、附件和备份由 Go API/Worker 访问 data 卷，Web 不挂载该卷。
 
@@ -80,6 +80,8 @@ INDEXNOW_SUBMIT_ENABLED=false
 ~~~dotenv
 DATABASE_URL=postgres://<DB_USER>:<URL_ENCODED_DB_PASSWORD>@127.0.0.1:5432/myhot_test
 MYHOT_TEST_DATABASE_URL=
+MYHOT_TEST_REDIS_URL=
+REDIS_URL=redis://127.0.0.1:6379/0
 GO_API_BASE_URL=http://127.0.0.1:3711
 GO_API_ADDR=127.0.0.1:3711
 GO_TRUST_PROXY=true
@@ -108,6 +110,13 @@ npm run build -w @aihot/web
 ~~~
 
 开发免登录管理员仅可在非生产环境临时设置 DEV_AUTH_ROLE=admin；用户接口仍要求有效用户会话。
+
+## 用户会话迁移至 Redis（0112）
+
+用户会话（`myhot_session` Cookie + CSRF）已从 PostgreSQL `user_sessions` 迁移至纯 Redis 存储（30 天有效期，剩余不足 15 天时按请求节流滑动续期）。`0112_drop_user_sessions.sql` 会在停服迁移阶段删除 `public.user_sessions`。
+
+- **对使用者影响**：切换上线后所有已登录用户的旧会话立即失效，需重新登录一次；用户账号、信源订阅、模型配置、关注项、个人热点和日报数据完全保留。
+- **回退边界**：一旦执行 `0112` 删表后需回退到旧版本镜像，请使用 `deploy.sh` 备份阶段生成的 PostgreSQL 备份恢复后再启动旧版服务。
 
 ## 域名与缓存
 
@@ -197,7 +206,7 @@ docker compose --project-directory . --env-file .env -f deploy/compose.yaml logs
 docker compose --project-directory . --env-file .env -f deploy/compose.yaml ps
 ~~~
 
-/api/health 只验证服务和数据库连通。业务 smoke 默认检查注册状态与匿名访问边界；可用 Cookie 文件验证登录后的个人 API 和 SSR。Cookie 文件一行写入 myhot_session=<会话值>，脚本不会输出其内容：
+/api/health 验证服务、PostgreSQL 与 Redis 连通。业务 smoke 默认检查注册状态与匿名访问边界；可用 Cookie 文件验证登录后的个人 API 和 SSR。Cookie 文件一行写入 myhot_session=<会话值>，脚本不会输出其内容：
 
 ~~~powershell
 node tooling/scripts/smoke.ts --base http://localhost:3000
@@ -213,6 +222,8 @@ node tooling/scripts/smoke.ts --base http://localhost:3000 --cookie-file C:\Temp
 ~~~powershell
 npm run typecheck
 $env:DATABASE_URL='postgres://myhot:<测试数据库密码>@127.0.0.1:5432/myhot_test'
+$env:MYHOT_TEST_DATABASE_URL='postgres://myhot:<测试数据库密码>@127.0.0.1:5432/myhot_test'
+$env:MYHOT_TEST_REDIS_URL='redis://127.0.0.1:6379/15'
 npm test
 npm run build -w @aihot/web
 node --test frontend/tests/*.test.ts
@@ -220,7 +231,7 @@ go -C backend-go test ./...
 go -C backend-go vet ./...
 ~~~
 
-数据库账号需要有建库权限。Go 数据库集成用例通过 MYHOT_TEST_DATABASE_URL 启用。完整验收还应运行匿名及带登录 Cookie 的 smoke，并分别构建 Web 和 Go 镜像；没有本机 PostgreSQL/Docker 时，应将这些项记录为未运行，不能用静态检查代替。
+数据库账号需要有建库权限。Go 数据库与 Redis 集成用例分别通过 `MYHOT_TEST_DATABASE_URL` 和 `MYHOT_TEST_REDIS_URL` 启用。完整验收还应运行匿名及带登录 Cookie 的 smoke，并分别构建 Web 和 Go 镜像；没有本机 PostgreSQL/Redis/Docker 时，应将这些项记录为未运行，不能用静态检查代替。
 
 
 ## 邮箱验证码注册升级（0083 / 0084）

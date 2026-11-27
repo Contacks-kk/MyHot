@@ -25,10 +25,6 @@ func TestContactImageServesUploadedFilePrivatelyAndRechecksSession(t *testing.T)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM user_accounts WHERE id=$1", userID) })
-	token := "contact-image-session-token"
-	if _, err := pool.Exec(ctx, "INSERT INTO user_sessions(user_id,token_hash,csrf_token,expires_at) VALUES($1,$2,'csrf',now()+interval '1 hour')", userID, auth.HashToken(token)); err != nil {
-		t.Fatal(err)
-	}
 	dataDir := t.TempDir()
 	uploads := filepath.Join(dataDir, "uploads")
 	if err := os.MkdirAll(uploads, 0o755); err != nil {
@@ -40,6 +36,8 @@ func TestContactImageServesUploadedFilePrivatelyAndRechecksSession(t *testing.T)
 		t.Fatal(err)
 	}
 	server := New(config.Config{DatabaseURL: "integration-test", DataDir: dataDir, SiteContactDir: filepath.Join(t.TempDir(), "contact")}, pool, orm, map[string]interests.Entity{})
+	redisStore := attachTestRedis(t, server)
+	token := seedTestUserSession(t, redisStore, userID, "csrf", time.Hour)
 	currentQR := "/contact/qr-wechat-1234abcd.png"
 	server.AdminSettings = adminsettings.NewService(&memoryAdminSettingsRepository{contact: adminsettings.Contact{WechatQR: &currentQR}}, adminsettings.Config{})
 	handler := server.Handler()
@@ -102,7 +100,7 @@ func TestContactImageServesUploadedFilePrivatelyAndRechecksSession(t *testing.T)
 	if missingResponse.Code != http.StatusNotFound || missingResponse.Body.String() != "Not found" || missingResponse.Header().Get("Cache-Control") != "private, no-store" {
 		t.Fatalf("missing contact image response status=%d headers=%v body=%q", missingResponse.Code, missingResponse.Header(), missingResponse.Body.String())
 	}
-	if _, err := pool.Exec(ctx, "DELETE FROM user_sessions WHERE token_hash=$1", auth.HashToken(token)); err != nil {
+	if err := redisStore.Delete(ctx, userID, auth.HashToken(token)); err != nil {
 		t.Fatal(err)
 	}
 	revoked := httptest.NewRequest(http.MethodGet, path, nil)

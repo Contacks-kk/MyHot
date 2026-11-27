@@ -60,6 +60,7 @@ func (s *Server) marketCandles(w http.ResponseWriter, r *http.Request, user user
 
 	limit := market.DefaultCandleLimit
 	if rawLimit := strings.TrimSpace(q.Get("limit")); rawLimit != "" {
+		// strconv.Atoi 将string类型 转 int类型
 		parsed, err := strconv.Atoi(rawLimit)
 		if err != nil || parsed < 1 || parsed > market.MaxCandleLimit {
 			writeError(w, http.StatusBadRequest, "limit 参数无效")

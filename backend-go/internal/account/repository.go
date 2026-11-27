@@ -15,7 +15,7 @@ import (
 
 var ErrNotFound = errors.New("account record not found")
 
-// Repository owns account, session, and email-token persistence.
+// Repository owns PostgreSQL account and email-token persistence.
 type Repository struct{ db *gorm.DB }
 
 func NewRepository(db *gorm.DB) *Repository { return &Repository{db: db} }
@@ -37,25 +37,17 @@ type AccountStatus struct {
 	VerifiedAt sql.NullTime
 }
 
-func (r *Repository) FindSession(ctx context.Context, tokenHash string) (Session, error) {
-	var value Session
-	err := r.db.WithContext(ctx).Raw(`SELECT u.id,u.email,us.csrf_token FROM user_sessions us JOIN user_accounts u ON u.id=us.user_id WHERE us.token_hash=? AND us.expires_at>now() AND u.verified_at IS NOT NULL`, tokenHash).Row().Scan(&value.ID, &value.Email, &value.CSRF)
-	return value, notFound(err)
-}
-
-func (r *Repository) Register(ctx context.Context, email, passwordHash, tokenHash, csrf string, expiresAt time.Time) (int64, error) {
+/** CreateVerifiedAccount inserts a newly verified user account and rejects duplicate emails. */
+func (r *Repository) CreateVerifiedAccount(ctx context.Context, email, passwordHash string) (int64, error) {
 	var id int64
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		err := tx.Raw(`INSERT INTO user_accounts(email,password_hash,verified_at) VALUES(?,?,now()) ON CONFLICT DO NOTHING RETURNING id`, email, passwordHash).Row().Scan(&id)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrDuplicateAccount
-		}
-		if err != nil {
-			return err
-		}
-		return tx.Omit("CreatedAt").Create(&model.UserSession{UserID: id, TokenHash: tokenHash, CSRFToken: csrf, ExpiresAt: expiresAt}).Error
-	})
-	return id, err
+	err := r.db.WithContext(ctx).Raw(`INSERT INTO user_accounts(email,password_hash,verified_at) VALUES(?,?,now()) ON CONFLICT DO NOTHING RETURNING id`, email, passwordHash).Row().Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrDuplicateAccount
+	}
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 func (r *Repository) LoginRecord(ctx context.Context, email string) (LoginRecord, error) {
@@ -68,14 +60,6 @@ func (r *Repository) LoginRecord(ctx context.Context, email string) (LoginRecord
 		return LoginRecord{}, ErrNotFound
 	}
 	return value, nil
-}
-
-func (r *Repository) CreateSession(ctx context.Context, userID int64, tokenHash, csrf string, expiresAt time.Time) error {
-	return r.db.WithContext(ctx).Omit("CreatedAt").Create(&model.UserSession{UserID: userID, TokenHash: tokenHash, CSRFToken: csrf, ExpiresAt: expiresAt}).Error
-}
-
-func (r *Repository) DeleteSession(ctx context.Context, userID int64, tokenHash string) error {
-	return r.db.WithContext(ctx).Where("user_id = ? AND token_hash = ?", userID, tokenHash).Delete(&model.UserSession{}).Error
 }
 
 func (r *Repository) PasswordHash(ctx context.Context, userID int64) (string, error) {
@@ -161,17 +145,19 @@ func (r *Repository) ReplaceEmailToken(ctx context.Context, userID int64, purpos
 	})
 }
 
-func (r *Repository) ResetPassword(ctx context.Context, tokenHash, passwordHash string) error {
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var userID int64
+/** ResetPassword consumes a password-reset token, updates the user password hash, and returns the user ID. */
+func (r *Repository) ResetPassword(ctx context.Context, tokenHash, passwordHash string) (int64, error) {
+	var userID int64
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Raw(`UPDATE user_email_tokens SET used_at=now() WHERE token_hash=? AND purpose='password_reset' AND used_at IS NULL AND expires_at>now() RETURNING user_id`, tokenHash).Row().Scan(&userID); err != nil {
 			return notFound(err)
 		}
-		if err := tx.Model(&model.UserAccount{}).Where("id = ?", userID).Updates(map[string]any{"password_hash": passwordHash, "updated_at": gorm.Expr("now()")}).Error; err != nil {
-			return err
-		}
-		return tx.Where("user_id = ?", userID).Delete(&model.UserSession{}).Error
+		return tx.Model(&model.UserAccount{}).Where("id = ?", userID).Updates(map[string]any{
+			"password_hash": passwordHash,
+			"updated_at":    gorm.Expr("now()"),
+		}).Error
 	})
+	return userID, err
 }
 
 func notFound(err error) error {

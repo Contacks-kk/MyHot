@@ -26,25 +26,58 @@ var (
 )
 
 type Service struct {
-	repository   *Repository
-	config       config.Config
-	mail         mailer.Sender
-	verification *verificationCache
+	repository       *Repository
+	sessions         SessionStore
+	sessionTTL       time.Duration
+	refreshThreshold time.Duration
+	config           config.Config
+	mail             mailer.Sender
+	verification     *verificationCache
 }
 
-func NewService(repository *Repository, cfg config.Config, sender mailer.Sender) *Service {
-	return &Service{repository: repository, config: cfg, mail: sender, verification: newVerificationCache()}
-}
-
-func (s *Service) ResolveSession(ctx context.Context, rawToken string) (Session, error) {
-	value, err := s.repository.FindSession(ctx, auth.HashToken(rawToken))
-	if errors.Is(err, ErrNotFound) {
-		return Session{}, ErrNoSession
+/** NewService creates an account service backed by PostgreSQL accounts and a session store. */
+func NewService(repository *Repository, sessions SessionStore, cfg config.Config, sender mailer.Sender) *Service {
+	return &Service{
+		repository:       repository,
+		sessions:         sessions,
+		sessionTTL:       DefaultSessionTTL,
+		refreshThreshold: DefaultSessionRefreshThreshold,
+		config:           cfg,
+		mail:             sender,
+		verification:     newVerificationCache(),
 	}
-	return value, err
 }
 
+/** SetSessionStore binds or replaces the backing session store (e.g., after opening Redis). */
+func (s *Service) SetSessionStore(sessions SessionStore) {
+	if s == nil {
+		return
+	}
+
+	s.sessions = sessions
+}
+
+/** ResolveSession validates rawToken without extending TTL beyond normal throttling rules. */
+func (s *Service) ResolveSession(ctx context.Context, rawToken string) (Session, error) {
+	session, _, err := s.ResolveSessionWithTouch(ctx, rawToken, true)
+	return session, err
+}
+
+/** ResolveSessionWithTouch validates rawToken and reports whether Redis TTL was slid forward. */
+func (s *Service) ResolveSessionWithTouch(ctx context.Context, rawToken string, touch bool) (Session, bool, error) {
+	if s == nil || s.sessions == nil {
+		return Session{}, false, ErrSessionStoreUnavailable
+	}
+
+	return s.sessions.Resolve(ctx, auth.HashToken(rawToken), s.sessionTTL, s.refreshThreshold, touch)
+}
+
+/** Register verifies the email OTP, creates a verified PostgreSQL account, and issues a Redis session. */
 func (s *Service) Register(ctx context.Context, email, password, code string) (LoginResult, error) {
+	if s == nil || s.sessions == nil {
+		return LoginResult{}, ErrSessionStoreUnavailable
+	}
+
 	var result LoginResult
 	err := s.verification.consume(email, code, func() error {
 		hash, err := auth.HashPassword(password)
@@ -59,11 +92,27 @@ func (s *Service) Register(ctx context.Context, email, password, code string) (L
 		if err != nil {
 			return err
 		}
-		id, err := s.repository.Register(ctx, email, hash, tokenHash, csrf, time.Now().Add(30*24*time.Hour))
+
+		// Persist verified account in PostgreSQL before writing session into Redis
+		id, err := s.repository.CreateVerifiedAccount(ctx, email, hash)
 		if err != nil {
 			return err
 		}
-		result = LoginResult{UserID: id, Email: email, Token: token, CSRF: csrf}
+		if err := s.sessions.Create(ctx, SessionRecord{
+			UserID:    id,
+			Email:     email,
+			CSRF:      csrf,
+			TokenHash: tokenHash,
+			CreatedAt: time.Now().UTC().Unix(),
+		}, s.sessionTTL); err != nil {
+			return err
+		}
+		result = LoginResult{
+			UserID: id,
+			Email:  email,
+			Token:  token,
+			CSRF:   csrf,
+		}
 		return nil
 	})
 	return result, err
@@ -76,7 +125,12 @@ type LoginResult struct {
 	CSRF   string
 }
 
+/** Login validates credentials and creates a new Redis session. */
 func (s *Service) Login(ctx context.Context, email, password string) (LoginResult, error) {
+	if s == nil || s.sessions == nil {
+		return LoginResult{}, ErrSessionStoreUnavailable
+	}
+
 	account, err := s.repository.LoginRecord(ctx, email)
 	if errors.Is(err, ErrNotFound) || (err == nil && !auth.VerifyPassword(account.PasswordHash, password)) {
 		return LoginResult{}, ErrInvalidCredentials
@@ -95,22 +149,47 @@ func (s *Service) Login(ctx context.Context, email, password string) (LoginResul
 	if err != nil {
 		return LoginResult{}, err
 	}
-	if err := s.repository.CreateSession(ctx, account.ID, tokenHash, csrf, time.Now().Add(30*24*time.Hour)); err != nil {
+
+	if err := s.sessions.Create(ctx, SessionRecord{
+		UserID:    account.ID,
+		Email:     email,
+		CSRF:      csrf,
+		TokenHash: tokenHash,
+		CreatedAt: time.Now().UTC().Unix(),
+	}, s.sessionTTL); err != nil {
 		return LoginResult{}, err
 	}
-	return LoginResult{UserID: account.ID, Email: email, Token: token, CSRF: csrf}, nil
+	return LoginResult{
+		UserID: account.ID,
+		Email:  email,
+		Token:  token,
+		CSRF:   csrf,
+	}, nil
 }
 
-func (s *Service) Logout(ctx context.Context, userID int64, rawToken string) {
-	_ = s.repository.DeleteSession(ctx, userID, auth.HashToken(rawToken))
+/** Logout revokes the single active Redis session matching rawToken. */
+func (s *Service) Logout(ctx context.Context, userID int64, rawToken string) error {
+	if s == nil || s.sessions == nil {
+		return ErrSessionStoreUnavailable
+	}
+
+	return s.sessions.Delete(ctx, userID, auth.HashToken(rawToken))
 }
 
+/** DeleteAccount verifies the account password, deletes PostgreSQL user data, and revokes Redis sessions. */
 func (s *Service) DeleteAccount(ctx context.Context, userID int64, password string) error {
+	if s == nil || s.sessions == nil {
+		return ErrSessionStoreUnavailable
+	}
+
 	hash, err := s.repository.PasswordHash(ctx, userID)
 	if err != nil || !auth.VerifyPassword(hash, password) {
 		return ErrPasswordMismatch
 	}
-	return s.repository.DeleteAccount(ctx, userID, s.config.SourceSchedule)
+	if err := s.repository.DeleteAccount(ctx, userID, s.config.SourceSchedule); err != nil {
+		return err
+	}
+	return s.sessions.RevokeUser(ctx, userID)
 }
 
 func (s *Service) VerifyEmail(ctx context.Context, email, code string) error {
@@ -158,7 +237,11 @@ func (s *Service) ForgotPassword(ctx context.Context, email string) error {
 	return s.mail.Send(email, "MyHOT 密码重置", "请打开以下链接重置密码：\n\n"+link+"\n\n链接 1 小时内有效。")
 }
 
+/** ResetPassword validates the reset token, updates the PostgreSQL password, and revokes all Redis sessions. */
 func (s *Service) ResetPassword(ctx context.Context, token, password string) error {
+	if s == nil || s.sessions == nil {
+		return ErrSessionStoreUnavailable
+	}
 	if len(token) < 32 || len(token) > 128 || len(password) < 12 || len(password) > 256 {
 		return ErrInvalidToken
 	}
@@ -166,11 +249,15 @@ func (s *Service) ResetPassword(ctx context.Context, token, password string) err
 	if err != nil {
 		return err
 	}
-	err = s.repository.ResetPassword(ctx, auth.HashToken(token), hash)
+
+	userID, err := s.repository.ResetPassword(ctx, auth.HashToken(token), hash)
 	if errors.Is(err, ErrNotFound) {
 		return ErrInvalidToken
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return s.sessions.RevokeUser(ctx, userID)
 }
 
 func randomText(size int) (string, error) {

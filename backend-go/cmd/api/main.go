@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,7 +22,6 @@ import (
 	"aihot/backend-go/internal/operationsalerts"
 	"aihot/backend-go/internal/reports"
 	"aihot/backend-go/internal/topics"
-	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -49,16 +49,15 @@ func main() {
 	}
 	defer db.CloseGORM(orm)
 
-	// Attach Redis optionally so market caching/PubSub work when configured while preserving degraded startup.
-	var redisClient *redis.Client
-	if cfg.RedisURL != "" {
-		redisClient, err = db.OpenRedis(ctx, cfg.RedisURL, cfg.RedisCAFile)
-		if err != nil {
-			log.Printf("warning: Redis unavailable (%v); real-time market streaming disabled", err)
-		} else {
-			defer redisClient.Close()
-		}
+	// Require Redis for user session authentication and attach shared client before serving traffic.
+	if strings.TrimSpace(cfg.RedisURL) == "" {
+		log.Fatal("Refusing to start API: REDIS_URL is required for user sessions")
 	}
+	redisClient, err := db.OpenRedis(ctx, cfg.RedisURL, cfg.RedisCAFile)
+	if err != nil {
+		log.Fatalf("Refusing to start API: failed to connect to Redis: %v", err)
+	}
+	defer redisClient.Close()
 
 	adminruns.StartHeartbeat(ctx, orm, "api")
 	workerWatchdog := operationsalerts.NewWorkerWatchdog(operationsalerts.NewRepository(orm), feedback.NewFeishuForwarder(cfg.FeishuAppID, cfg.FeishuAppSecret), operationsalerts.Config{
@@ -125,9 +124,8 @@ func main() {
 		TopicGroups:        topicGroups,
 		Topics:             topicDefinitions})
 	go api.Accounts.RunVerificationCleanup(ctx)
-	if redisClient != nil {
-		api.AttachMarketRedis(ctx, redisClient)
-	}
+	api.AttachAccountRedis(redisClient)
+	api.AttachMarketRedis(ctx, redisClient)
 	server := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           api.Handler(),

@@ -218,7 +218,11 @@ async function serveWebOg(req: import("node:http").IncomingMessage, res: import(
 
   const requestId = randomUUID();
   const auth = await fetch(`${USER_API_BASE_URL}/api/me`, {
-    headers: { cookie: req.headers.cookie ?? "", accept: "application/json" },
+    headers: {
+      cookie: req.headers.cookie ?? "",
+      accept: "application/json",
+      "x-session-touch": "skip",
+    },
     signal: AbortSignal.timeout(3000),
   }).catch(() => null);
   if (!auth || (auth.status !== 401 && !auth.ok)) {
@@ -236,7 +240,11 @@ async function serveWebOg(req: import("node:http").IncomingMessage, res: import(
 
   // Read display configuration using the same verified session as the image request.
   const catalogResponse = await fetch(`${USER_API_BASE_URL}/api/me/catalog`, {
-    headers: { cookie: req.headers.cookie ?? "", accept: "application/json" },
+    headers: {
+      cookie: req.headers.cookie ?? "",
+      accept: "application/json",
+      "x-session-touch": "skip",
+    },
     cache: "no-store",
     signal: AbortSignal.timeout(10_000),
   }).catch(() => null);
@@ -268,7 +276,11 @@ async function serveWebOg(req: import("node:http").IncomingMessage, res: import(
   }
   if (!card && target) {
     const content = await fetch(`${USER_API_BASE_URL}${target.apiPath}`, {
-      headers: { cookie: req.headers.cookie ?? "", accept: "application/json" },
+      headers: {
+        cookie: req.headers.cookie ?? "",
+        accept: "application/json",
+        "x-session-touch": "skip",
+      },
       cache: "no-store",
       redirect: "manual",
       signal: AbortSignal.timeout(10_000),

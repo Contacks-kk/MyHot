@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"aihot/backend-go/internal/auth"
 	"aihot/backend-go/internal/config"
 )
 
@@ -47,6 +46,7 @@ func TestTagRecommendationsIntegration(t *testing.T) {
 	exec(`INSERT INTO interest_labels(id,name,name_key,kind,definition,status) VALUES($1,$1,$1,'topic','fixture','active')`, tag)
 	exec(`INSERT INTO interest_labels(id,name,name_key,kind,definition,status,merged_into) VALUES($1,$1,$1,'topic','fixture','merged',$2)`, alias, tag)
 	server := New(config.Config{SourceSchedule: config.SourceSchedule{RecommendationFeeds: feeds}}, pool, orm, nil)
+	redisStore := attachTestRedis(t, server)
 	clients := make([]authClient, 2)
 	for i := range clients {
 		var id int64
@@ -55,11 +55,7 @@ func TestTagRecommendationsIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		users = append(users, id)
-		token, hash, err := auth.NewToken()
-		if err != nil {
-			t.Fatal(err)
-		}
-		exec(`INSERT INTO user_sessions(user_id,token_hash,csrf_token,expires_at) VALUES($1,$2,'csrf',now()+interval '1 hour')`, id, hash)
+		token := seedTestUserSession(t, redisStore, id, "csrf", time.Hour)
 		exec(`INSERT INTO user_interests(user_id,label_ids) VALUES($1,$2)`, id, []string{tag, alias})
 		clients[i] = authClient{handler: server.Handler(), cookie: testCookie(token), csrf: "csrf"}
 	}
@@ -157,6 +153,7 @@ func TestPersonalHotWindowOrderingAndHistoryIntegration(t *testing.T) {
 		_, _ = pool.Exec(ctx, "DELETE FROM sources WHERE id=$1", source)
 	})
 	server := New(config.Config{}, pool, orm, nil)
+	redisStore := attachTestRedis(t, server)
 	clients := []authClient{}
 	for i := 0; i < 2; i++ {
 		var id int64
@@ -164,13 +161,7 @@ func TestPersonalHotWindowOrderingAndHistoryIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		users = append(users, id)
-		token, hashed, err := auth.NewToken()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err = pool.Exec(ctx, "INSERT INTO user_sessions(user_id,token_hash,csrf_token,expires_at) VALUES($1,$2,'csrf',now()+interval '1 hour')", id, hashed); err != nil {
-			t.Fatal(err)
-		}
+		token := seedTestUserSession(t, redisStore, id, "csrf", time.Hour)
 		clients = append(clients, authClient{handler: server.Handler(), cookie: testCookie(token), csrf: "csrf"})
 	}
 	now := time.Now().UTC().Add(-time.Minute)

@@ -34,32 +34,19 @@ func TestRegisterCreatesVerifiedAccountAndRejectsDuplicates(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.CloseGORM(orm) })
 
-	prefix := fmt.Sprintf("account_rollback_%d", time.Now().UnixNano())
+	prefix := fmt.Sprintf("account_%d", time.Now().UnixNano())
 	email := prefix + "@example.invalid"
 	repository := NewRepository(orm)
-	id, err := repository.Register(ctx, email, "fixture-password-hash", prefix+"_token", "fixture-csrf", time.Now().Add(time.Hour))
+	id, err := repository.CreateVerifiedAccount(ctx, email, "fixture-password-hash")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM user_accounts WHERE id=$1`, id) })
-	session, err := repository.FindSession(ctx, prefix+"_token")
-	if err != nil || session.ID != id || session.CSRF != "fixture-csrf" {
-		t.Fatalf("registration session: %+v %v", session, err)
-	}
-	failedEmail := prefix + "_rollback@example.invalid"
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM user_accounts WHERE email=$1`, failedEmail) })
-	if _, err := repository.Register(ctx, failedEmail, "fixture-password-hash", prefix+"_token", "fixture-csrf", time.Now().Add(time.Hour)); err == nil {
-		t.Fatal("duplicate session token should roll back registration")
-	}
-	var surviving int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM user_accounts WHERE email=$1`, failedEmail).Scan(&surviving); err != nil || surviving != 0 {
-		t.Fatalf("failed session left an account: %d %v", surviving, err)
-	}
 	var verified bool
 	if err := pool.QueryRow(ctx, `SELECT verified_at IS NOT NULL FROM user_accounts WHERE id=$1`, id).Scan(&verified); err != nil || !verified {
 		t.Fatalf("verified account: %v %v", verified, err)
 	}
-	if _, err := repository.Register(ctx, email, "other-hash", prefix+"_other_token", "other-csrf", time.Now().Add(time.Hour)); err != ErrDuplicateAccount {
+	if _, err := repository.CreateVerifiedAccount(ctx, email, "other-hash"); err != ErrDuplicateAccount {
 		t.Fatalf("duplicate: %v", err)
 	}
 	var count int
