@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"aihot/backend-go/internal/materials"
@@ -89,13 +91,25 @@ type ArticleDetail struct {
 }
 
 type DailyReport struct {
-	ID        string          `gorm:"column:id"`
-	Date      string          `gorm:"column:report_date"`
-	Model     string          `gorm:"column:model"`
-	Title     string          `gorm:"column:title"`
-	Summary   string          `gorm:"column:summary"`
-	Entries   json.RawMessage `gorm:"column:entries"`
-	CreatedAt time.Time       `gorm:"column:created_at"`
+	ID        string          `gorm:"column:id" json:"id"`
+	Date      string          `gorm:"column:report_date" json:"date"`
+	Model     string          `gorm:"column:model" json:"model"`
+	Title     string          `gorm:"column:title" json:"title"`
+	Summary   string          `gorm:"column:summary" json:"summary"`
+	Entries   json.RawMessage `gorm:"column:entries" json:"entries"`
+	CreatedAt time.Time       `gorm:"column:created_at" json:"createdAt"`
+}
+
+type DailyReportHeading struct {
+	ID        string    `json:"id"`
+	Date      string    `gorm:"column:report_date" json:"date"`
+	Title     string    `json:"title"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type DailyReportView struct {
+	Reports []DailyReportHeading `json:"reports"`
+	Report  *DailyReport         `json:"report"`
 }
 
 type ReceiptStatus struct {
@@ -237,18 +251,17 @@ const recommendationFingerprint = `CASE WHEN a.content_hash ~ '^[0-9a-f]{64}$'
 	AND (nullif(btrim(a.excerpt),'') IS NOT NULL OR nullif(btrim(a.body_text),'') IS NOT NULL)
 	THEN a.content_hash END`
 
-/** RecommendedArticles selects unseen, tagged cards from the configured public feed catalog. */
-func (r *Repository) RecommendedArticles(ctx context.Context, userID int64, feeds []string) ([]RecommendedArticleItem, error) {
-	items := make([]RecommendedArticleItem, 0, recommendationLimit)
-	if len(feeds) == 0 {
-		return items, nil
-	}
+const recommendationBatchSize = 24
 
-	// Canonical article identities already combine discoveries from equivalent URLs.
-	db := r.db.WithContext(ctx)
+type recommendationCandidate struct {
+	ArticleID   string
+	IdentityKey string
+	Fingerprint *string
+	URL         string
+	SourceID    string
+}
 
-	// Materialize both sets so the anti-join compares precomputed fingerprints.
-	query := db.Raw(`WITH followed_tags AS (
+const recommendationCandidatesSQL = `WITH followed_tags AS (
 		SELECT DISTINCT target.id,target.name FROM user_interests u
 		CROSS JOIN LATERAL unnest(coalesce(u.entity_ids,'{}'::text[]) || coalesce(u.label_ids,'{}'::text[])) followed(id)
 		LEFT JOIN interest_labels alias ON alias.id=followed.id AND alias.status='merged'
@@ -256,10 +269,10 @@ func (r *Repository) RecommendedArticles(ctx context.Context, userID int64, feed
 			AND target.status IN ('active','dormant')
 		WHERE u.user_id=?
 	), owned AS MATERIALIZED (
-		SELECT a.id,a.identity_key,a.url,`+recommendationFingerprint+` AS fingerprint
+		SELECT a.id,a.identity_key,a.url,` + recommendationFingerprint + ` AS fingerprint
 		FROM user_article_results r JOIN articles a ON a.id=r.article_id WHERE r.user_id=?
 	), candidates AS MATERIALIZED (
-		SELECT a.id,a.identity_key,`+recommendationFingerprint+` AS fingerprint,
+		SELECT a.id,a.identity_key,` + recommendationFingerprint + ` AS fingerprint,
 			a.title,a.excerpt,a.url,a.published_at,a.discovered_at,
 			s.id AS source_id,s.name AS source_name,s.kind AS source_kind,s.icon_url AS source_icon_url,
 			(SELECT count(*) FROM user_source_subscriptions us WHERE us.source_id=s.id AND us.enabled) AS subscriber_count,
@@ -270,57 +283,120 @@ func (r *Repository) RecommendedArticles(ctx context.Context, userID int64, feed
 			SELECT jsonb_agg(DISTINCT ft.name ORDER BY ft.name)::text AS names,count(DISTINCT ft.id) AS matches
 			FROM article_interest_labels al JOIN followed_tags ft ON ft.id=al.label_id WHERE al.article_id=a.id
 		) tags ON tags.matches>0
-		WHERE s.health<>'failing' AND `+sourceschedule.RecommendationFeedSQL("s")+`
-		  AND `+sourceschedule.RecommendationArticleWindow+`
-	)
-	SELECT c.id AS article_id,c.identity_key,c.fingerprint,c.url,c.source_id,c.source_name,c.source_kind,
-		c.source_icon_url,c.published_at,c.discovered_at AS created_at,c.is_subscribed,c.names AS matched_tags_raw,
-		CASE WHEN p.public_detail AND p.score IS NOT NULL THEN least(100,p.score + c.matches*2)::float8 END AS score,
-		CASE WHEN p.public_detail AND p.score IS NOT NULL THEN p.title ELSE c.title END AS title,
-		CASE WHEN p.public_detail AND p.score IS NOT NULL THEN coalesce(nullif(btrim(p.summary),''),c.excerpt) ELSE c.excerpt END AS summary
-	FROM candidates c LEFT JOIN (?) p ON p.article_id=c.id
+		WHERE s.health<>'failing' AND %s
+		  AND ` + sourceschedule.RecommendationArticleWindow + `%s
+	)`
+
+const recommendationFilterSQL = `FROM candidates c LEFT JOIN (?) p ON p.article_id=c.id
 	WHERE NOT coalesce(p.blocked,false)
 	  AND ((p.public_detail AND p.score IS NOT NULL AND nullif(btrim(p.summary),'') IS NOT NULL)
 		OR nullif(btrim(c.excerpt),'') IS NOT NULL)
 	  AND NOT EXISTS (SELECT 1 FROM owned o
 		WHERE o.id=c.id OR o.identity_key=c.identity_key OR o.url=c.url OR o.fingerprint=c.fingerprint)
-	ORDER BY score DESC NULLS LAST,(CASE WHEN p.public_detail AND p.score IS NOT NULL THEN 0 ELSE c.matches END) DESC,
-		c.subscriber_count DESC,coalesce(c.published_at,c.discovered_at) DESC,c.id ASC`,
-		userID, userID, userID, model.TextArray(feeds), publiccontent.RecommendationPublications(db))
-	rows, err := query.Rows()
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+	ORDER BY (CASE WHEN p.public_detail AND p.score IS NOT NULL THEN least(100,p.score + c.matches*2)::float8 END) DESC NULLS LAST,(CASE WHEN p.public_detail AND p.score IS NOT NULL THEN 0 ELSE c.matches END) DESC,
+		c.subscriber_count DESC,coalesce(c.published_at,c.discovered_at) DESC,c.id ASC`
 
-	// Apply source quotas and deduplication together so a skipped copy does not use a slot.
+const recommendationCardSQL = `SELECT c.id AS article_id,c.identity_key,c.fingerprint,c.url,c.source_id,c.source_name,c.source_kind,
+		c.source_icon_url,c.published_at,c.discovered_at AS created_at,c.is_subscribed,c.names AS matched_tags_raw,
+		CASE WHEN p.public_detail AND p.score IS NOT NULL THEN least(100,p.score + c.matches*2)::float8 END AS score,
+		CASE WHEN p.public_detail AND p.score IS NOT NULL THEN p.title ELSE c.title END AS title,
+		CASE WHEN p.public_detail AND p.score IS NOT NULL THEN coalesce(nullif(btrim(p.summary),''),c.excerpt) ELSE c.excerpt END AS summary`
+
+/** recommendationQuery applies the shared eligibility rules and deterministic ranking. */
+func recommendationQuery(db *gorm.DB, userID int64, feeds []string, projection string, ids []string) (string, []any) {
+	args := []any{userID, userID, userID, model.TextArray(feeds)}
+	restrict := ""
+	if len(ids) > 0 {
+		restrict = " AND a.id IN ?"
+		args = append(args, ids)
+	}
+	args = append(args, publiccontent.RecommendationPublications(db))
+	query := fmt.Sprintf(recommendationCandidatesSQL, sourceschedule.RecommendationFeedSQL("s"), restrict) +
+		" " + projection + " " + recommendationFilterSQL
+	return query, args
+}
+
+/** RecommendedArticles collects one page and hydrates only its selected cards from the same snapshot. */
+func (r *Repository) RecommendedArticles(ctx context.Context, userID int64, feeds []string, page int) ([]RecommendedArticleItem, bool, error) {
+	items := make([]RecommendedArticleItem, 0, recommendationLimit)
+	if len(feeds) == 0 {
+		return items, false, nil
+	}
+	var hasMore bool
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		ids, more, err := recommendationPageIDs(tx, userID, feeds, page)
+		hasMore = more
+		if err != nil || len(ids) == 0 {
+			return err
+		}
+
+		// The same ranking orders these hydrated cards the same way as the candidate scan.
+		query, args := recommendationQuery(tx, userID, feeds, recommendationCardSQL, ids)
+		if err := tx.Raw(query, args...).Scan(&items).Error; err != nil {
+			return err
+		}
+		for i := range items {
+			item := &items[i]
+			if err := json.Unmarshal([]byte(item.MatchedTagsRaw), &item.MatchedTags); err != nil {
+				return err
+			}
+			item.SourceName = sourcenaming.LegacyDisplayName(item.SourceKind, item.SourceName, item.SourceID, item.URL)
+		}
+		return nil
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	return items, hasMore, err
+}
+
+/** recommendationPageIDs counts only eligible cards and keeps source limits across all pages. */
+func recommendationPageIDs(tx *gorm.DB, userID int64, feeds []string, page int) ([]string, bool, error) {
+	// The cursor keeps the ranking in PostgreSQL and sends only one candidate batch at a time.
+	query, args := recommendationQuery(tx, userID, feeds,
+		"SELECT c.id AS article_id,c.identity_key,c.fingerprint,c.url,c.source_id", nil)
+	if err := tx.Exec("DECLARE recommendation_candidates NO SCROLL CURSOR FOR "+query, args...).Error; err != nil {
+		return nil, false, err
+	}
+
 	sources := make(map[string]int)
 	identities := make(map[string]bool)
 	urls := make(map[string]bool)
 	fingerprints := make(map[string]bool)
-	for len(items) < recommendationLimit && rows.Next() {
-		var item RecommendedArticleItem
-		if err := query.ScanRows(rows, &item); err != nil {
-			return nil, err
+	ids := make([]string, 0, recommendationLimit)
+	currentPage, position := 1, 0
+	fetch := fmt.Sprintf("FETCH FORWARD %d FROM recommendation_candidates", recommendationBatchSize)
+	for {
+		var batch []recommendationCandidate
+		if err := tx.Raw(fetch).Scan(&batch).Error; err != nil {
+			return nil, false, err
 		}
-		normalized, valid := materials.NormalizeURL(item.URL)
-		if !valid || sources[item.SourceID] == recommendationSourceLimit || identities[item.IdentityKey] || urls[normalized] ||
-			(item.Fingerprint != nil && fingerprints[*item.Fingerprint]) {
-			continue
+		for _, candidate := range batch {
+			normalized, valid := materials.NormalizeURL(candidate.URL)
+			if !valid || sources[candidate.SourceID] >= recommendationSourceLimit ||
+				identities[candidate.IdentityKey] || urls[normalized] ||
+				(candidate.Fingerprint != nil && fingerprints[*candidate.Fingerprint]) {
+				continue
+			}
+			if currentPage > page {
+				return ids, true, nil
+			}
+			if currentPage == page {
+				ids = append(ids, candidate.ArticleID)
+			}
+			sources[candidate.SourceID]++
+			identities[candidate.IdentityKey] = true
+			urls[normalized] = true
+			if candidate.Fingerprint != nil {
+				fingerprints[*candidate.Fingerprint] = true
+			}
+			position++
+			if position == recommendationLimit {
+				currentPage++
+				position = 0
+			}
 		}
-		if err := json.Unmarshal([]byte(item.MatchedTagsRaw), &item.MatchedTags); err != nil {
-			return nil, err
-		}
-		item.SourceName = sourcenaming.LegacyDisplayName(item.SourceKind, item.SourceName, item.SourceID, item.URL)
-		items = append(items, item)
-		sources[item.SourceID]++
-		identities[item.IdentityKey] = true
-		urls[normalized] = true
-		if item.Fingerprint != nil {
-			fingerprints[*item.Fingerprint] = true
+		if len(batch) < recommendationBatchSize {
+			return ids, false, nil
 		}
 	}
-	return items, rows.Err()
 }
 
 func (r *Repository) Daily(ctx context.Context, userID int64) ([]DailyReport, error) {
@@ -334,6 +410,69 @@ func (r *Repository) Daily(ctx context.Context, userID int64) ([]DailyReport, er
 		items = []DailyReport{}
 	}
 	return items, err
+}
+
+/** DailyView loads a compact archive and at most one complete issue. */
+func (r *Repository) DailyView(ctx context.Context, userID int64, id, date string) (DailyReportView, error) {
+	view := DailyReportView{Reports: make([]DailyReportHeading, 0, 30)}
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Raw(`SELECT * FROM (
+			SELECT 'scheduled-' || to_char(report_date,'YYYY-MM-DD') AS id,to_char(report_date,'YYYY-MM-DD') AS report_date,title,created_at
+			FROM user_daily_reports WHERE user_id=? AND is_scheduled
+			UNION ALL
+			SELECT issue->>'id',issue->>'date',issue->>'title',(issue->>'createdAt')::timestamptz
+			FROM user_daily_reports CROSS JOIN LATERAL jsonb_array_elements(manual_reports) issue WHERE user_id=?
+		) issues ORDER BY created_at DESC,id DESC LIMIT 30`, userID, userID).Scan(&view.Reports).Error; err != nil {
+			return err
+		}
+
+		// Resolve legacy dates separately so links can still open an issue outside the directory.
+		if id == "" && date != "" {
+			var chosen DailyReportHeading
+			query := tx.Raw(`SELECT id FROM (
+				SELECT 'scheduled-' || to_char(report_date,'YYYY-MM-DD') AS id,created_at
+				FROM user_daily_reports WHERE user_id=? AND report_date=?::text::date AND is_scheduled
+				UNION ALL
+				SELECT issue->>'id',(issue->>'createdAt')::timestamptz
+				FROM user_daily_reports CROSS JOIN LATERAL jsonb_array_elements(manual_reports) issue
+				WHERE user_id=? AND issue->>'date'=?
+			) issues ORDER BY created_at DESC,id DESC LIMIT 1`, userID, date, userID, date)
+			if err := scanOne(query, &chosen); err != nil {
+				return err
+			}
+			id = chosen.ID
+		}
+		if id == "" {
+			if len(view.Reports) == 0 {
+				return nil
+			}
+			id = view.Reports[0].ID
+		}
+		var issue DailyReport
+		if err := readDailyIssue(tx, userID, id, &issue); err != nil {
+			return err
+		}
+		view.Report = &issue
+		return nil
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	return view, err
+}
+
+/** readDailyIssue retrieves exactly one scheduled or manual report by its public ID. */
+func readDailyIssue(tx *gorm.DB, userID int64, id string, issue *DailyReport) error {
+	if date, scheduled := strings.CutPrefix(id, "scheduled-"); scheduled {
+		if _, err := time.Parse(time.DateOnly, date); err != nil {
+			return ErrNotFound
+		}
+		return scanOne(tx.Raw(`SELECT ?::text AS id,to_char(report_date,'YYYY-MM-DD') AS report_date,
+			model,title,summary,entries,created_at FROM user_daily_reports
+			WHERE user_id=? AND report_date=?::text::date AND is_scheduled`, id, userID, date), issue)
+	}
+	return scanOne(tx.Raw(`SELECT issue->>'id' AS id,issue->>'date' AS report_date,issue->>'model' AS model,
+		issue->>'title' AS title,issue->>'summary' AS summary,issue->'entries' AS entries,
+		(issue->>'createdAt')::timestamptz AS created_at
+		FROM user_daily_reports CROSS JOIN LATERAL jsonb_array_elements(manual_reports) issue
+		WHERE user_id=? AND issue->>'id'=? LIMIT 1`, userID, id), issue)
 }
 
 /** ManualDailyStatus reads only the requesting user's on-demand report job. */

@@ -77,9 +77,37 @@ const account = createServer((req,res)=>{
     id:"agent", name:"Agent 智能体", kind:"topic", status:"active", aliases:["Agent","智能体"], definition:"自主规划与执行任务。", count:2, userCount:1,
   }]}));
   if(pathname==="/api/me/daily")return res.end(JSON.stringify({reports:[]}));
+  if (pathname === "/api/me/daily/view") {
+    const reports = [
+      { id: "manual-321", date: "2026-10-05", title: "Latest edition", createdAt: "2026-10-05T00:00:00Z" },
+      { id: "scheduled-2026-10-04", date: "2026-10-04", title: "Older edition", createdAt: "2026-10-04T00:00:00Z" },
+    ];
+    const { searchParams } = new URL(req.url!, "http://account.local");
+    const id = searchParams.get("id");
+    const date = searchParams.get("date");
+    const issue = id ? reports.find((item) => item.id === id) : date ? reports.find((item) => item.date === date) : reports[0];
+    if (!issue) {
+      res.statusCode = 404;
+      return res.end("{}");
+    }
+    return res.end(JSON.stringify({ reports, report: { ...issue, summary: `Body of ${issue.title}`, entries: [] } }));
+  }
   if (pathname === "/api/me/recommended-articles") {
+    const page = Number(new URL(req.url!, "http://account.local").searchParams.get("page") ?? 1);
     return res.end(JSON.stringify({
-      items: [{
+      items: page === 2 ? [{
+        articleId: "fixture-recommendation-page-two",
+        score: null,
+        title: "Second page article",
+        summary: "Second page excerpt",
+        url: "https://papers.example.invalid/second",
+        sourceId: "another-source",
+        sourceName: "Second feed",
+        sourceKind: "rss",
+        isSubscribed: false,
+        createdAt: "2026-10-04T00:00:00Z",
+        matchedTags: [],
+      }] : [{
         articleId: "fixture-recommendation",
         score: 89,
         title: "Fixture recommendation",
@@ -105,8 +133,8 @@ const account = createServer((req,res)=>{
         createdAt: "2026-10-04T00:00:00Z",
         matchedTags: ["Agent"],
       }],
-      page: 1,
-      hasMore: false,
+      page,
+      hasMore: page === 1,
     }));
   }
   if(pathname==="/api/me/feed/funnel")return res.end(JSON.stringify({totalScanned:3,passedCount:2,filteredCount:1,filteredItems:[]}));
@@ -200,7 +228,25 @@ test("unified hotspots carry today's funnel, date controls, and the requested de
   assert.equal(recommendationPage("article h2 a").first().attr("href"), "/items/fixture-recommendation");
   assert.equal(recommendationPage("article h2 a").last().attr("href"), "https://papers.example.invalid/raw");
   assert.match(recommendationPage("article").last().text(), /原文摘要.*Agent/s);
-  assert.equal(recommendationPage('nav[aria-label="推荐分页"]').length, 0);
+  const nextPage = recommendationPage('nav[aria-label="推荐分页"] a').attr("href");
+  assert.equal(nextPage, "/recommendations?page=2");
+  const next = await fetch(origin + nextPage, { headers: alice });
+  assert.equal(next.status, 200);
+  const secondPage = cheerio.load(await next.text());
+  assert.match(secondPage("article").text(), /Second page article/);
+  assert.deepEqual(secondPage('nav[aria-label="推荐分页"] a').map((_, element) => secondPage(element).attr("href")).get(), ["/recommendations"]);
+
+  for (const [suffix, expected, excluded] of [
+    ["", "Latest edition", "Older edition"],
+    ["?id=scheduled-2026-10-04", "Older edition", "Latest edition"],
+    ["?date=2026-10-04", "Older edition", "Latest edition"],
+  ]) {
+    const daily = await fetch(origin + "/daily" + suffix, { headers: alice });
+    assert.equal(daily.status, 200);
+    const html = await daily.text();
+    assert.ok(html.includes(`Body of ${expected}`));
+    assert.ok(!html.includes(`Body of ${excluded}`));
+  }
 
   const account = await fetch(origin + "/more", { headers: alice });
   assert.equal(account.status, 200, logs);

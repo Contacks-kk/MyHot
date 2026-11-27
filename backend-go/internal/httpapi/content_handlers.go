@@ -144,7 +144,7 @@ func (s *Server) recommendedArticles(w http.ResponseWriter, r *http.Request, u u
 		}
 	}
 
-	items, err := s.Personal.RecommendedArticles(r.Context(), u.ID, page)
+	items, hasMore, err := s.Personal.RecommendedArticles(r.Context(), u.ID, page)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "获取推荐文章失败")
 		return
@@ -174,7 +174,7 @@ func (s *Server) recommendedArticles(w http.ResponseWriter, r *http.Request, u u
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items":   responses,
 		"page":    page,
-		"hasMore": false,
+		"hasMore": hasMore,
 	})
 }
 
@@ -213,6 +213,21 @@ func (s *Server) daily(w http.ResponseWriter, r *http.Request, u userContext) {
 		reports = append(reports, map[string]any{"id": item.ID, "date": item.Date, "model": item.Model, "title": item.Title, "summary": item.Summary, "entries": item.Entries, "createdAt": item.CreatedAt})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"reports": reports})
+}
+
+/** dailyView serves the owner's report directory and one selected issue. */
+func (s *Server) dailyView(w http.ResponseWriter, r *http.Request, u userContext) {
+	query := r.URL.Query()
+	view, err := s.Personal.DailyView(r.Context(), u.ID, query.Get("id"), query.Get("date"))
+	if errors.Is(err, personal.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "日报不存在")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "日报暂不可用")
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 /** generateDaily queues a manual report for the authenticated user. */

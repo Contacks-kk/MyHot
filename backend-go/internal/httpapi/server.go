@@ -301,6 +301,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/ws/markets", s.withUser(s.marketWS))
 	mux.HandleFunc("GET /api/me/articles/{id}", s.withUser(s.personalArticle))
 	mux.HandleFunc("GET /api/me/daily", s.withUser(s.daily))
+	mux.HandleFunc("GET /api/me/daily/view", s.withUser(s.dailyView))
 	mux.HandleFunc("POST /api/me/daily/generate", s.withUser(s.generateDaily))
 	mux.HandleFunc("GET /api/me/daily/generate/{jobId}", s.withUser(s.manualDailyStatus))
 	mux.HandleFunc("GET /api/me/history", s.withUser(s.history))

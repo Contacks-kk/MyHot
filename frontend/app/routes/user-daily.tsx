@@ -1,6 +1,6 @@
 import { BackLink } from "../components/ui/BackLink";
 import { useEffect, useState } from "react";
-import { data, Link, useLoaderData, useNavigate, useRevalidator } from "react-router";
+import { Link, useLoaderData, useNavigate } from "react-router";
 import type { Screen } from "../components/shell/screens";
 import type { Route } from "./+types/user-daily";
 import { Halftone } from "../features/report/Halftone";
@@ -30,18 +30,25 @@ interface DailyReport {
   createdAt: string;
 }
 
-/** Load the current user's reports and select the requested issue. */
+type DailyReportHeading = Pick<DailyReport, "id" | "date" | "title" | "createdAt">;
+
+/** Load the report directory and the selected issue. */
 export async function loader({ request }: Route.LoaderArgs) {
-  const [result, user] = await Promise.all([userApiGet<{ reports: DailyReport[] }>(request, "/api/me/daily"), userApiMe(request)]);
-  // The existing API can still serve scheduled issues during the backend upgrade.
-  const reports = result.reports.map((item) => ({ ...item, id: item.id ?? `scheduled-${item.date}` }));
-  const requestedId = new URL(request.url).searchParams.get("id");
-  const requested = new URL(request.url).searchParams.get("date");
-  const report = requestedId ? reports.find((item) => item.id === requestedId) : requested ? reports.find((item) => item.date === requested) : reports[0];
-  if ((requestedId || requested) && !report) {
-    throw data({ message: "日报不存在" }, { status: 404 });
+  const search = new URL(request.url).searchParams;
+  const query = new URLSearchParams();
+  const id = search.get("id");
+  const date = search.get("date");
+  if (id) {
+    query.set("id", id);
+  } else if (date) {
+    query.set("date", date);
   }
-  return { reports, report: report ?? null, csrfToken: user?.csrfToken ?? "" };
+  const path = query.size > 0 ? `/api/me/daily/view?${query}` : "/api/me/daily/view";
+  const [view, user] = await Promise.all([
+    userApiGet<{ reports: DailyReportHeading[]; report: DailyReport | null }>(request, path, { notFound: true }),
+    userApiMe(request),
+  ]);
+  return { ...view, csrfToken: user?.csrfToken ?? "" };
 }
 
 export const meta: Route.MetaFunction = () => [{ title: "我的日报" }, { name: "robots", content: "noindex, nofollow" }];
@@ -75,7 +82,6 @@ function Story({ entry, index }: { entry: DailyEntry; index: number }) {
 export default function UserDaily() {
   const { reports, report, csrfToken } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
-  const revalidator = useRevalidator();
   const entries = report?.entries ?? [];
   const lead = entries[0];
   const mark = report ? formatDate(report.date) : null;
@@ -143,8 +149,7 @@ export default function UserDaily() {
           setJobId(null);
           setBusy(false);
           setMessage("日报已生成。");
-          void navigate("/daily");
-          revalidator.revalidate();
+          void navigate(`/daily?id=manual-${jobId}`);
           return;
         }
         if (result.status === "empty" || result.status === "failed") {
@@ -172,7 +177,7 @@ export default function UserDaily() {
     }
     void poll();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [jobId, navigate, revalidator]);
+  }, [jobId, navigate]);
 
   /** Request an on-demand issue using the current user's session. */
   async function generate() {

@@ -38,16 +38,20 @@ interface RecommendedItem {
   matchedTags: string[];
 }
 
-/** Load the signed-in user's single selection of recommendations. */
+/** Load only the requested recommendation page. */
 export async function loader({ request }: Route.LoaderArgs) {
+  const page = new URL(request.url).searchParams.get("page") ?? "1";
+  const query = new URLSearchParams({ page });
   const [user, recs] = await Promise.all([
     userApiMe(request),
-    userApiGet<{ items: RecommendedItem[] }>(request, "/api/me/recommended-articles"),
+    userApiGet<{ items: RecommendedItem[]; page: number; hasMore: boolean }>(request, `/api/me/recommended-articles?${query}`),
   ]);
 
   return {
     csrfToken: user?.csrfToken ?? "",
     items: recs.items ?? [],
+    page: recs.page,
+    hasMore: recs.hasMore,
   };
 }
 
@@ -72,7 +76,7 @@ function hostOf(url: string): string {
 
 /** Render the recommended articles page with 1-click source follow action. */
 export default function UserRecommendations() {
-  const { csrfToken, items: initialItems } = useLoaderData<typeof loader>();
+  const { csrfToken, items: initialItems, page, hasMore } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
   const locale = useLocalePreference();
   const dict = getDict(locale);
@@ -499,6 +503,22 @@ export default function UserRecommendations() {
             </article>
           );
         })}
+
+        {(page > 1 || hasMore) && (
+          <nav aria-label={isEn ? "Recommendation pages" : "推荐分页"} className="mt-6 flex flex-wrap items-center justify-center gap-4 text-[13px]">
+            {page > 1 && (
+              <Link to={page === 2 ? "/recommendations" : `/recommendations?page=${page - 1}`} prefetch="none" className="rounded-control border border-line px-4 py-2 hover:text-accent">
+                {isEn ? "Previous page" : "上一页"}
+              </Link>
+            )}
+            <span className="text-ink-4">{isEn ? `Page ${page}` : `第 ${page} 页`}</span>
+            {hasMore && (
+              <Link to={`/recommendations?page=${page + 1}`} prefetch="none" className="rounded-control border border-line px-4 py-2 hover:text-accent">
+                {isEn ? "Next page" : "下一页"}
+              </Link>
+            )}
+          </nav>
+        )}
 
         {!items.length && (
           <div className="py-16 text-center text-ink-4">

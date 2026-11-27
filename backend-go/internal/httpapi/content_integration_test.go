@@ -19,7 +19,7 @@ func TestTagRecommendationsIntegration(t *testing.T) {
 	ctx := context.Background()
 	prefix := fmt.Sprintf("rec_%d", time.Now().UnixNano())
 	tag, alias := prefix+"_tag", prefix+"_alias"
-	sources := make([]string, 4)
+	sources := make([]string, 5)
 	var feeds []string
 	var users []int64
 	t.Cleanup(func() {
@@ -39,7 +39,7 @@ func TestTagRecommendationsIntegration(t *testing.T) {
 		sources[i] = fmt.Sprintf("%s_s%d", prefix, i)
 		feed := "https://fixture.example.invalid/" + sources[i] + ".xml"
 		exec(`INSERT INTO sources(id,name,kind,config) VALUES($1,$1,'rss',jsonb_build_object('feedUrl',$2::text))`, sources[i], feed)
-		if i < 3 {
+		if i < 4 {
 			feeds = append(feeds, feed)
 		}
 	}
@@ -78,11 +78,12 @@ func TestTagRecommendationsIntegration(t *testing.T) {
 	published := add("public", 1, 10, "", "")
 	owned := add("owned", 0, 1, "", duplicateHash)
 	otherPrivate := add("other", 0, 2, "", "")
-	warm := add("warm", 2, 3, "first-import", "")
-	add("extra_a", 0, 3, "", "")
+	warmHash := strings.Repeat("b", 64)
+	warm := add("warm", 2, 3, "first-import", warmHash)
+	extraA := add("extra_a", 0, 3, "", "")
 	add("extra_a2", 0, 4, "", "")
-	add("extra_b", 1, 6, "", "")
-	add("extra_c", 2, 7, "", "")
+	extraB := add("extra_b", 1, 6, "", "")
+	extraC := add("extra_c", 2, 7, "", "")
 	embargo := add("embargo", 2, 0, "", "")
 	withdrawn := add("withdrawn", 2, 0, "", "")
 	for _, record := range []struct {
@@ -95,9 +96,10 @@ func TestTagRecommendationsIntegration(t *testing.T) {
 	publish(embargo, "public", true)
 	publish(withdrawn, "withdrawn", false)
 	excluded := []string{owned, embargo, withdrawn, add("copy", 2, 0, "", duplicateHash),
-		add("old", 2, 192, "first-import", ""), add("backfill", 2, 0, "archive", ""), add("unapproved", 3, 0, "", "")}
+		add("old", 2, 192, "first-import", ""), add("backfill", 2, 0, "archive", ""), add("unapproved", 4, 0, "", "")}
 	var response struct {
 		Items   []recommendedArticleResponse
+		Page    int
 		HasMore bool
 	}
 	body := clients[0].request(t, "GET", "/api/me/recommended-articles?limit=50", nil, 200).Body.Bytes()
@@ -108,8 +110,12 @@ func TestTagRecommendationsIntegration(t *testing.T) {
 		response.Items[0].Score == nil || *response.Items[0].Score != 96 {
 		t.Fatalf("unexpected recommended list: %s", body)
 	}
+	firstPage := []string{published, otherPrivate, extraA, warm, extraB, extraC}
 	counts := map[string]int{}
-	for _, item := range response.Items {
+	for i, item := range response.Items {
+		if item.ArticleID != firstPage[i] {
+			t.Fatalf("page 1 item %d: got %s, want %s", i, item.ArticleID, firstPage[i])
+		}
 		counts[item.SourceID]++
 		if counts[item.SourceID] > 2 || slices.Contains(excluded, item.ArticleID) || strings.Contains(item.Summary, "private") {
 			t.Fatalf("ineligible recommendation: %+v", item)
@@ -132,10 +138,87 @@ func TestTagRecommendationsIntegration(t *testing.T) {
 			t.Fatalf("unexpected tag-only recommendation: %+v", item)
 		}
 	}
-	result := clients[0].request(t, "GET", "/api/me/recommended-articles?page=2", nil, 200)
-	if err := json.Unmarshal(result.Body.Bytes(), &response); err != nil || len(response.Items) != 0 || response.HasMore {
-		t.Fatalf("unexpected legacy page: %s", result.Body)
+	// Exhaust the first candidate batch with the leading source, then verify the page spans batches.
+	for i := 0; i < 25; i++ {
+		add(fmt.Sprintf("over_quota_%02d", i), 0, 24, "", "")
 	}
+	add("duplicate_on_next_page", 3, 8, "", warmHash)
+	next := []string{add("next_a", 3, 9, "", ""), add("next_b", 3, 10, "", "")}
+	add("next_over_quota", 3, 11, "", "")
+	for i, want := range [][]string{firstPage, next, {}} {
+		page := i + 1
+		result := clients[0].request(t, "GET", fmt.Sprintf("/api/me/recommended-articles?page=%d", page), nil, 200)
+		if err := json.Unmarshal(result.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		got := make([]string, 0, len(response.Items))
+		for _, item := range response.Items {
+			got = append(got, item.ArticleID)
+		}
+		if !slices.Equal(got, want) || response.Page != page || response.HasMore != (page == 1) {
+			t.Fatalf("recommendation page %d: got %v, hasMore=%v, want %v", page, got, response.HasMore, want)
+		}
+	}
+}
+
+/** TestDailyViewIntegration covers the compact directory, issue selection, and user isolation. */
+func TestDailyViewIntegration(t *testing.T) {
+	pool, orm := authTestPools(t)
+	ctx := context.Background()
+	server := New(config.Config{}, pool, orm, nil)
+	store := attachTestRedis(t, server)
+	var users [2]int64
+	var clients [2]authClient
+	for i := range users {
+		if err := pool.QueryRow(ctx, "INSERT INTO user_accounts(email,password_hash,verified_at) VALUES($1,'unused',now()) RETURNING id",
+			fmt.Sprintf("daily_view_%d_%d@example.invalid", time.Now().UnixNano(), i)).Scan(&users[i]); err != nil {
+			t.Fatal(err)
+		}
+		id := users[i]
+		t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM user_accounts WHERE id=$1", id) })
+		clients[i] = authClient{handler: server.Handler(), cookie: testCookie(seedTestUserSession(t, store, id, "csrf", time.Hour))}
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO user_daily_reports(user_id,report_date,model,title,summary,entries,created_at,manual_reports)
+		VALUES ($1,'2026-01-01','fixture','old edition','old-private-body','[{"title":"old-entry"}]','2026-01-01T01:00:00Z','[]'),
+		($1,'2026-01-02','fixture','scheduled edition','scheduled-private-body','[]','2026-01-02T01:00:00Z',
+		'[{"id":"manual-900","date":"2026-01-02","model":"fixture","title":"latest edition",
+		"summary":"latest-private-body","entries":[{"title":"latest-entry"}],"createdAt":"2026-01-02T02:00:00Z"}]')`, users[0]); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ query, id, body, other string }{
+		{"", "manual-900", "latest-private-body", "old-private-body"},
+		{"?id=scheduled-2026-01-01", "scheduled-2026-01-01", "old-private-body", "latest-private-body"},
+		{"?date=2026-01-02", "manual-900", "latest-private-body", "scheduled-private-body"},
+		{"?id=scheduled-2026-01-02&date=2026-01-01", "scheduled-2026-01-02", "scheduled-private-body", "old-private-body"},
+	} {
+		result := clients[0].request(t, "GET", "/api/me/daily/view"+tc.query, nil, 200)
+		var view struct {
+			Reports []map[string]json.RawMessage
+			Report  struct{ ID, Summary string }
+		}
+		if err := json.Unmarshal(result.Body.Bytes(), &view); err != nil {
+			t.Fatal(err)
+		}
+		if len(view.Reports) != 3 || view.Report.ID != tc.id || view.Report.Summary != tc.body ||
+			strings.Contains(result.Body.String(), tc.other) {
+			t.Fatalf("unexpected daily view for %q: %s", tc.query, result.Body)
+		}
+		for _, heading := range view.Reports {
+			if len(heading) != 4 || heading["id"] == nil || heading["date"] == nil || heading["title"] == nil || heading["createdAt"] == nil {
+				t.Fatalf("invalid report heading: %v", heading)
+			}
+		}
+	}
+	clients[0].request(t, "GET", "/api/me/daily/view?id=missing", nil, 404)
+	clients[0].request(t, "GET", "/api/me/daily/view?date=2026-02-30", nil, 404)
+	clients[1].request(t, "GET", "/api/me/daily/view?id=manual-900", nil, 404)
+	clients[1].request(t, "GET", "/api/me/daily/view?id=scheduled-2026-01-01", nil, 404)
+	empty := clients[1].request(t, "GET", "/api/me/daily/view", nil, 200).Body.String()
+	if !strings.Contains(empty, `"reports":[]`) || !strings.Contains(empty, `"report":null`) {
+		t.Fatalf("invalid empty view: %s", empty)
+	}
+	anonymous := authClient{handler: server.Handler()}
+	anonymous.request(t, "GET", "/api/me/daily/view", nil, 401)
 }
 
 func TestPersonalHotWindowOrderingAndHistoryIntegration(t *testing.T) {
