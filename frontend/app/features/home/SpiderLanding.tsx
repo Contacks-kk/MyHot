@@ -9,7 +9,6 @@ import { Link } from "react-router";
 import { SITE } from "@aihot/site";
 import {
   IconArrowUpRight,
-  IconBolt,
   IconCheck,
   IconClock,
   IconDoc,
@@ -18,8 +17,15 @@ import {
   IconRss,
   IconSparkles,
 } from "../../components/icons";
+import { BrandIcon } from "../../../brand/Logo.tsx";
 import { ThemeSwitch } from "../../components/shell/ThemeSwitch";
 import { LocaleSwitch } from "../../components/shell/LocaleSwitch";
+import {
+  FUNNEL_STAGES,
+  MACRO_STAGES,
+  MACRO_USER_LANES,
+  type PipelineLevel,
+} from "./pipelineData";
 import { SignalPipelineDiagram } from "./SignalPipelineDiagram";
 import { SpiderWebCanvas } from "./SpiderWebCanvas.tsx";
 
@@ -33,16 +39,6 @@ interface PreviewItem {
   time: string;
   text: string;
   matchHint: string;
-}
-
-interface FunnelStage {
-  step: string;
-  title: string;
-  badge: string;
-  summary: string;
-  detail: string;
-  metricLabel: string;
-  metricValue: string;
 }
 
 const PREVIEW_ITEMS: readonly PreviewItem[] = [
@@ -78,45 +74,6 @@ const PREVIEW_ITEMS: readonly PreviewItem[] = [
     time: "05:55",
     text: "平台维护公共与隔离 RSS 源，你只需设定关注项即可持续追踪重要变化。",
     matchHint: "命中关键词：批量筛选 · 评估基准",
-  },
-];
-
-const FUNNEL_STAGES: readonly FunnelStage[] = [
-  {
-    step: "01",
-    title: "共享去重采集",
-    badge: "一次抓取 · 订阅共享",
-    summary: "相同 RSS / Atom 源全站共用调度与条件请求，新增隔离源首次只放行 48 小时内最新 10 篇。",
-    detail: "自动按规范化地址去重源池与文章指纹；历史过往文章归入回填库，防止一次导入上百篇打爆个人模型。",
-    metricLabel: "原始进入本轮",
-    metricValue: "142 篇 → 过滤旧回填后 38 篇",
-  },
-  {
-    step: "02",
-    title: "本地 0-Token 规则初筛",
-    badge: "零模型消耗",
-    summary: "优先在后台用关键词与公司实体词典做本地匹配，未命中的噪声文章直接跳过。",
-    detail: "同时命中关键词或行业实体名称/别名才会保留；未设置任何关注项时则交由下一步批量初筛把关。",
-    metricLabel: "本地规则筛选",
-    metricValue: "38 篇 → 命中 18 篇（0 次调用）",
-  },
-  {
-    step: "03",
-    title: "Batch Triage 批量初筛",
-    badge: "省 ~80% Token",
-    summary: "待加工超过 5 篇时，先将至多 25 篇标题与 180 字摘要打包成 1 次调用选出 Top 5。",
-    detail: "替代对几十篇文章逐篇全文精读，在保留高价值更新的同时显著压低个人 API Key 消耗与等待耗时。",
-    metricLabel: "批量初筛漏斗",
-    metricValue: "18 篇 → 1 次调用精选 Top 5",
-  },
-  {
-    step: "04",
-    title: "私人精读与 08:00 日报",
-    badge: "账号严格隔离",
-    summary: "仅对精选文章调用你的 OpenAI 兼容模型打分写摘要，并在北京时间 08:00 汇成个人日报。",
-    detail: "内置单日调用上限（默认 100 次/日）防止突发洪峰；所有评分、热点榜和简报均隔离在个人工作区中。",
-    metricLabel: "最终产出结果",
-    metricValue: "48h 热点榜 Top 10 · 08:00 简报",
   },
 ];
 
@@ -661,6 +618,9 @@ function PreviewConsole() {
 export function SpiderLanding({ registrationEnabled }: { registrationEnabled: boolean }) {
   const [scrolled, setScrolled] = useState(false);
   const [scrollProgress, setScrollProgress] = useState(0);
+  const [pipelineLevel, setPipelineLevel] = useState<PipelineLevel>("macro");
+  const [selectedMacroUser, setSelectedMacroUser] = useState<string>(MACRO_USER_LANES[0]!.id);
+  const [activeMacroStage, setActiveMacroStage] = useState<number>(2);
   const [activeFunnel, setActiveFunnel] = useState<number>(2);
 
   useEffect(() => {
@@ -677,7 +637,18 @@ export function SpiderLanding({ registrationEnabled }: { registrationEnabled: bo
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  const currentFunnel = FUNNEL_STAGES[activeFunnel] ?? FUNNEL_STAGES[0]!;
+  /** handleDrillDown switches cleanly from the L1 macro graph into L2 4-stage funnel for the clicked user lane. */
+  const handleDrillDown = (userId: string) => {
+    const lane = MACRO_USER_LANES.find((item) => item.id === userId) ?? MACRO_USER_LANES[0]!;
+    setSelectedMacroUser(lane.id);
+    setPipelineLevel("detail");
+    setActiveFunnel(lane.filterMode === "all" ? 1 : 2);
+  };
+
+  const activeStageIndex = pipelineLevel === "macro" ? activeMacroStage : activeFunnel;
+  const stageList = pipelineLevel === "macro" ? MACRO_STAGES : FUNNEL_STAGES;
+  const currentStage = stageList[activeStageIndex] ?? stageList[0]!;
+  const setActiveCurrentStage = pipelineLevel === "macro" ? setActiveMacroStage : setActiveFunnel;
 
   return (
     <>
@@ -696,9 +667,10 @@ export function SpiderLanding({ registrationEnabled }: { registrationEnabled: bo
             to="/"
             className="group flex items-center gap-2.5 text-[17px] font-semibold tracking-tight text-ink"
           >
-            <span className="flex size-9 items-center justify-center rounded-full bg-accent text-accent-contrast shadow-sm transition-transform duration-300 ease-[var(--ease-out-quart)] group-hover:scale-105 group-hover:rotate-6">
-              <IconBolt size={18} />
-            </span>
+            <BrandIcon
+              size={36}
+              className="transition-transform duration-300 ease-[var(--ease-out-quart)] group-hover:scale-105 group-hover:rotate-6"
+            />
             <span>{SITE.name}</span>
             <span className="mono hidden rounded-full border border-line bg-surface/80 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[.12em] text-ink-4 sm:inline-flex">
               Signal Desk
@@ -707,7 +679,7 @@ export function SpiderLanding({ registrationEnabled }: { registrationEnabled: bo
 
           <nav className="hidden items-center gap-6 text-[13px] font-medium text-ink-3 md:flex">
             <a href="#pipeline" className="transition-colors hover:text-ink">
-              四级降噪
+              架构与漏斗
             </a>
             <a href="#isolation" className="transition-colors hover:text-ink">
               BYOK 与隔离
@@ -832,27 +804,33 @@ export function SpiderLanding({ registrationEnabled }: { registrationEnabled: bo
           <PreviewConsole />
         </section>
 
-        {/* Section 1: 4-Stage Denoising Funnel */}
+        {/* Section 1: Dual-Layer Signal Architecture & 4-Stage Denoising Funnel */}
         <RevealSection id="pipeline" className="mx-auto max-w-[1120px] scroll-mt-20 px-5 py-16">
-          <div className="flex flex-wrap items-end justify-between gap-4 border-t border-line pt-12">
-            <div>
-              <div className="mono text-[11px] uppercase tracking-[.16em] text-accent">
-                4-STAGE SIGNAL FUNNEL
-              </div>
-              <h2 className="editorial-title mt-2 text-[28px] font-semibold tracking-tight text-ink sm:text-[34px]">
-                不逐篇盲目烧 Token，四道漏斗留下真正值得看的变化
-              </h2>
+          <div className="border-t border-line pt-12">
+            <div className="mono text-[11px] uppercase tracking-[.16em] text-accent">
+              {pipelineLevel === "macro" ? "SIGNAL ARCHITECTURE" : "4-STAGE SIGNAL FUNNEL"}
             </div>
-            <p className="max-w-[360px] text-[13px] leading-relaxed text-ink-4">
-              点击或悬停流程图与下方任意环节，查看从信源抓取到个人热点出炉的流转细节。
-            </p>
+            <h2 className="editorial-title mt-2 text-[28px] font-semibold tracking-tight text-ink sm:text-[32px]">
+              {pipelineLevel === "macro"
+                ? "一次共享抓取，多用户按各自订阅私有加工"
+                : "不逐篇烧 Token，四道漏斗留住高价值变化"}
+            </h2>
           </div>
 
-          <SignalPipelineDiagram activeStage={activeFunnel} onSelectStage={setActiveFunnel} />
+          <SignalPipelineDiagram
+            level={pipelineLevel}
+            selectedUserId={selectedMacroUser}
+            activeMacroStage={activeMacroStage}
+            activeDetailStage={activeFunnel}
+            onDrillDown={handleDrillDown}
+            onBackToMacro={() => setPipelineLevel("macro")}
+            onSelectMacroStage={setActiveMacroStage}
+            onSelectDetailStage={setActiveFunnel}
+          />
 
           <div className="mt-5 grid gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
-            {FUNNEL_STAGES.map((stage, index) => {
-              const isActive = activeFunnel === index;
+            {stageList.map((stage, index) => {
+              const isActive = activeStageIndex === index;
               const stageStyles = [
                 { border: "border-rule/55", label: "text-rule", badge: "bg-rule-soft text-rule" },
                 { border: "border-ok/50", label: "text-ok-ink", badge: "bg-ok-soft text-ok-ink" },
@@ -861,10 +839,15 @@ export function SpiderLanding({ registrationEnabled }: { registrationEnabled: bo
               ][index]!;
               return (
                 <button
-                  key={stage.step}
+                  key={`${pipelineLevel}-${stage.step}`}
                   type="button"
-                  onClick={() => setActiveFunnel(index)}
-                  onMouseEnter={() => setActiveFunnel(index)}
+                  onClick={() => {
+                    setActiveCurrentStage(index);
+                    if (pipelineLevel === "macro" && index === 2) {
+                      handleDrillDown(selectedMacroUser);
+                    }
+                  }}
+                  onMouseEnter={() => setActiveCurrentStage(index)}
                   className={`landing-spotlight rounded-card border p-5 text-left transition-all duration-200 ${
                     isActive
                       ? `${stageStyles.border} bg-surface shadow-[0_18px_46px_-30px_rgba(20,32,37,.35)]`
@@ -899,23 +882,23 @@ export function SpiderLanding({ registrationEnabled }: { registrationEnabled: bo
               <div className="max-w-[680px]">
                 <div
                   className={`mono text-[11px] uppercase tracking-[.14em] ${
-                    ["text-rule", "text-ok-ink", "text-clay", "text-accent"][activeFunnel] ?? "text-accent"
+                    ["text-rule", "text-ok-ink", "text-clay", "text-accent"][activeStageIndex] ?? "text-accent"
                   }`}
                 >
-                  STAGE {currentFunnel.step} DETAIL · {currentFunnel.title}
+                  STAGE {currentStage.step} DETAIL · {currentStage.title}
                 </div>
                 <p className="mt-2 text-[13.5px] leading-relaxed text-ink-2">
-                  {currentFunnel.detail}
+                  {currentStage.detail}
                 </p>
               </div>
               <div className="rounded-tile border border-line-soft bg-bg-sunk/70 px-4 py-3">
-                <div className="text-[11px] text-ink-4">{currentFunnel.metricLabel}</div>
+                <div className="text-[11px] text-ink-4">{currentStage.metricLabel}</div>
                 <div
                   className={`mono mt-1 text-[13px] font-semibold ${
-                    ["text-rule", "text-ok-ink", "text-clay", "text-accent"][activeFunnel] ?? "text-accent"
+                    ["text-rule", "text-ok-ink", "text-clay", "text-accent"][activeStageIndex] ?? "text-accent"
                   }`}
                 >
-                  {currentFunnel.metricValue}
+                  {currentStage.metricValue}
                 </div>
               </div>
             </div>

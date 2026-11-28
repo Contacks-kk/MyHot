@@ -45,6 +45,7 @@ import (
 	"aihot/backend-go/internal/tagging"
 	"aihot/backend-go/internal/topics"
 	"aihot/backend-go/internal/usersources"
+	"aihot/backend-go/internal/weather"
 )
 
 var errNoSession = errors.New("no session")
@@ -91,6 +92,7 @@ type Server struct {
 	Personal              *personal.Service
 	Market                *market.Service
 	MarketHub             *market.Hub
+	Weather               *weather.Service
 	InterestLabels        *tagging.Service
 	PublicContent         *publiccontent.Service
 	MCPService            *mcpapi.Service
@@ -295,6 +297,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/me/feed", s.withUser(s.feed))
 	mux.HandleFunc("GET /api/me/feed/funnel", s.withUser(s.funnel))
 	mux.HandleFunc("GET /api/me/hot", s.withUser(s.hot))
+	mux.HandleFunc("GET /api/me/weather", s.withUser(s.getWeather))
+	mux.HandleFunc("GET /api/me/weather/locations", s.withUser(s.searchWeatherLocations))
 	mux.HandleFunc("GET /api/me/recommended-articles", s.withUser(s.recommendedArticles))
 	mux.HandleFunc("GET /api/me/markets", s.withUser(s.marketsCatalog))
 	mux.HandleFunc("GET /api/me/markets/candles", s.withUser(s.marketCandles))

@@ -9,6 +9,7 @@ export const KEYS = {
   read: "aihot-read-items",
   theme: "aihot-theme",
   locale: "aihot-locale",
+  weatherLocation: "aihot-weather-location",
   changelogSeen: "aihot-changelog-seen-version",
   feedbackDraft: "aihot-feedback-draft-v1",
   recentSearches: "aihot-recent-searches",
@@ -114,6 +115,7 @@ const subscribeStarred = subscribeKey(KEYS.starred);
 const subscribeRead = subscribeKey(KEYS.read);
 const subscribeTheme = subscribeKey(KEYS.theme);
 const subscribeLocale = subscribeKey(KEYS.locale);
+const subscribeWeatherLocation = subscribeKey(KEYS.weatherLocation);
 const subscribeChangelog = subscribeKey(KEYS.changelogSeen);
 const subscribeRecentSearches = subscribeKey(KEYS.recentSearches);
 
@@ -262,6 +264,56 @@ export function setLocalePreference(pref: LocalePreference) {
     document.cookie = `myhot_locale=${pref}; path=/; max-age=31536000; SameSite=Lax`;
   }
   invalidate(KEYS.locale);
+}
+
+// weather location
+export interface WeatherLocationPreference {
+  label: string;
+  latitude: number;
+  longitude: number;
+}
+
+/** Parse and validate a stored manual weather city preference. */
+function parseWeatherLocation(raw: unknown): WeatherLocationPreference | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const candidate = raw as Record<string, unknown>;
+  const label = typeof candidate.label === "string" ? candidate.label.trim() : "";
+  const latitude = candidate.latitude;
+  const longitude = candidate.longitude;
+
+  if (
+    label === "" ||
+    typeof latitude !== "number" ||
+    typeof longitude !== "number" ||
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude) ||
+    latitude < -90 ||
+    latitude > 90 ||
+    longitude < -180 ||
+    longitude > 180
+  ) {
+    return null;
+  }
+
+  return {
+    label,
+    latitude,
+    longitude,
+  };
+}
+
+/** Get the stored manual weather city preference, or null when using IP estimation. */
+export function getWeatherLocationPreference(): WeatherLocationPreference | null {
+  return cached(KEYS.weatherLocation, () => parseWeatherLocation(readJson(KEYS.weatherLocation)));
+}
+
+/** Save a manual weather city preference, or pass null to restore IP estimation. */
+export function setWeatherLocationPreference(location: WeatherLocationPreference | null) {
+  writeRaw(KEYS.weatherLocation, location ? JSON.stringify(location) : null);
+  invalidate(KEYS.weatherLocation);
 }
 
 export function resolvedTheme(pref: ThemePreference = getThemePreference()): "light" | "dark" {
@@ -481,6 +533,11 @@ export function useThemePreference(): ThemePreference {
 /** Reactive hook for current locale preference ("zh" or "en"). */
 export function useLocalePreference(): LocalePreference {
   return useSyncExternalStore(subscribeLocale, getLocalePreference, () => "zh");
+}
+
+/** Reactive hook for user-selected weather location preference, or null for IP estimation. */
+export function useWeatherLocationPreference(): WeatherLocationPreference | null {
+  return useSyncExternalStore(subscribeWeatherLocation, getWeatherLocationPreference, () => null);
 }
 
 export function useChangelogSeen(): string | null {

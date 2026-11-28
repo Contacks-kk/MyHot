@@ -90,3 +90,18 @@ test("failed bookmark writes and damaged existing data do not report a successfu
   window.localStorage.setItem = () => { throw new Error("quota"); };
   assert.equal(state.toggleStar(item), false);
 });
+
+test("weather location preference validates coordinates and supports resetting to IP estimation", async () => {
+  const { state, values } = await reader();
+  assert.equal(state.getWeatherLocationPreference(), null);
+  values.set(state.KEYS.weatherLocation, JSON.stringify({ label: "Invalid", latitude: 200, longitude: 120 }));
+  assert.equal(state.getWeatherLocationPreference(), null);
+  state.setWeatherLocationPreference({ label: "杭州 · 浙江 · 中国", latitude: 30.2741, longitude: 120.1551 });
+  assert.deepEqual(state.getWeatherLocationPreference(), {
+    label: "杭州 · 浙江 · 中国",
+    latitude: 30.2741,
+    longitude: 120.1551,
+  });
+  state.setWeatherLocationPreference(null);
+  assert.equal(state.getWeatherLocationPreference(), null);
+});

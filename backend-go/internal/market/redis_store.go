@@ -209,7 +209,10 @@ func (s *RedisStore) SaveWindowCandles(ctx context.Context, symbol, tf string, c
 		return nil
 	}
 
+	// key: twelvedata:candles:[QQQ || SPY || XAU/USD]:[1d || 1h || 1m || 1M || 5m]
 	key := s.prefix + "candles:" + symbol + ":" + tf
+
+	// pipeline 确保多指令按序原子性完成
 	pipe := s.client.TxPipeline()
 
 	// Remove existing entries sharing identical timestamps so bar rewrites do not create duplicate members.
@@ -232,6 +235,7 @@ func (s *RedisStore) SaveWindowCandles(ctx context.Context, symbol, tf string, c
 	pipe.ZRemRangeByRank(ctx, key, 0, int64(-maxWindowCandles-1))
 	pipe.Expire(ctx, key, 14*24*time.Hour)
 
+	// 发送pipeline中所有指令给 Redis Server
 	_, err := pipe.Exec(ctx)
 	return err
 }

@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { webModules } from "../../site-modules";
 import { getDict, type Locale } from "../../lib/i18n";
 import {
-  IconDoc, IconFlame, IconGrid, IconHeart, IconHistory, IconPlug, IconRss, IconSparkles, IconTrendUp, IconUser,
+  IconDoc, IconFlame, IconGrid, IconHeart, IconHistory, IconPlug, IconRss, IconSettings, IconSparkles, IconTrendUp,
 } from "../icons";
 
 export interface NavItem {
@@ -38,7 +38,7 @@ function getSections(locale: Locale): Array<{ title: string; items: NavItem[] }>
       items: [
         { to: "/history", label: dict.nav.history, icon: IconHistory },
         { to: "/about", label: dict.nav.about, icon: IconHeart },
-        { to: "/more", label: dict.nav.account, icon: IconUser },
+        { to: "/more", label: dict.nav.account, icon: IconSettings },
       ],
     },
   ];
@@ -94,7 +94,7 @@ export function tabs(locale: Locale = "zh"): Tab[] {
     { key: "hot", to: "/hot", label: dict.nav.hot, icon: IconFlame },
     { key: "recommendations", to: "/recommendations", label: dict.nav.recommendations, icon: IconSparkles },
     { key: "daily", to: "/daily", label: dict.nav.daily, icon: IconDoc },
-    { key: "me", to: "/more", label: dict.nav.account, icon: IconUser, changelog: true },
+    { key: "me", to: "/more", label: dict.nav.account, icon: IconSettings, changelog: true },
   ];
   return [...engineTabs.slice(0, -1), ...webModules().flatMap((m) => m.tabs ?? []), engineTabs.at(-1)!];
 }

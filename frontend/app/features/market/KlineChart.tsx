@@ -5,11 +5,14 @@ import type {
   IChartApi,
   ISeriesApi,
   ISeriesMarkersPluginApi,
+  LineData,
   SeriesMarker,
   Time,
   TickMarkType,
   UTCTimestamp,
 } from "lightweight-charts";
+
+export type ChartDisplayMode = "kline" | "line" | "both";
 
 export interface MarketCandle {
   time: number;
@@ -43,6 +46,7 @@ interface KlineChartProps {
   digits: number;
   candles: MarketCandle[];
   markers: MarketNewsMarker[];
+  chartMode?: ChartDisplayMode;
   onSelectMarkerTime?: (epochSec: number | null) => void;
 }
 
@@ -66,6 +70,7 @@ function readThemeTokens() {
       up: "#15803d",
       down: "#c2410c",
       amber: "#b45309",
+      trendLine: "#2563eb",
       volUp: "rgba(21, 128, 61, 0.22)",
       volDown: "rgba(194, 65, 12, 0.22)",
     };
@@ -83,6 +88,7 @@ function readThemeTokens() {
     up: pick("--ok", isDark ? "#4ade80" : "#15803d"),
     down: pick("--hot", isDark ? "#fb7185" : "#c2410c"),
     amber: pick("--amber", isDark ? "#fbbf24" : "#b45309"),
+    trendLine: isDark ? "#38bdf8" : "#2563eb",
     volUp: isDark ? "rgba(74, 222, 128, 0.24)" : "rgba(21, 128, 61, 0.22)",
     volDown: isDark ? "rgba(251, 113, 133, 0.24)" : "rgba(194, 65, 12, 0.22)",
   };
@@ -118,20 +124,24 @@ function formatAxisTime(epochSec: number, tf: string): string {
   }).format(date);
 }
 
-/** Client-only TradingView lightweight-charts wrapper supporting live tick updates and news markers. */
+/** Client-only TradingView lightweight-charts wrapper supporting K-line, line, overlay modes, live tick updates, and news markers. */
 export const KlineChart = forwardRef<KlineChartHandle, KlineChartProps>(function KlineChart(
-  { symbol, timeframe, digits, candles, markers, onSelectMarkerTime },
+  { symbol, timeframe, digits, candles, markers, chartMode = "kline", onSelectMarkerTime },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick", Time> | null>(null);
+  const lineSeriesRef = useRef<ISeriesApi<"Line", Time> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram", Time> | null>(null);
-  const markerPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const candleMarkerPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const lineMarkerPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const candlesRef = useRef<MarketCandle[]>(candles);
+  const barMapRef = useRef<Map<number, MarketCandle>>(new Map());
   const lastBarTime = useRef(0);
   const fittedMarket = useRef("");
   const timeframeRef = useRef<string>(timeframe);
+  const chartModeRef = useRef<ChartDisplayMode>(chartMode);
   const tokensRef = useRef(readThemeTokens());
 
   const [ready, setReady] = useState(false);
@@ -139,18 +149,22 @@ export const KlineChart = forwardRef<KlineChartHandle, KlineChartProps>(function
 
   candlesRef.current = candles;
   timeframeRef.current = timeframe;
+  chartModeRef.current = chartMode;
 
   useImperativeHandle(
     ref,
     () => ({
       applyLiveCandle(bar: MarketCandle) {
         const candleSeries = candleSeriesRef.current;
+        const lineSeries = lineSeriesRef.current;
         const volumeSeries = volumeSeriesRef.current;
-        if (!candleSeries || !volumeSeries || bar.time < lastBarTime.current) {
+        if (!candleSeries || !lineSeries || !volumeSeries || bar.time < lastBarTime.current) {
           return;
         }
 
         lastBarTime.current = bar.time;
+        barMapRef.current.set(bar.time, bar);
+
         const t = bar.time as UTCTimestamp;
         const tokens = tokensRef.current;
         const isUp = bar.close >= bar.open;
@@ -161,6 +175,11 @@ export const KlineChart = forwardRef<KlineChartHandle, KlineChartProps>(function
           high: bar.high,
           low: bar.low,
           close: bar.close,
+        });
+
+        lineSeries.update({
+          time: t,
+          value: bar.close,
         });
 
         volumeSeries.update({
@@ -280,6 +299,7 @@ export const KlineChart = forwardRef<KlineChartHandle, KlineChartProps>(function
         },
       });
 
+      const initialMode = chartModeRef.current;
       const candleSeries = chart.addSeries(lc.CandlestickSeries, {
         upColor: tokens.up,
         downColor: tokens.down,
@@ -287,6 +307,16 @@ export const KlineChart = forwardRef<KlineChartHandle, KlineChartProps>(function
         borderDownColor: tokens.down,
         wickUpColor: tokens.up,
         wickDownColor: tokens.down,
+        visible: initialMode !== "line",
+      });
+
+      const lineSeries = chart.addSeries(lc.LineSeries, {
+        color: tokens.trendLine,
+        lineWidth: 2,
+        crosshairMarkerVisible: true,
+        lastValueVisible: initialMode === "line",
+        priceLineVisible: initialMode === "line",
+        visible: initialMode !== "kline",
       });
 
       const volumeSeries = chart.addSeries(lc.HistogramSeries, {
@@ -301,12 +331,20 @@ export const KlineChart = forwardRef<KlineChartHandle, KlineChartProps>(function
         },
       });
 
-      const markerPlugin = lc.createSeriesMarkers(candleSeries, []);
+      const candleMarkerPlugin = lc.createSeriesMarkers(candleSeries, []);
+      const lineMarkerPlugin = lc.createSeriesMarkers(lineSeries, []);
 
       chart.subscribeCrosshairMove((param) => {
         if (!param.time || typeof param.time !== "number") {
           const latest = candlesRef.current.at(-1);
-          setHoverBar(latest ? { ...latest } : null);
+          const latestLive = latest ? barMapRef.current.get(latest.time) ?? latest : null;
+          setHoverBar(latestLive ? { ...latestLive } : null);
+          return;
+        }
+
+        const cachedBar = barMapRef.current.get(param.time);
+        if (cachedBar) {
+          setHoverBar({ ...cachedBar });
           return;
         }
 
@@ -370,6 +408,10 @@ export const KlineChart = forwardRef<KlineChartHandle, KlineChartProps>(function
           wickUpColor: nextTokens.up,
           wickDownColor: nextTokens.down,
         });
+
+        lineSeries.applyOptions({
+          color: nextTokens.trendLine,
+        });
       });
       themeObserver.observe(document.documentElement, {
         attributes: true,
@@ -378,8 +420,10 @@ export const KlineChart = forwardRef<KlineChartHandle, KlineChartProps>(function
 
       chartRef.current = chart;
       candleSeriesRef.current = candleSeries;
+      lineSeriesRef.current = lineSeries;
       volumeSeriesRef.current = volumeSeries;
-      markerPluginRef.current = markerPlugin;
+      candleMarkerPluginRef.current = candleMarkerPlugin;
+      lineMarkerPluginRef.current = lineMarkerPlugin;
       setReady(true);
     }
 
@@ -389,49 +433,95 @@ export const KlineChart = forwardRef<KlineChartHandle, KlineChartProps>(function
       disposed = true;
       resizeObserver?.disconnect();
       themeObserver?.disconnect();
-      markerPluginRef.current?.detach();
+      candleMarkerPluginRef.current?.detach();
+      lineMarkerPluginRef.current?.detach();
       chartRef.current?.remove();
       chartRef.current = null;
       candleSeriesRef.current = null;
+      lineSeriesRef.current = null;
       volumeSeriesRef.current = null;
-      markerPluginRef.current = null;
+      candleMarkerPluginRef.current = null;
+      lineMarkerPluginRef.current = null;
     };
   }, []);
+
+  // Toggle series visibility cleanly across K-line, line, and overlay display modes.
+  useEffect(() => {
+    const candleSeries = candleSeriesRef.current;
+    const lineSeries = lineSeriesRef.current;
+    if (!ready || !candleSeries || !lineSeries) {
+      return;
+    }
+
+    candleSeries.applyOptions({
+      visible: chartMode !== "line",
+    });
+
+    lineSeries.applyOptions({
+      visible: chartMode !== "kline",
+      lastValueVisible: chartMode === "line",
+      priceLineVisible: chartMode === "line",
+    });
+  }, [ready, chartMode]);
 
   // Replace chart dataset cleanly whenever symbol, timeframe, or initial candles change.
   useEffect(() => {
     const chart = chartRef.current;
     const candleSeries = candleSeriesRef.current;
+    const lineSeries = lineSeriesRef.current;
     const volumeSeries = volumeSeriesRef.current;
-    if (!ready || !chart || !candleSeries || !volumeSeries) {
+    if (!ready || !chart || !candleSeries || !lineSeries || !volumeSeries) {
       return;
     }
 
     const tokens = tokensRef.current;
+    const minMove = Number((1 / Math.pow(10, digits)).toFixed(digits));
 
     candleSeries.applyOptions({
       priceFormat: {
         type: "price",
         precision: digits,
-        minMove: Number((1 / Math.pow(10, digits)).toFixed(digits)),
+        minMove,
       },
     });
 
-    const candleData: CandlestickData<Time>[] = candles.map((bar) => ({
-      time: bar.time as UTCTimestamp,
-      open: bar.open,
-      high: bar.high,
-      low: bar.low,
-      close: bar.close,
-    }));
+    lineSeries.applyOptions({
+      priceFormat: {
+        type: "price",
+        precision: digits,
+        minMove,
+      },
+    });
 
-    const volumeData: HistogramData<Time>[] = candles.map((bar) => ({
-      time: bar.time as UTCTimestamp,
-      value: bar.volume,
-      color: bar.close >= bar.open ? tokens.volUp : tokens.volDown,
-    }));
+    const nextMap = new Map<number, MarketCandle>();
+    const candleData: CandlestickData<Time>[] = [];
+    const lineData: LineData<Time>[] = [];
+    const volumeData: HistogramData<Time>[] = [];
 
+    for (const bar of candles) {
+      const t = bar.time as UTCTimestamp;
+      nextMap.set(bar.time, bar);
+      candleData.push({
+        time: t,
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
+        close: bar.close,
+      });
+      lineData.push({
+        time: t,
+        value: bar.close,
+      });
+      volumeData.push({
+        time: t,
+        value: bar.volume,
+        color: bar.close >= bar.open ? tokens.volUp : tokens.volDown,
+      });
+    }
+
+    barMapRef.current = nextMap;
     candleSeries.setData(candleData);
+    lineSeries.setData(lineData);
     volumeSeries.setData(volumeData);
 
     const latest = candles.at(-1);
@@ -446,8 +536,9 @@ export const KlineChart = forwardRef<KlineChartHandle, KlineChartProps>(function
 
   // Synchronize editorial news markers aligned onto candlestick buckets.
   useEffect(() => {
-    const markerPlugin = markerPluginRef.current;
-    if (!ready || !markerPlugin) {
+    const candleMarkerPlugin = candleMarkerPluginRef.current;
+    const lineMarkerPlugin = lineMarkerPluginRef.current;
+    if (!ready || !candleMarkerPlugin || !lineMarkerPlugin) {
       return;
     }
 
@@ -477,8 +568,14 @@ export const KlineChart = forwardRef<KlineChartHandle, KlineChartProps>(function
         };
       });
 
-    markerPlugin.setMarkers(barMarkers);
-  }, [ready, markers]);
+    if (chartMode === "line") {
+      candleMarkerPlugin.setMarkers([]);
+      lineMarkerPlugin.setMarkers(barMarkers);
+    } else {
+      lineMarkerPlugin.setMarkers([]);
+      candleMarkerPlugin.setMarkers(barMarkers);
+    }
+  }, [ready, markers, chartMode]);
 
   const activeBar = hoverBar ?? candles.at(-1) ?? null;
   const isUp = activeBar ? activeBar.close >= activeBar.open : true;

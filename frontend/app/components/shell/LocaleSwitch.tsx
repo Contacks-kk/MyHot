@@ -24,7 +24,7 @@ export function LocaleSwitch({ className = "" }: { className?: string }) {
   return (
     <div
       role="radiogroup"
-      aria-label="语言切换"
+      aria-label={current === "en" ? "Language" : "语言切换"}
       className={`relative grid h-[34px] min-w-[76px] grid-cols-2 rounded-full border border-line bg-bg-sunk p-[3px] ${className}`}
     >
       <span

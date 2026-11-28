@@ -201,8 +201,9 @@ test("unified hotspots carry today's funnel, date controls, and the requested de
   assert.match($("main").text(), /2000-01-02 · 北京时间全天/);
   const sidebar = $('nav[aria-label="主导航"]');
   assert.deepEqual(sidebar.find("a").slice(0, 6).map((_, element) => $(element).text().trim()).get(), ["个人热点榜单", "为你推荐", "我的日报", "信源", "标签", "模型配置"]);
-  assert.deepEqual($('nav[aria-label="底部导航"] a').map((_, element) => $(element).text().trim()).get(), ["个人热点榜单", "为你推荐", "我的日报", "我的账号"]);
+  assert.deepEqual($('nav[aria-label="底部导航"] a').map((_, element) => $(element).text().trim()).get(), ["个人热点榜单", "为你推荐", "我的日报", "设置"]);
   assert.equal(sidebar.find("button").length, 0);
+  assert.equal($('aside[aria-label="问候与天气"]').length, 0);
   assert.equal($('nav[aria-label="内容模式切换"]').length, 0);
   assert.equal($('article [title="https://example.invalid/article"] [aria-hidden="true"]').text(), "E");
   assert.deepEqual($('nav[aria-label="热点时间范围"]').children().map((_, element) => $(element).text().trim()).get(), ["今日", "48小时", "其他日期"]);
@@ -245,11 +246,32 @@ test("unified hotspots carry today's funnel, date controls, and the requested de
     const html = await daily.text();
     assert.ok(html.includes(`Body of ${expected}`));
     assert.ok(!html.includes(`Body of ${excluded}`));
+    const dailyPage = cheerio.load(html);
+    assert.equal(dailyPage('aside nav[aria-label="今日看点"]').length, 1);
+    assert.equal(dailyPage('nav[aria-label="往期日报"]').length, 0);
+    assert.equal(dailyPage('button[aria-haspopup="dialog"]').length, 1);
   }
 
   const account = await fetch(origin + "/more", { headers: alice });
   assert.equal(account.status, 200, logs);
   const accountPage = cheerio.load(await account.text());
+  assert.equal(accountPage("h1").text().trim(), "设置");
+  assert.ok(accountPage('nav[aria-label="主导航"]').text().includes("设置"));
+  assert.equal(accountPage('nav[aria-label="主导航"]').text().includes("我的账号"), false);
+  const langSwitch = accountPage('main [role="radiogroup"][aria-label="语言切换"]');
+  assert.equal(langSwitch.length, 1);
+  assert.equal(langSwitch.closest(".lg\\:hidden").length, 0);
+  const themeSwitch = accountPage('main [role="radiogroup"][aria-label="外观"]');
+  assert.equal(themeSwitch.length, 1);
+  assert.equal(themeSwitch.closest(".lg\\:hidden").length, 1);
+  const locationBtn = accountPage("main button").filter((_, element) => accountPage(element).text().includes("修改城市"));
+  assert.equal(locationBtn.length, 1);
+  assert.equal(locationBtn.closest(".lg\\:hidden").length, 0);
+  const deleteRow = accountPage("main button").filter((_, element) => accountPage(element).text().includes("删除账号"));
+  assert.equal(deleteRow.length, 1);
+  assert.equal(deleteRow.closest(".card").find('a[href="/terms"]').length, 1);
+  assert.equal(deleteRow.closest(".card").find('a[href="/privacy"]').length, 1);
+  assert.equal(accountPage("#confirmPassword").length, 0);
   const logout = accountPage("main button").filter((_, element) => accountPage(element).text().trim() === "退出登录");
   assert.equal(logout.length, 1);
   assert.equal(logout.closest(".lg\\:hidden").length, 0);

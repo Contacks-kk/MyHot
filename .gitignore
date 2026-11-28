@@ -68,3 +68,4 @@ compose.server.yaml
 releases/
 backups/
 logs/
+backend-go/cmd/test

@@ -40,6 +40,9 @@ type Config struct {
 	DatabaseURL                 string
 	RedisURL                    string
 	RedisCAFile                 string
+	QWeatherAPIHost             string
+	QWeatherAPIKey              string
+	WeatherGeoIPDBPath          string
 	DataDir                     string
 	PublicURL                   string
 	OpenRegistration            bool
@@ -217,6 +220,9 @@ func Load() (Config, error) {
 		OpenRegistration:            envBool("OPEN_REGISTRATION_ENABLED", false),
 		CookieSecure:                secure,
 		TrustProxy:                  envBool("GO_TRUST_PROXY", false),
+		QWeatherAPIHost:             env("QWEATHER_API_HOST", ""),
+		QWeatherAPIKey:              env("QWEATHER_API_KEY", ""),
+		WeatherGeoIPDBPath:          env("WEATHER_GEOIP_DB_PATH", ""),
 		UserAPIKeyEncryptionKey:     encryption,
 		SMTPHost:                    strings.TrimSpace(os.Getenv("SMTP_HOST")),
 		SMTPPort:                    port,

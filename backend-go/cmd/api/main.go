@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"aihot/backend-go/internal/admincontent"
 	"aihot/backend-go/internal/adminmodels"
 	"aihot/backend-go/internal/adminruns"
@@ -22,6 +24,7 @@ import (
 	"aihot/backend-go/internal/operationsalerts"
 	"aihot/backend-go/internal/reports"
 	"aihot/backend-go/internal/topics"
+	"aihot/backend-go/internal/weather"
 )
 
 func main() {
@@ -126,6 +129,7 @@ func main() {
 	go api.Accounts.RunVerificationCleanup(ctx)
 	api.AttachAccountRedis(redisClient)
 	api.AttachMarketRedis(ctx, redisClient)
+	configureWeather(api, cfg, redisClient)
 	server := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           api.Handler(),
@@ -148,4 +152,26 @@ func main() {
 	if err = server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+}
+
+/** configureWeather enables the optional forecast service when its provider is configured. */
+func configureWeather(api *httpapi.Server, cfg config.Config, cache *redis.Client) {
+	if cfg.QWeatherAPIHost == "" && cfg.QWeatherAPIKey == "" {
+		return
+	}
+	var geo *weather.GeoIP
+	if cfg.WeatherGeoIPDBPath != "" {
+		database, err := weather.OpenGeoIP(cfg.WeatherGeoIPDBPath)
+		if err != nil {
+			log.Print("Weather IP estimation unavailable: could not open WEATHER_GEOIP_DB_PATH")
+		} else {
+			geo = database
+		}
+	}
+	service, err := weather.NewService(cfg.QWeatherAPIHost, cfg.QWeatherAPIKey, geo, cache)
+	if err != nil {
+		log.Printf("Weather unavailable: %v", err)
+		return
+	}
+	api.Weather = service
 }

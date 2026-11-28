@@ -22,6 +22,9 @@ export interface TranslationDict {
     backToTop: string;
     appearance: string;
     language: string;
+    weatherLocation: string;
+    weatherLocationAuto: string;
+    changeLocation: string;
   };
   action: {
     backToHot: string;
@@ -91,7 +94,7 @@ export const TRANSLATIONS: Record<Locale, TranslationDict> = {
       sources: "信源",
       history: "历史归档",
       about: "关于 MyHOT",
-      account: "我的账号",
+      account: "设置",
       workspace: "个人工作区",
       historyAndAbout: "历史与关于",
       github: "GitHub 开源",
@@ -101,6 +104,9 @@ export const TRANSLATIONS: Record<Locale, TranslationDict> = {
       backToTop: "回到顶部",
       appearance: "外观",
       language: "语言",
+      weatherLocation: "地理位置与天气",
+      weatherLocationAuto: "自动（按 IP 判断）",
+      changeLocation: "修改城市",
     },
     action: {
       backToHot: "返回热点榜",
@@ -151,7 +157,7 @@ export const TRANSLATIONS: Record<Locale, TranslationDict> = {
       savedSuccess: "模型配置已保存，只会用于之后命中的新文章。",
     },
     account: {
-      title: "我的账号",
+      title: "设置",
       terms: "使用规则",
       privacy: "隐私说明",
       deleteNotice: "删除后会清除你的模型设置、关注项、会话、个人摘要和日报；共享信源与文章继续保留。",
@@ -168,7 +174,7 @@ export const TRANSLATIONS: Record<Locale, TranslationDict> = {
       sources: "Sources",
       history: "Archive",
       about: "About MyHOT",
-      account: "My Account",
+      account: "Setting",
       workspace: "Workspace",
       historyAndAbout: "History & About",
       github: "GitHub",
@@ -178,6 +184,9 @@ export const TRANSLATIONS: Record<Locale, TranslationDict> = {
       backToTop: "Back to top",
       appearance: "Appearance",
       language: "Language",
+      weatherLocation: "Weather Location",
+      weatherLocationAuto: "Automatic (by IP)",
+      changeLocation: "Change City",
     },
     action: {
       backToHot: "Back to Hotlist",
@@ -228,7 +237,7 @@ export const TRANSLATIONS: Record<Locale, TranslationDict> = {
       savedSuccess: "Model configuration saved. It will apply to future matching articles.",
     },
     account: {
-      title: "My Account",
+      title: "Setting",
       terms: "Terms of Use",
       privacy: "Privacy Policy",
       deleteNotice: "Deletion permanently removes your model settings, interests, sessions, summaries, and briefs. Shared sources and articles are retained.",

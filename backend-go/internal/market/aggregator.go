@@ -287,6 +287,7 @@ func (c *Collector) Run(ctx context.Context) {
 			}
 		}
 
+		// get stock candlestick chart data
 		c.runAsLeader(ctx)
 		c.redis.ReleaseCollectorLock(context.Background(), c.ownerID)
 	}
@@ -332,11 +333,13 @@ func (c *Collector) runAsLeader(ctx context.Context) {
 
 	ticks := make(chan RawTick, 256)
 
-	// Run upstream stream loop with exponential backoff on disconnect.
+	// 断开连接时，使用指数退避运行上游流循环.
 	go func() {
 		backoff := time.Second
 		for leaderCtx.Err() == nil {
 			started := time.Now()
+
+			// maintains a WebSocket subscription to Twelve Data real-time price updates.
 			err := c.provider.Stream(leaderCtx, symbols, ticks)
 			if leaderCtx.Err() != nil {
 				return
@@ -370,6 +373,8 @@ func (c *Collector) runAsLeader(ctx context.Context) {
 		select {
 		case <-leaderCtx.Done():
 			if history == nil {
+
+				// flush
 				c.flushAggregator(context.Background())
 			}
 			return
@@ -380,8 +385,12 @@ func (c *Collector) runAsLeader(ctx context.Context) {
 				c.aggregator.ApplyTick(tick)
 			}
 		case batch := <-history:
+
+			// save
 			c.saveTwelveHistory(leaderCtx, batch)
 		case <-flushTicker.C:
+
+			// flush
 			c.flushAggregator(leaderCtx)
 		}
 	}

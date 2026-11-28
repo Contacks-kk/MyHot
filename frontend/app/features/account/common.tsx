@@ -9,7 +9,6 @@ export function AccountFrame({ title, description, children }: { title: string; 
       <div className="w-full max-w-[440px]">
         <Link to="/" className="mx-auto mb-8 flex w-fit items-center gap-2 text-ink" aria-label={`${SITE.name} 首页`}>
           <Wordmark size={30} />
-          <span className="text-[18px] font-semibold tracking-tight">{SITE.name}</span>
         </Link>
         <section className="card p-6 sm:p-8">
           <h1 className="text-[23px] font-semibold tracking-tight text-ink">{title}</h1>

@@ -24,9 +24,9 @@ import { userApiGet, userApiMe } from "./lib/user-api.server";
 import type { Catalog } from "./lib/catalog";
 
 export const links: Route.LinksFunction = () => [
-  { rel: "icon", href: "/favicon.ico", sizes: "any" },
-  { rel: "icon", type: "image/png", href: "/icon.png" },
-  { rel: "apple-touch-icon", href: "/apple-icon.png" },
+  { rel: "icon", href: "/favicon.ico?v=2", sizes: "any" },
+  { rel: "icon", type: "image/png", href: "/icon.png?v=2" },
+  { rel: "apple-touch-icon", href: "/apple-icon.png?v=2" },
   { rel: "manifest", href: "/manifest.webmanifest" },
 ];
 

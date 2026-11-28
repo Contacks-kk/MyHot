@@ -12,6 +12,9 @@ import { getDict } from "../lib/i18n";
 
 export const handle: Screen = { tab: "me", name: getDict("zh").nav.sources };
 
+const sourceFieldClass =
+  "h-11 w-full rounded-control border border-line-strong bg-surface px-3.5 text-[14px] text-ink outline-none transition-colors placeholder:text-ink-4 focus:border-accent";
+
 type Subscription = {
   id: number;
   sourceId: string;
@@ -985,29 +988,49 @@ export default function SourcesRoute() {
       )}
 
       {sourceKind !== null && (
-        <section id="add-source" className="mt-5" aria-label={locale === "en" ? "Add Source" : "添加信源"}>
-          <label htmlFor="source-kind" className="text-[13px] font-semibold text-ink">
-            {locale === "en" ? "Source type" : "信源类型"}
-          </label>
-          <select
-            id="source-kind"
-            className={fieldClass + " mt-2 max-w-xs"}
-            value={sourceKind}
-            disabled={busy || discovering || ingestBusy}
-            onChange={event => {
-              const kind = event.target.value;
-              if (kind === "rss" || kind === "web_list" || kind === "ingest") {
-                chooseSourceKind(kind);
-              }
-            }}
-          >
-            <option value="rss">RSS / Atom</option>
-            <option value="web_list">{locale === "en" ? "Web List Crawler" : "网页列表抓取"}</option>
-            <option value="ingest">{locale === "en" ? "Direct Ingest / Webhook" : "单篇投递 / Webhook"}</option>
-          </select>
+        <section id="add-source" className="mt-5 space-y-4" aria-label={locale === "en" ? "Add Source" : "添加信源"}>
+          <div className="card p-4 sm:px-6 sm:py-4">
+            <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+              <span id="source-kind-label" className="text-[13px] font-semibold text-ink">
+                {locale === "en" ? "Source type" : "信源类型"}
+              </span>
+              <div
+                role="radiogroup"
+                aria-labelledby="source-kind-label"
+                className="flex flex-wrap gap-1 rounded-tile bg-bg-sunk p-1 sm:inline-flex sm:flex-nowrap sm:rounded-full"
+              >
+                {(
+                  [
+                    { key: "rss", label: "RSS / Atom" },
+                    { key: "web_list", label: locale === "en" ? "Web List Crawler" : "网页列表抓取" },
+                    { key: "ingest", label: locale === "en" ? "Direct Ingest / Webhook" : "单篇投递 / Webhook" },
+                  ] as const
+                ).map((option) => {
+                  const active = sourceKind === option.key;
+                  return (
+                    <button
+                      key={option.key}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      disabled={busy || discovering || ingestBusy}
+                      onClick={() => chooseSourceKind(option.key)}
+                      className={`rounded-control px-3 py-1.5 text-[12.5px] font-medium transition-all disabled:opacity-45 sm:rounded-full ${
+                        active
+                          ? "bg-surface font-semibold text-ink shadow-[var(--shadow-card)]"
+                          : "text-ink-3 hover:text-ink"
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
       {/* Tab 1 & Tab 2: Regular Sources Form (RSS or Web List) */}
       {(sourceKind === "rss" || sourceKind === "web_list") && (
-        <form onSubmit={save} className="card mt-6 p-5 sm:p-6">
+        <form onSubmit={save} className="card p-5 sm:p-6">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-[15px] font-semibold text-ink">
               {sourceKind === "web_list"
@@ -1026,10 +1049,13 @@ export default function SourcesRoute() {
 
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <div>
-              <label className="block text-[12px] font-medium text-ink-2">
+              <label htmlFor="add-source-name" className="block text-[12px] font-medium text-ink-2">
                 {locale === "en" ? "My source name" : "我的备注名"}
+              </label>
+              <div className="mt-1.5">
                 <input
-                  className={`${fieldClass} mt-1.5`}
+                  id="add-source-name"
+                  className={sourceFieldClass}
                   required={!form.nameInherited}
                   disabled={form.nameInherited}
                   maxLength={200}
@@ -1037,19 +1063,19 @@ export default function SourcesRoute() {
                   onChange={e => setForm({ ...form, name: e.target.value })}
                   placeholder={sourceKind === "web_list" ? (locale === "en" ? "e.g. OpenAI News" : "例如：OpenAI 官方动态") : (locale === "en" ? "e.g. Tech Blog" : "例如：技术博客")}
                 />
-              </label>
-
+              </div>
             </div>
 
-            <div className="sm:col-span-1">
-              <label className="text-[12px] font-medium text-ink-2 block">
+            <div>
+              <label htmlFor="add-source-url" className="block text-[12px] font-medium text-ink-2">
                 {sourceKind === "web_list"
                   ? (locale === "en" ? "Web Page List URL" : "网页列表地址（HTML 页面）")
                   : (locale === "en" ? "RSS / Feed URL" : "信源地址（RSS / Atom / 网站）")}
               </label>
-              <div className="mt-1.5 flex gap-2">
+              <div className="mt-1.5 flex items-stretch gap-2">
                 <input
-                  className={`${fieldClass} flex-1`}
+                  id="add-source-url"
+                  className={`${sourceFieldClass} min-w-0 flex-1`}
                   required
                   type="url"
                   maxLength={2048}
@@ -1067,7 +1093,7 @@ export default function SourcesRoute() {
                     type="button"
                     disabled={discovering || busy || !form.url.trim()}
                     onClick={handleDiscover}
-                    className="h-10 shrink-0 rounded-control border border-line bg-bg-card px-3.5 text-[12px] font-medium text-ink-2 hover:border-accent hover:text-accent disabled:opacity-40 transition-colors"
+                    className="inline-flex h-11 shrink-0 items-center justify-center rounded-control border border-line-strong bg-surface px-3.5 text-[13px] font-medium text-ink-2 transition-colors hover:border-accent hover:text-accent disabled:opacity-40"
                   >
                     {discovering ? (locale === "en" ? "Probing..." : "探测中…") : (locale === "en" ? "Auto-Discover" : "智能探测")}
                   </button>
@@ -1194,7 +1220,7 @@ export default function SourcesRoute() {
 
       {/* Tab 3: Direct Ingest Article & Personal Webhook */}
       {sourceKind === "ingest" && (
-        <div className="mt-6 space-y-6">
+        <div className="space-y-6">
           <form onSubmit={handleIngest} className="card p-5 sm:p-6">
             <h2 className="text-[15px] font-semibold text-ink">
               {locale === "en" ? "Quick Direct Ingest" : "单篇快速直接投递"}
@@ -1319,10 +1345,10 @@ export default function SourcesRoute() {
                 : "支持模糊搜索信源名称、关键词或域名。点击可查看收录历史与最新文章，一键关注直接复用。"}
             </p>
 
-            <div className="mt-3 relative flex items-center">
-              <IconSearch size={15} className="absolute left-3.5 text-ink-4" />
+            <div className="relative mt-3 flex items-center">
+              <IconSearch size={15} className="pointer-events-none absolute left-3.5 text-ink-4" />
               <input
-                className={`${fieldClass} pl-9 pr-9 h-11 text-[13px]`}
+                className={`${sourceFieldClass} pl-9 pr-9 text-[13px]`}
                 value={exploreQuery}
                 onChange={e => requestExplore(e.target.value, 0)}
                 placeholder={locale === "en" ? "Search sources (e.g. OpenAI, 36Kr, Hacker News, tech blogs)..." : "搜索信源名称、网址、关键词（如：OpenAI、知乎、36氪、Hacker News...）"}
@@ -1371,65 +1397,75 @@ export default function SourcesRoute() {
                 const isIngest = item.kind === "external";
                 const publicResult = publicIDs.has(item.sourceId);
                 return (
-                  <article key={item.sourceId} className="card flex flex-col justify-between gap-3 p-4 transition-colors hover:border-accent/40 sm:flex-row sm:items-center sm:p-5">
-                    <div className="flex min-w-0 flex-1 items-start gap-3">
-                      <SourceAvatar name={item.name} iconUrl={item.iconUrl} size={34} />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-start justify-between gap-2">
-                          <h3 className="text-[14px] font-bold text-ink leading-snug line-clamp-1" title={item.name}>
-                            {item.name}
-                          </h3>
-                          <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${isWebList ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"}`}>
-                            {isIngest ? "Webhook" : isWebList ? "网页列表" : "RSS / Atom"}
+                  <article
+                    key={item.sourceId}
+                    className="card flex items-start gap-3 p-4 transition-colors hover:border-accent/40 sm:p-5"
+                  >
+                    <SourceAvatar name={item.name} iconUrl={item.iconUrl} size={34} />
+                    <div className="flex min-w-0 flex-1 flex-col">
+                      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 sm:flex-nowrap">
+                        <h3 className="min-w-0 flex-1 truncate text-[14px] font-bold leading-snug text-ink" title={item.name}>
+                          {item.name}
+                        </h3>
+                        <div className="ml-auto flex shrink-0 items-center gap-2.5">
+                          <span className={`inline-flex h-7 shrink-0 items-center rounded-full px-2.5 text-[10.5px] font-semibold ${isWebList ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"}`}>
+                            {isIngest ? "Webhook" : isWebList ? (locale === "en" ? "Web List" : "网页列表") : "RSS / Atom"}
                           </span>
+                          {subscription ? (
+                            <button
+                              type="button"
+                              disabled={busy || fetching === subscription.id || editBusy}
+                              onClick={() => void remove(subscription)}
+                              className="inline-flex h-7 shrink-0 items-center justify-center rounded-full border border-line px-3 text-[12px] font-medium text-ink-3 transition-colors hover:border-red-500/40 hover:text-red-600 disabled:opacity-50"
+                            >
+                              {locale === "en" ? "Unfollow" : "取消关注"}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => beginQuickSubscribe(item)}
+                              className="inline-flex h-7 shrink-0 items-center justify-center rounded-full bg-accent px-3.5 text-[12px] font-semibold text-accent-contrast transition-colors hover:bg-accent-ink"
+                            >
+                              {locale === "en" ? "+ Follow" : "+ 关注"}
+                            </button>
+                          )}
                         </div>
+                      </div>
 
-                        {item.url && <a
+                      {item.url && (
+                        <a
                           href={item.url}
                           target="_blank"
                           rel="noreferrer"
-                          className="mt-1.5 block max-w-full truncate text-[11px] text-ink-4 hover:text-accent"
+                          className="mt-1 block max-w-full truncate text-[11px] text-ink-4 hover:text-accent"
                           title={item.url}
                         >
                           {item.url} ↗
-                        </a>}
+                        </a>
+                      )}
 
-                        <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-ink-3">
+                      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-ink-3">
+                        <div className="flex flex-wrap items-center gap-2">
                           <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 ${item.health === "ok" ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300" : "bg-bg-sunk text-ink-4"}`}>
                             <span className={`size-1.5 rounded-full ${item.health === "ok" ? "bg-emerald-500" : "bg-ink-4"}`} />
-                            {item.health === "ok" ? "活跃运行" : "探测中"}
+                            {item.health === "ok" ? (locale === "en" ? "Active" : "活跃运行") : (locale === "en" ? "Probing" : "探测中")}
                           </span>
                           {publicResult && (
                             <span>· {item.subscriberCount} 人关注 · 收录 {item.articleCount} 篇</span>
                           )}
                         </div>
+
+                        {!isIngest && (
+                          <button
+                            type="button"
+                            onClick={() => openPreview(item.sourceId)}
+                            className="ml-auto inline-flex items-center gap-1 text-[12px] font-medium text-ink-3 transition-colors hover:text-accent"
+                          >
+                            <span>{locale === "en" ? "History Preview" : "历史预览"}</span>
+                            <span aria-hidden>↗</span>
+                          </button>
+                        )}
                       </div>
-                    </div>
-
-                    <div className="flex shrink-0 items-center justify-between gap-3 border-t border-line pt-3 sm:border-0 sm:pt-0">
-                      {!isIngest && <button
-                        type="button"
-                        onClick={() => openPreview(item.sourceId)}
-                        className="text-[12px] font-medium text-ink-3 hover:text-accent transition-colors flex items-center gap-1"
-                      >
-                        <span>历史预览</span>
-                        <span>↗</span>
-                      </button>}
-
-                      {subscription ? (
-                        <button type="button" disabled={busy || fetching === subscription.id || editBusy} onClick={() => void remove(subscription)}
-                          className="ml-auto rounded-full border border-line px-3 py-1 text-[12px] text-ink-3 hover:text-red-600 disabled:opacity-50">
-                          {locale === "en" ? "Unfollow" : "取消关注"}
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => beginQuickSubscribe(item)}
-                          className="rounded-full bg-accent px-3.5 py-1 text-[12px] font-semibold text-accent-contrast hover:bg-accent-ink transition-colors"
-                        >
-                          + 关注
-                        </button>
-                      )}
                     </div>
                   </article>
                 );

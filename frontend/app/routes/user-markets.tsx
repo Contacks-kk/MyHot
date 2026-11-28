@@ -7,6 +7,7 @@ import { useLocalePreference } from "../lib/local-state";
 import { getDict } from "../lib/i18n";
 import {
   KlineChart,
+  type ChartDisplayMode,
   type KlineChartHandle,
   type MarketCandle,
   type MarketNewsMarker,
@@ -86,6 +87,12 @@ const TIMEFRAME_LABELS: Record<string, { zh: string; en: string }> = {
   "1M": { zh: "月线", en: "1M" },
 };
 
+const CHART_MODE_OPTIONS: Array<{ key: ChartDisplayMode; zh: string; en: string }> = [
+  { key: "kline", zh: "K线", en: "Candles" },
+  { key: "line", zh: "折线", en: "Line" },
+  { key: "both", zh: "叠加", en: "Both" },
+];
+
 /** Load initial market catalog, latest quotes, historical candles, and aligned news markers. */
 export async function loader({ request }: Route.LoaderArgs) {
   const url = new URL(request.url);
@@ -145,6 +152,7 @@ export default function UserMarkets() {
 
   const [selectedSymbol, setSelectedSymbol] = useState(initialCandles.symbol || "XAU/USD");
   const [selectedTF, setSelectedTF] = useState(initialCandles.timeframe || "1m");
+  const [chartMode, setChartMode] = useState<ChartDisplayMode>("kline");
   const [candles, setCandles] = useState<MarketCandle[]>(initialCandles.candles ?? []);
   const [markers, setMarkers] = useState<MarketNewsMarker[]>(initialCandles.markers ?? []);
   const [quotes, setQuotes] = useState<Record<string, QuoteSnapshot>>(catalog.quotes ?? {});
@@ -579,12 +587,37 @@ export default function UserMarkets() {
             </span>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {loadingWindow && (
               <span className="text-[11.5px] text-ink-4 animate-pulse">
                 {isEn ? "Loading…" : "切换加载中…"}
               </span>
             )}
+            <div
+              role="tablist"
+              aria-label={isEn ? "Chart type selector" : "图表样式切换"}
+              className="flex items-center gap-1 rounded-full border border-line bg-bg-sunk p-1 text-[11.5px]"
+            >
+              {CHART_MODE_OPTIONS.map((option) => {
+                const active = option.key === chartMode;
+                return (
+                  <button
+                    key={option.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setChartMode(option.key)}
+                    className={`rounded-full px-3 py-1 transition-all ${
+                      active
+                        ? "bg-surface font-semibold text-accent shadow-xs"
+                        : "text-ink-3 hover:text-ink"
+                    }`}
+                  >
+                    {isEn ? option.en : option.zh}
+                  </button>
+                );
+              })}
+            </div>
             <div
               role="tablist"
               aria-label={isEn ? "Timeframe selector" : "K线周期切换"}
@@ -621,6 +654,7 @@ export default function UserMarkets() {
           digits={digits}
           candles={candles}
           markers={markers}
+          chartMode={chartMode}
           onSelectMarkerTime={(t) => setFocusedMarkerTime(t)}
         />
 

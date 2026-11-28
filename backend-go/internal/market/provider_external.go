@@ -51,7 +51,7 @@ func (p *TwelveDataProvider) Mode() string {
 	return "live"
 }
 
-/** FetchHistory retrieves historical candles via Twelve Data time_series endpoint. */
+// FetchHistory /** FetchHistory retrieves historical candles via Twelve Data time_series endpoint. */
 func (p *TwelveDataProvider) FetchHistory(ctx context.Context, symbol, tf string, limit int) ([]Candle, error) {
 	interval, ok := twelveDataInterval(tf)
 	if !ok {
@@ -150,10 +150,12 @@ func (p *TwelveDataProvider) FetchHistory(ctx context.Context, symbol, tf string
 	return out, nil
 }
 
-/** Stream maintains a WebSocket subscription to Twelve Data real-time price updates. */
+// Stream /** Stream maintains a WebSocket subscription to Twelve Data real-time price updates. */
 func (p *TwelveDataProvider) Stream(ctx context.Context, symbols []string, out chan<- RawTick) error {
 	endpoint := "wss://ws.twelvedata.com/v1/quotes/price?apikey=" + url.QueryEscape(p.apiKey)
 	dialCtx, cancelDial := context.WithTimeout(ctx, 15*time.Second)
+
+	// build long-lived WebSocket connection
 	conn, resp, err := websocket.Dial(dialCtx, endpoint, nil)
 	cancelDial()
 	if err != nil {
@@ -173,6 +175,8 @@ func (p *TwelveDataProvider) Stream(ctx context.Context, symbols []string, out c
 
 	writeCtx, cancelWrite := context.WithTimeout(ctx, 10*time.Second)
 	defer cancelWrite()
+
+	// send subscription message
 	if err := wsjson.Write(writeCtx, conn, subMsg); err != nil {
 		return fmt.Errorf("twelvedata subscription write failed (%T)", err)
 	}
@@ -181,7 +185,9 @@ func (p *TwelveDataProvider) Stream(ctx context.Context, symbols []string, out c
 	heartbeatDone := make(chan struct{})
 	defer close(heartbeatDone)
 
+	// start another goroutine that sends a request every 10 sec to maintain the long-lived connection
 	go func() {
+
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 
@@ -200,6 +206,8 @@ func (p *TwelveDataProvider) Stream(ctx context.Context, symbols []string, out c
 	}()
 
 	approved := make(map[string]bool, len(symbols))
+
+	// loop through real-time price push notification
 	for {
 		var event struct {
 			Event     string               `json:"event"`

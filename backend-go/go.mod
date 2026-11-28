@@ -11,6 +11,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/mmcdole/gofeed v1.3.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
+	github.com/oschwald/maxminddb-golang/v2 v2.6.0
 	github.com/redis/go-redis/v9 v9.22.0
 	github.com/riverqueue/river v0.44.1
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.44.1

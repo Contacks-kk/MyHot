@@ -156,8 +156,10 @@ func (c *Collector) saveTwelveHistory(ctx context.Context, batch twelveHistoryBa
 		return
 	}
 
-	// Reconcile before publishing the snapshot so an older live tick cannot replace a finalized bar.
+	// Reconcile before publishing the snapshot , so an older live tick cannot replace a finalized bar.
 	quote := c.aggregator.reconcileTwelveHistory(batch)
+
+	// inserts closed candles into a bounded Redis ZSET indexed by UTC open time.
 	if err := c.redis.SaveWindowCandles(ctx, symbol, tf, batch.bars); err != nil {
 		c.logger.Warn("market history redis cache failed", "symbol", symbol, "tf", tf, "error", err.Error())
 		return
@@ -177,7 +179,7 @@ func (c *Collector) saveTwelveHistory(ctx context.Context, batch twelveHistoryBa
 	}
 }
 
-/** reconcileTwelveHistory keeps the latest upstream minute authoritative and refreshes the quote. */
+/** reconcileTwelveHistory keeps the latest upstream minute authoritative and refreshes the quote(price). */
 func (a *Aggregator) reconcileTwelveHistory(batch twelveHistoryBatch) *QuoteSnapshot {
 	symbol := batch.symbol
 	if batch.tf == "1d" {

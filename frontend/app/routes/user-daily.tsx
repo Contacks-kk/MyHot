@@ -1,13 +1,16 @@
 import { BackLink } from "../components/ui/BackLink";
 import { useEffect, useState } from "react";
-import { Link, useLoaderData, useNavigate } from "react-router";
+import { useLoaderData, useNavigate } from "react-router";
 import type { Screen } from "../components/shell/screens";
 import type { Route } from "./+types/user-daily";
-import { Halftone } from "../features/report/Halftone";
+import { DailyArchiveCalendar, type DailyArchiveHeading } from "../features/report/DailyArchiveCalendar";
+import { DailyWeatherCard } from "../features/weather/DailyWeatherCard";
 import { Kicker } from "../components/ui/Kicker";
 import { MarkdownContent } from "../components/ui/MarkdownContent";
 import { scrollToAnchor } from "../components/ui/OutlineSheet";
+import { IconArrowUpRight } from "../components/icons";
 import { userApiGet, userApiMe } from "../lib/user-api.server";
+import { useLocalePreference } from "../lib/local-state";
 import { postJSON } from "../features/account/common";
 
 export const handle: Screen = { tab: "daily", name: "我的日报" };
@@ -30,7 +33,7 @@ interface DailyReport {
   createdAt: string;
 }
 
-type DailyReportHeading = Pick<DailyReport, "id" | "date" | "title" | "createdAt">;
+type DailyReportHeading = DailyArchiveHeading;
 
 /** Load the report directory and the selected issue. */
 export async function loader({ request }: Route.LoaderArgs) {
@@ -82,6 +85,7 @@ function Story({ entry, index }: { entry: DailyEntry; index: number }) {
 export default function UserDaily() {
   const { reports, report, csrfToken } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
+  const locale = useLocalePreference();
   const entries = report?.entries ?? [];
   const lead = entries[0];
   const mark = report ? formatDate(report.date) : null;
@@ -91,6 +95,7 @@ export default function UserDaily() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [activeStory, setActiveStory] = useState<number | null>(null);
+  const [calendarOpen, setCalendarOpen] = useState(false);
 
   // 监听当前滚动位置，同步激活移动端横滑与桌面端侧栏篇目高亮
   useEffect(() => {
@@ -193,42 +198,179 @@ export default function UserDaily() {
     }
   }
 
+  /** Open the masthead archive calendar and scroll back to the top when needed. */
+  function openCalendarFromRail() {
+    setCalendarOpen(true);
+
+    // Ensure the top-right desk calendar is visible if the reader scrolled down
+    if (typeof window !== "undefined" && window.scrollY > 120) {
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      window.scrollTo({
+        top: 0,
+        behavior: reduced ? "auto" : "smooth",
+      });
+    }
+  }
+
   return (
     <div className="report-shell lg:-mx-7 lg:-mb-[72px] lg:-mt-6 lg:flex lg:min-h-dvh">
-      <aside className="border-b border-line px-1 pb-5 lg:sticky lg:top-0 lg:h-dvh lg:w-[280px] lg:shrink-0 lg:overflow-y-auto lg:border-b-0 lg:border-r lg:px-5 lg:pt-8">
+      <aside className="hidden lg:sticky lg:top-0 lg:flex lg:h-dvh lg:w-[264px] lg:shrink-0 lg:flex-col lg:overflow-y-auto lg:border-r lg:border-line lg:px-5 lg:pb-6 lg:pt-8 scrollbar-thin">
         <BackLink to="/hot" label="个人热点榜单" />
-        <div className="mt-6 border-b border-line-strong pb-3 text-[12px] font-semibold tracking-[0.2em] text-ink">往期日报</div>
-        <nav aria-label="往期日报" className="mt-2 flex gap-2 overflow-x-auto lg:block lg:space-y-1 lg:overflow-visible">
-          {reports.map((item) => {
-            const issue = formatDate(item.date);
-            const current = item.id === report?.id;
-            return (
-              <Link key={item.id} to={`/daily?id=${encodeURIComponent(item.id)}`} aria-current={current ? "page" : undefined} className={`flex min-w-[190px] gap-3 rounded-tile px-3 py-3 transition-colors lg:min-w-0 ${current ? "bg-accent-soft" : "hover:bg-bg-sunk"}`}>
-                <span className="flex w-9 shrink-0 flex-col text-center"><span className={`num text-[22px] font-black leading-none ${current ? "text-accent" : "text-ink"}`}>{issue.day}</span><span className="mt-1 text-[10px] text-ink-4">{issue.month}月</span></span>
-                <span className="min-w-0"><span className="line-clamp-2 text-[13px] font-medium leading-5 text-ink-2">{item.title}</span>{item.id.startsWith("manual-") && <span className="mt-1 block text-[10px] text-ink-4">手动 · {new Date(item.createdAt).toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit" })}</span>}</span>
-              </Link>
-            );
-          })}
+
+        <div className="mt-6 flex items-center justify-between border-b border-line-strong pb-3">
+          <Kicker>今日看点</Kicker>
+          {entries.length > 0 && (
+            <span className="num text-[11px] text-ink-4">
+              {Math.min(entries.length, 5)} 条精选
+            </span>
+          )}
+        </div>
+
+        <nav aria-label="今日看点" className="mt-2 flex-1 space-y-1">
+          {entries.length === 0 ? (
+            <p className="px-1 py-4 text-[12px] text-ink-4">本期暂无看点条目。</p>
+          ) : (
+            entries.slice(0, 5).map((entry, index) => {
+              const isActive = activeStory === index;
+              return (
+                <a
+                  key={entry.articleId}
+                  href={`#story-${index}`}
+                  aria-current={isActive ? "location" : undefined}
+                  onClick={(e) => {
+                    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) {
+                      return;
+                    }
+
+                    e.preventDefault();
+                    scrollToAnchor(`story-${index}`);
+                  }}
+                  className={`relative flex gap-3 rounded-tile px-3 py-3 transition-colors ${
+                    isActive ? "bg-accent-soft" : "hover:bg-bg-sunk"
+                  }`}
+                >
+                  {isActive && (
+                    <span
+                      aria-hidden="true"
+                      className="absolute inset-y-2.5 left-0 w-[3px] rounded-full bg-accent"
+                    />
+                  )}
+                  <span
+                    className={`num w-5 shrink-0 text-center text-[21px] font-black leading-none ${
+                      isActive ? "text-accent" : "text-ink-4"
+                    }`}
+                  >
+                    {index + 1}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span
+                      className={`line-clamp-2 text-[13px] leading-5 ${
+                        isActive ? "font-bold text-ink" : "font-medium text-ink-2"
+                      }`}
+                    >
+                      {entry.title}
+                    </span>
+                    <span className="mt-1 flex items-center gap-1.5 text-[11px] text-ink-4">
+                      {entry.source && <span className="truncate">{entry.source}</span>}
+                      {entry.source && Number.isFinite(entry.score) && <span>·</span>}
+                      {Number.isFinite(entry.score) && (
+                        <span className="num font-semibold text-accent">{entry.score} 分</span>
+                      )}
+                    </span>
+                  </span>
+                </a>
+              );
+            })
+          )}
         </nav>
+
+        {report && mark && (
+          <div className="mt-4 flex items-center justify-between gap-2 border-t border-line pt-4 text-[11.5px] text-ink-4">
+            <span className="truncate">
+              {mark.month}月{mark.day}日
+              {report.id.startsWith("manual-") ? " · 手动" : ""}
+            </span>
+            <button
+              type="button"
+              onClick={openCalendarFromRail}
+              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-line bg-surface px-2.5 py-1 text-[11px] font-semibold text-ink-3 transition-colors hover:border-accent hover:text-accent"
+            >
+              <span>往期目录</span>
+              <IconArrowUpRight size={11} />
+            </button>
+          </div>
+        )}
       </aside>
 
-      <main className="min-w-0 flex-1 px-1 pb-16 pt-7 lg:px-10 lg:pt-9">
-        <div className="mx-auto flex max-w-[1100px] flex-wrap items-center justify-end gap-3">
-          {message && <p role="status" className="text-[12px] text-ink-3">{message}</p>}
-          {error && <p role="alert" className="text-[12px] text-hot">{error}</p>}
-          <button type="button" onClick={() => void generate()} disabled={busy} className="rounded-full bg-accent px-5 py-2.5 text-[13px] font-semibold text-accent-contrast hover:bg-accent-ink disabled:opacity-55">{busy ? "正在生成…" : "立刻生成"}</button>
+      <main className="min-w-0 flex-1 px-1 pb-16 pt-4 lg:px-8 lg:pt-9">
+        <div className="mx-auto flex max-w-[1140px] flex-wrap items-center justify-between gap-3">
+          <div className="lg:hidden">
+            <BackLink to="/hot" label="个人热点榜单" className="text-[14px]" />
+          </div>
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
+            {message && <p role="status" className="text-[12px] text-ink-3">{message}</p>}
+            {error && <p role="alert" className="text-[12px] text-hot">{error}</p>}
+            <button
+              type="button"
+              onClick={() => void generate()}
+              disabled={busy}
+              className="shrink-0 whitespace-nowrap rounded-full bg-accent px-5 py-2.5 text-[13px] font-semibold text-accent-contrast transition-colors hover:bg-accent-ink disabled:opacity-55"
+            >
+              {busy ? "正在生成…" : "立刻生成"}
+            </button>
+          </div>
         </div>
+
         {!report || !mark ? (
-          <div className="mx-auto max-w-[1100px] py-12"><p className="text-[12px] tracking-[0.2em] text-accent">每日 08:00 · 北京时间</p><h1 className="mt-5 text-[40px] font-black text-ink">我的日报</h1><p className="mt-5 border-t border-line pt-6 text-[14px] leading-7 text-ink-3">有个人热点后，可以立刻生成日报，也可以等待下一期自动生成。</p></div>
+          <div className="mx-auto max-w-[1140px] py-12">
+            <p className="text-[12px] tracking-[0.2em] text-accent">每日 08:00 · 北京时间</p>
+            <h1 className="mt-5 text-[40px] font-black text-ink">我的日报</h1>
+            <p className="mt-5 border-t border-line pt-6 text-[14px] leading-7 text-ink-3">
+              有个人热点后，可以立刻生成日报，也可以等待下一期自动生成。
+            </p>
+          </div>
         ) : (
-          <div className="mx-auto max-w-[1100px]">
-            <header>
-              <div className="flex flex-wrap items-center justify-between gap-3 text-[12px] text-ink-4"><span>{mark.year} 年 {mark.month} 月 {Number(mark.day)} 日 · {mark.weekday}</span><span className="tracking-[0.2em]">个人 · 每日要闻</span><span>每天 08:00 出刊</span></div>
-              <div className="flex items-center justify-between gap-5 py-9 sm:py-12">
-                <div><h1 className="text-[48px] font-black leading-none tracking-[-0.05em] text-ink sm:text-[76px]"><span className="text-accent">我的</span>日报</h1><p className="mt-4 text-[11px] tracking-[0.24em] text-ink-4">你的每日信息摘要</p></div>
-                <div className="well shrink-0 rounded-panel px-5 py-4 text-center sm:px-8"><Halftone seed={`personal-daily-${report.date}`} className="num block text-[44px] font-black leading-none text-ink sm:text-[64px]">{mark.day}</Halftone><p className="mt-2 text-[11px] text-ink-3">{mark.year} 年 {mark.month} 月</p><p className="text-[11px] text-ink-4">{mark.weekday}</p></div>
+          <div className="mx-auto max-w-[1140px]">
+            <header className="mt-4 lg:mt-2">
+              <div className="flex flex-wrap items-center justify-between gap-3 text-[12px] text-ink-4">
+                <span>{mark.year} 年 {mark.month} 月 {Number(mark.day)} 日 · {mark.weekday}</span>
+                <span className="tracking-[0.2em]">个人 · 每日要闻</span>
+                <span>每天 08:00 出刊</span>
               </div>
-              <div className="flex flex-wrap items-baseline gap-x-8 gap-y-2 border-y border-line-strong py-4 text-[12px] text-ink-4"><span><strong className="num mr-1.5 text-[24px] text-ink">{entries.length}</strong>篇文章</span><span><strong className="num mr-1.5 text-[24px] text-ink">{sourceCount}</strong>个来源</span><span className="sm:ml-auto">{report.id.startsWith("manual-") ? "汇总上期至手动生成时的个人结果" : "汇总此前 24 小时的个人结果"}</span></div>
+              <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4 py-7 sm:py-10">
+                <div className="order-1 min-w-0">
+                  <h1 className="text-[44px] font-black leading-none tracking-[-0.05em] text-ink sm:text-[68px]">
+                    <span className="text-accent">我的</span>日报
+                  </h1>
+                  <p className="mt-3 text-[11px] tracking-[0.24em] text-ink-4 sm:mt-4">你的每日信息摘要</p>
+                </div>
+
+                <div className="order-3 flex basis-full justify-center lg:order-2 lg:flex-1 lg:basis-auto">
+                  <DailyWeatherCard language={locale} />
+                </div>
+
+                <div className="order-2 lg:order-3">
+                  <DailyArchiveCalendar
+                    reports={reports}
+                    currentReportId={report.id}
+                    currentDate={report.date}
+                    year={mark.year}
+                    month={mark.month}
+                    day={mark.day}
+                    weekday={mark.weekday}
+                    open={calendarOpen}
+                    onOpenChange={setCalendarOpen}
+                    onSelectReport={(reportId) => void navigate(`/daily?id=${encodeURIComponent(reportId)}`)}
+                  />
+                </div>
+              </div>
+              <div className="flex flex-wrap items-baseline gap-x-8 gap-y-2 border-y border-line-strong py-4 text-[12px] text-ink-4">
+                <span><strong className="num mr-1.5 text-[24px] text-ink">{entries.length}</strong>篇文章</span>
+                <span><strong className="num mr-1.5 text-[24px] text-ink">{sourceCount}</strong>个来源</span>
+                <span className="sm:ml-auto">
+                  {report.id.startsWith("manual-") ? "汇总上期至手动生成时的个人结果" : "汇总此前 24 小时的个人结果"}
+                </span>
+              </div>
             </header>
 
             {/* 移动端今日看点：横向滑动卡片，置于日报头部与头条正文之间 */}
@@ -276,58 +418,44 @@ export default function UserDaily() {
               </section>
             )}
 
-            <div className="grid items-start lg:grid-cols-[minmax(0,1fr)_290px]">
-              <section className="min-w-0 py-10 lg:pr-12">
-                <div id="story-0" className="scroll-mt-24">
-                  <Kicker>{lead ? "头条" : "本期导读"}</Kicker>
-                  <h2 className="mt-6 text-[32px] font-black leading-[1.25] tracking-[-0.03em] text-ink sm:text-[46px]">{lead?.title ?? report.title}</h2>
-                  <div className="mt-6 text-[16px] leading-[2] text-ink-2">
-                    <MarkdownContent content={lead?.summary ?? report.summary} />
-                  </div>
-                  {lead && <p className="mt-5 text-[12px] text-ink-4">{lead.source} · <a href={lead.url} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">阅读原文 ↗</a></p>}
+            <section className="min-w-0 py-9 sm:py-10">
+              <div id="story-0" className="scroll-mt-24">
+                <Kicker>{lead ? "头条" : "本期导读"}</Kicker>
+                <h2 className="mt-6 text-[32px] font-black leading-[1.25] tracking-[-0.03em] text-ink sm:text-[44px]">
+                  {lead?.title ?? report.title}
+                </h2>
+                <div className="mt-6 text-[16px] leading-[2] text-ink-2">
+                  <MarkdownContent content={lead?.summary ?? report.summary} />
                 </div>
-                {lead && <div className="mt-10 border-t border-line-strong pt-7"><Kicker>本期导读</Kicker><h2 className="mt-4 text-[20px] font-bold text-ink">{report.title}</h2><div className="mt-3 text-[15px] leading-[1.9] text-ink-2">
+                {lead && (
+                  <p className="mt-5 text-[12px] text-ink-4">
+                    {lead.source} ·{" "}
+                    <a href={lead.url} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+                      阅读原文 ↗
+                    </a>
+                  </p>
+                )}
+              </div>
+              {lead && (
+                <div className="mt-10 border-t border-line-strong pt-7">
+                  <Kicker>本期导读</Kicker>
+                  <h2 className="mt-4 text-[20px] font-bold text-ink">{report.title}</h2>
+                  <div className="mt-3 text-[15px] leading-[1.9] text-ink-2">
                     <MarkdownContent content={report.summary} />
-                  </div></div>}
-                {entries.length > 1 && <div className="mt-10 border-t border-line-strong pt-7"><Kicker>本期文章</Kicker><div className="mt-2">{entries.slice(1).map((entry, index) => <Story key={entry.articleId} entry={entry} index={index + 1} />)}</div></div>}
-              </section>
-              {entries.length > 0 && (
-                <aside className="hidden border-t border-line py-8 lg:sticky lg:top-0 lg:block lg:self-start lg:max-h-dvh lg:overflow-y-auto lg:border-l lg:border-t-0 lg:pl-8 lg:pt-10 scrollbar-thin">
-                  <Kicker>今日看点</Kicker>
-                  <ol className="mt-3">
-                    {entries.slice(0, 5).map((entry, index) => {
-                      const isActive = activeStory === index;
-                      return (
-                        <li key={entry.articleId} className="border-b border-line py-4">
-                          <a
-                            href={`#story-${index}`}
-                            aria-current={isActive ? "location" : undefined}
-                            onClick={(e) => {
-                              if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) {
-                                return;
-                              }
-                              e.preventDefault();
-                              scrollToAnchor(`story-${index}`);
-                            }}
-                            className="group flex gap-4"
-                          >
-                            <span className="num text-[25px] font-black leading-none text-accent">
-                              {index + 1}
-                            </span>
-                            <span>
-                              <span className={`block text-[14px] font-bold leading-6 transition-colors ${isActive ? "text-accent" : "text-ink group-hover:text-accent"}`}>
-                                {entry.title}
-                              </span>
-                              <span className="mt-1 block text-[12px] text-ink-4">{entry.source}</span>
-                            </span>
-                          </a>
-                        </li>
-                      );
-                    })}
-                  </ol>
-                </aside>
+                  </div>
+                </div>
               )}
-            </div>
+              {entries.length > 1 && (
+                <div className="mt-10 border-t border-line-strong pt-7">
+                  <Kicker>本期文章</Kicker>
+                  <div className="mt-2">
+                    {entries.slice(1).map((entry, index) => (
+                      <Story key={entry.articleId} entry={entry} index={index + 1} />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
           </div>
         )}
       </main>

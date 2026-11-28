@@ -4,7 +4,8 @@ import { Link } from "react-router";
 import type { CopyDocument, RenderedCopy } from "../../lib/markdown";
 import { ArticleLayout, RailSection } from "../../components/ui/Page";
 import { PhoneBar } from "../../components/shell/PhoneBar";
-import { IconChevronLeft } from "../../components/icons";
+import { getDict } from "../../lib/i18n";
+import { useLocalePreference } from "../../lib/local-state";
 
 /**
  * Legal and policy pages, read like articles: the document on the page in one column, its facts in the
@@ -23,6 +24,8 @@ export function CopyPage({
   footer?: ReactNode;
   aside?: ReactNode;
 }) {
+  const locale = useLocalePreference();
+  const settingLabel = getDict(locale).nav.account;
   const facts = (["版本", "生效日期", "运营主体", "联系方式", "备案号"] as const).filter((k) => {
     return Boolean(doc.meta[k]);
   });
@@ -61,13 +64,13 @@ export function CopyPage({
 
   return (
     <div className="min-h-dvh bg-bg pl-[var(--gutter-l)] pr-[var(--gutter-r)] lg:px-0">
-      <PhoneBar back={{ to: "/more", label: "我的账号" }} title={doc.title} />
+      <PhoneBar back={{ to: "/more", label: settingLabel }} title={doc.title} />
 
       {/* 页面主容器：提供居中对齐与左右两侧舒适的呼吸空间 */}
       <main className="mx-auto max-w-[var(--page-max-reading)] px-2 sm:px-6 lg:px-12">
         {/* 桌面端返回链接 */}
         <div className="hidden pt-6 lg:block">
-          <BackLink to="/more" label="我的账号" />
+          <BackLink to="/more" label={settingLabel} />
         </div>
 
         <ArticleLayout
